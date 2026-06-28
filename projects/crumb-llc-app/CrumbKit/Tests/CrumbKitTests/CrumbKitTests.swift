@@ -84,6 +84,60 @@ struct CrumbKitTests {
         }
     }
 
+    // MARK: Model-rank reconciliation (the deterministic guarantee behind the model call)
+
+    @Test("reconcile honors the model's order and keeps every product exactly once")
+    func reconcileFullReorder() {
+        let products = SeedData.hikeProducts
+        let modelOrder = products.map(\.id).reversed().map { $0 }
+
+        let result = AppleFoundationCurator.reconcile(modelIDs: modelOrder, candidates: products)
+
+        #expect(result.map(\.id) == modelOrder)                       // exact model order
+        #expect(Set(result.map(\.id)) == Set(products.map(\.id)))     // nothing dropped
+        #expect(result.count == products.count)                       // nothing duplicated
+    }
+
+    @Test("reconcile appends products the model omitted, in deterministic candidate order")
+    func reconcilePartial() {
+        let products = SeedData.hikeProducts                          // baseline = deterministic order
+        // Model only ranked two, and inverted them; the rest must follow in baseline order.
+        let modelOrder = [products[2].id, products[0].id]
+
+        let result = AppleFoundationCurator.reconcile(modelIDs: modelOrder, candidates: products)
+
+        #expect(result.prefix(2).map(\.id) == modelOrder)             // model's picks lead
+        let tail = products.filter { $0.id != products[0].id && $0.id != products[2].id }
+        #expect(result.suffix(from: 2).map(\.id) == tail.map(\.id))   // tail keeps baseline order
+        #expect(Set(result.map(\.id)) == Set(products.map(\.id)))     // total order, nothing lost
+    }
+
+    @Test("reconcile ignores hallucinated IDs and collapses duplicates")
+    func reconcileGarbage() {
+        let products = SeedData.hikeProducts
+        let modelOrder = [
+            products[1].id, "hike.does-not-exist", products[1].id,    // dupe + unknown ID
+            products[0].id, "", products[0].id,
+        ]
+
+        let result = AppleFoundationCurator.reconcile(modelIDs: modelOrder, candidates: products)
+
+        #expect(result.prefix(2).map(\.id) == [products[1].id, products[0].id]) // deduped, no ghosts
+        #expect(result.count == products.count)                                 // still total + unique
+        #expect(Set(result.map(\.id)) == Set(products.map(\.id)))
+    }
+
+    @Test("reconcile with no usable IDs falls back to the deterministic candidate order")
+    func reconcileEmpty() {
+        let products = SeedData.hikeProducts
+
+        let empty = AppleFoundationCurator.reconcile(modelIDs: [], candidates: products)
+        let allBogus = AppleFoundationCurator.reconcile(modelIDs: ["nope", "also.nope"], candidates: products)
+
+        #expect(empty.map(\.id) == products.map(\.id))               // unchanged order
+        #expect(allBogus.map(\.id) == products.map(\.id))            // unchanged order
+    }
+
     @Test("withRationale replaces only the rationale")
     func withRationale() {
         let original = SeedData.hikeProducts[0]
