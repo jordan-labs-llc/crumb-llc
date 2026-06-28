@@ -123,7 +123,14 @@ public enum SeedData {
             + "merino that stays warm even when it's soaked. Nothing bulky — you like to "
             + "move light.",
         accentHex: 0x1C4B43,
-        candidateIDs: hikeProducts.map(\.id)
+        candidateIDs: hikeProducts.map(\.id),
+        searchQueries: [
+            "waterproof rain jacket",
+            "hiking boots",
+            "merino wool socks",
+            "rain hat",
+            "hiking daypack",
+        ]
     )
 
     public static let coffee = ShoppingTask(
@@ -141,7 +148,13 @@ public enum SeedData {
             + "kept it to the four things that actually change the cup — plus a bag I "
             + "think you'll love.",
         accentHex: 0xCC8A3A,
-        candidateIDs: coffeeProducts.map(\.id)
+        candidateIDs: coffeeProducts.map(\.id),
+        searchQueries: [
+            "gooseneck kettle",
+            "burr coffee grinder",
+            "pour over coffee dripper",
+            "whole bean coffee",
+        ]
     )
 
     public static let desk = ShoppingTask(
@@ -158,7 +171,14 @@ public enum SeedData {
         curatorNote: "You said calm, so I pulled warm light, soft texture, and one thing "
             + "to corral the clutter. Nothing shiny.",
         accentHex: 0x3F5A54,
-        candidateIDs: deskProducts.map(\.id)
+        candidateIDs: deskProducts.map(\.id),
+        searchQueries: [
+            "warm desk lamp",
+            "wood desk organizer tray",
+            "ceramic coffee mug",
+            "felt desk mat",
+            "small indoor plant",
+        ]
     )
 
     // MARK: - Taste profile

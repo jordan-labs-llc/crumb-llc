@@ -25,9 +25,12 @@ public struct MockUCPClient: UCPClient {
         let needle = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !needle.isEmpty else { return SeedData.products }
 
-        // 1. Mission match — id or any word from the mission title.
+        // 1. Mission match — id, one of the mission's live search queries, or any word
+        //    from the mission title. Matching `searchQueries` lets the live fan-out
+        //    (which calls this once per query) collapse back to the curated seed deck.
         if let mission = SeedData.missions.first(where: { mission in
             mission.id == needle
+                || mission.searchQueries.contains { $0.lowercased() == needle }
                 || mission.title.lowercased().contains(needle)
                 || needle.split(separator: " ").contains { word in
                     mission.title.lowercased().contains(word)

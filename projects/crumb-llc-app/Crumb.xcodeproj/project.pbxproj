@@ -27,6 +27,7 @@
 		A8C6056943126209BC9C6E94 /* ShoppingTaskEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AE5545DEEC0BE6D2198334F /* ShoppingTaskEntity.swift */; };
 		A8D652EF801A782561E69C19 /* CrumbApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B2BEB51F0585270E292671 /* CrumbApp.swift */; };
 		ADDA43C3C97D0933F32F31B7 /* Secrets.example.plist in Resources */ = {isa = PBXBuildFile; fileRef = E5EFDFEC4C56A1BDC5A24787 /* Secrets.example.plist */; };
+		5EC8E751000000000000A002 /* Secrets.plist in Resources */ = {isa = PBXBuildFile; fileRef = 5EC8E751000000000000A001 /* Secrets.plist */; };
 		B40D7919A125D611ACE585F3 /* CheckoutHandoffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5634C3D5A9161C070E889854 /* CheckoutHandoffView.swift */; };
 		B9D795A2F906443965EB59E2 /* CrumbColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B39838CC41131244B136FB45 /* CrumbColor.swift */; };
 		BE0B2799512B6F3CC7CF867C /* SheetSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67043AB0F0B4615612F05F08 /* SheetSupport.swift */; };
@@ -82,6 +83,7 @@
 		E138427809827F842B00492D /* CurateKitIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurateKitIntent.swift; sourceTree = "<group>"; };
 		E2636664F2FF6491635448E6 /* CuratorNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CuratorNote.swift; sourceTree = "<group>"; };
 		E5EFDFEC4C56A1BDC5A24787 /* Secrets.example.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Secrets.example.plist; sourceTree = "<group>"; };
+		5EC8E751000000000000A001 /* Secrets.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Secrets.plist; sourceTree = "<group>"; };
 		F5A3B9520F2253A5F03A94A0 /* CrumbUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CrumbUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F614DD6F8A672D44B5BAF770 /* CrumbUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbUITests.swift; sourceTree = "<group>"; };
 		F65639EFF2FF1E75D8FAB265 /* Crumb.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Crumb.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -136,6 +138,7 @@
 			children = (
 				56FE2CF46CB3AC6F0554827A /* Assets.xcassets */,
 				E5EFDFEC4C56A1BDC5A24787 /* Secrets.example.plist */,
+				5EC8E751000000000000A001 /* Secrets.plist */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -395,6 +398,7 @@
 			files = (
 				5A8CAE78CE348B88B7BFEDEA /* Assets.xcassets in Resources */,
 				ADDA43C3C97D0933F32F31B7 /* Secrets.example.plist in Resources */,
+				5EC8E751000000000000A002 /* Secrets.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

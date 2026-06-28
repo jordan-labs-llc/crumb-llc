@@ -46,6 +46,7 @@ struct LiveUCPClientTests {
           { "id": "gid://shopify/p/abc", "title": "Organic Crewneck",
             "priceMin": { "amount": 8900, "currency": "USD" },
             "sellerDomain": "northbound.myshopify.com",
+            "imageURL": "https://cdn.shopify.com/p/abc.jpg",
             "buyURL": "https://northbound.myshopify.com/cart/c/xyz",
             "variantId": "gid://shopify/v/1" } ] }
         """
@@ -58,6 +59,7 @@ struct LiveUCPClientTests {
         #expect(product.name == "Organic Crewneck")
         #expect(product.price == Decimal(89))             // 8900 minor units → 89
         #expect(product.shop.name == "northbound")        // domain prettified
+        #expect(product.imageURL?.absoluteString == "https://cdn.shopify.com/p/abc.jpg")
         #expect(product.defaultVariant.checkoutURL?.absoluteString
             == "https://northbound.myshopify.com/cart/c/xyz")
     }

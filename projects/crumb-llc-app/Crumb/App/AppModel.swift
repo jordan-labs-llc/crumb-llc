@@ -34,8 +34,21 @@ final class AppModel {
     private(set) var candidates: [Product] = []
     /// The remaining swipe deck (candidates not yet decided on).
     private(set) var deck: [Product] = []
+
+    /// Where the Plan screen's candidate load currently stands.
+    enum LoadState: Equatable {
+        case idle
+        case loading   // "scanning shops…"
+        case loaded    // results in `candidates` (possibly empty == "no matches")
+        case failed    // every query errored (broker down / offline) — retryable
+    }
+
+    private(set) var loadState: LoadState = .idle
+
     /// `true` while Crumb is "scanning shops" on the Plan screen.
-    private(set) var isScanning = false
+    var isScanning: Bool { loadState == .loading }
+    /// `true` when the load failed outright (distinct from a successful empty result).
+    var loadFailed: Bool { loadState == .failed }
 
     // MARK: Overlay state
 
@@ -86,7 +99,14 @@ final class AppModel {
         kit.removeAll()
         candidates = []
         deck = []
+        loadState = .loading
         route = .plan
+        Task { await loadCandidates(for: task) }
+    }
+
+    /// Re-runs the candidate load for the current mission (the Plan screen's "Retry").
+    func retryLoad() {
+        guard let task = selectedTask else { return }
         Task { await loadCandidates(for: task) }
     }
 
@@ -152,21 +172,52 @@ final class AppModel {
 
     // MARK: Curation
 
-    private func loadCandidates(for task: ShoppingTask) async {
-        isScanning = true
-        defer { isScanning = false }
-        do {
-            let found = try await ucp.searchCatalog(task.id, placements: [.organic])
-            let ranked = await curator.rank(found, for: tasteProfile)
-            // Only mutate if the user is still on this task.
-            guard selectedTask?.id == task.id else { return }
-            candidates = ranked
-            deck = ranked
-        } catch {
-            guard selectedTask?.id == task.id else { return }
+    /// Fans the mission's `searchQueries` out to the catalog **in parallel**, dedupes the
+    /// union by product id, and hands it to the curator for one ranked deck.
+    ///
+    /// Failure semantics: each query succeeds or fails independently — a single failed
+    /// query just contributes nothing. Only when *every* query errors (broker down /
+    /// offline) do we surface ``LoadState/failed`` (retryable), so a real outage is never
+    /// mistaken for an empty-but-successful result.
+    ///
+    /// The mock resolves all of a mission's queries back to the same seed candidates, so
+    /// the dedupe collapses them to that mission's curated set — mock behavior is
+    /// unchanged.
+    func loadCandidates(for task: ShoppingTask) async {
+        loadState = .loading
+        let queries = task.searchQueries.isEmpty ? [task.id] : task.searchQueries
+
+        // Parallel fan-out. `try?` keeps a failed query from cancelling its siblings;
+        // a failure surfaces as a `nil` batch.
+        let batches: [[Product]?] = await withTaskGroup(of: [Product]?.self) { group in
+            for query in queries {
+                group.addTask { [ucp] in
+                    try? await ucp.searchCatalog(query, placements: [.organic])
+                }
+            }
+            var collected: [[Product]?] = []
+            for await batch in group { collected.append(batch) }
+            return collected
+        }
+
+        // Only mutate if the user is still on this task.
+        guard selectedTask?.id == task.id else { return }
+
+        let succeeded = batches.compactMap { $0 }
+        if succeeded.isEmpty {
             candidates = []
             deck = []
+            loadState = .failed
+            return
         }
+
+        var seen = Set<Product.ID>()
+        let union = succeeded.flatMap { $0 }.filter { seen.insert($0.id).inserted }
+        let ranked = await curator.rank(union, for: tasteProfile)
+        guard selectedTask?.id == task.id else { return }
+        candidates = ranked
+        deck = ranked
+        loadState = .loaded
     }
 
     // MARK: Swipe deck

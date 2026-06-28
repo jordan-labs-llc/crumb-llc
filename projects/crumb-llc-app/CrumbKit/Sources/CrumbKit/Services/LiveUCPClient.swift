@@ -166,6 +166,9 @@ private extension BrokerProduct {
             rationale: description ?? "",
             symbol: "bag",
             gradient: gradient(for: identifier),
+            // Real product photo when the catalog carries one; the card falls back to the
+            // synthesized gradient + symbol when this is nil or fails to load.
+            imageURL: imageURL.flatMap(URL.init(string:)),
             variants: [variant]
         )
     }

@@ -76,7 +76,8 @@ struct PlanView: View {
 
     @ViewBuilder
     private var scanRow: some View {
-        if model.isScanning {
+        switch model.loadState {
+        case .idle, .loading:
             HStack(spacing: CrumbMetrics.Space.m) {
                 ProgressView()
                     .controlSize(.small)
@@ -88,7 +89,11 @@ struct PlanView: View {
             .padding(CrumbMetrics.Space.m)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Scanning shops")
-        } else {
+
+        case .failed:
+            failedRow
+
+        case .loaded:
             HStack(spacing: CrumbMetrics.Space.s) {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(CrumbColor.pine)
@@ -100,6 +105,30 @@ struct PlanView: View {
             .padding(CrumbMetrics.Space.m)
             .accessibilityElement(children: .combine)
         }
+    }
+
+    private var failedRow: some View {
+        HStack(spacing: CrumbMetrics.Space.m) {
+            Image(systemName: "wifi.exclamationmark")
+                .foregroundStyle(CrumbColor.ochre)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Couldn't reach the shops")
+                    .font(CrumbType.callout)
+                    .foregroundStyle(CrumbColor.ink)
+                Text("Check your connection and try again.")
+                    .font(CrumbType.caption)
+                    .foregroundStyle(CrumbColor.ink2)
+            }
+            Spacer(minLength: 0)
+            Button("Retry") { model.retryLoad() }
+                .font(CrumbType.headline)
+                .foregroundStyle(CrumbColor.pine)
+                .accessibilityIdentifier("retryButton")
+        }
+        .padding(CrumbMetrics.Space.m)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Couldn't reach the shops. Retry.")
     }
 
     private func curateCTA(accent: Color) -> some View {
