@@ -72,7 +72,7 @@ public struct LiveUCPClient: UCPClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let brokerKey {
-            request.setValue(brokerKey, forHTTPHeaderField: "x-functions-key")
+            request.setValue(brokerKey, forHTTPHeaderField: "x-broker-key")
         }
         request.httpBody = try JSONEncoder().encode(body)
 

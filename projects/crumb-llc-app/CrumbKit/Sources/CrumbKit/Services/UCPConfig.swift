@@ -13,7 +13,7 @@ public struct UCPConfig: Sendable, Equatable {
     /// Base URL of the broker (e.g. `https://func-crumb-agent-….azurewebsites.net`).
     /// `nil` means "no broker configured — use the mock".
     public let brokerBaseURL: URL?
-    /// Optional broker access key sent as `x-functions-key`. Not a Shopify secret.
+    /// Optional broker access key sent as `x-broker-key`. Not a Shopify secret.
     public let brokerKey: String?
 
     public init(brokerBaseURL: URL?, brokerKey: String?) {
