@@ -25,11 +25,26 @@ struct ProductCard: View {
 
     private var art: some View {
         ZStack {
-            LinearGradient(crumbStops: product.gradient)
-            Image(systemName: product.symbol)
-                .font(.system(size: 64, weight: .regular))
-                .foregroundStyle(.white.opacity(0.92))
+            // Real product photo when the catalog carries one; the synthesized gradient +
+            // symbol stands in while it loads and as the fallback when there's no image
+            // (seed data) or the load fails.
+            if let imageURL = product.imageURL {
+                AsyncImage(url: imageURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    case .empty:
+                        placeholderArt.overlay(ProgressView().tint(.white))
+                    case .failure:
+                        placeholderArt
+                    @unknown default:
+                        placeholderArt
+                    }
+                }
                 .accessibilityHidden(true)
+            } else {
+                placeholderArt
+            }
 
             if isInKit {
                 VStack {
@@ -47,6 +62,18 @@ struct ProductCard: View {
         }
         .frame(height: 220)
         .clipped()
+    }
+
+    /// The synthesized gradient + SF Symbol art used for seed products and as the
+    /// loading/failure placeholder behind a real product photo.
+    private var placeholderArt: some View {
+        ZStack {
+            LinearGradient(crumbStops: product.gradient)
+            Image(systemName: product.symbol)
+                .font(.system(size: 64, weight: .regular))
+                .foregroundStyle(.white.opacity(0.92))
+                .accessibilityHidden(true)
+        }
     }
 
     private var details: some View {
