@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     )
     # UCP protocol version advertised in the hosted agent profile.
     ucp_version: str = Field(default="2026-04-08", alias="UCP_VERSION")
+    # Optional shared key. When set, callers must send it as the `x-broker-key` header.
+    broker_key: str = Field(default="", alias="CRUMB_BROKER_KEY")
     # Public URL of the hosted agent profile. If empty, the HTTP layer derives it from the
     # incoming request host (so it works on *.azurewebsites.net without extra config).
     agent_profile_url: str = Field(default="", alias="AGENT_PROFILE_URL")

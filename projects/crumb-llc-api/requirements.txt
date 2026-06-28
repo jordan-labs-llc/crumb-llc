@@ -1,7 +1,8 @@
-# Azure Functions Python worker
-azure-functions>=1.21,<2.0
+# Web framework + ASGI server (runs as a container on Azure Container Apps)
+fastapi>=0.111,<0.116
+uvicorn[standard]>=0.30,<0.35
 
-# HTTP + settings
+# HTTP client + settings
 httpx>=0.27,<0.29
 pydantic>=2.7,<3.0
 pydantic-settings>=2.3,<3.0
