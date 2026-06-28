@@ -23,6 +23,10 @@ class Settings(BaseSettings):
         case_sensitive=False,
         populate_by_name=True,
         extra="ignore",
+        # Pick up a local .env for dev (uvicorn, make verify). Absent in the container,
+        # where these come from env vars / Key Vault references. OS env wins over .env.
+        env_file=".env",
+        env_file_encoding="utf-8",
     )
 
     # --- Shopify UCP credentials (the only secrets) ---

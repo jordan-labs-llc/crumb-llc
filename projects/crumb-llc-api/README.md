@@ -52,6 +52,33 @@ Container env vars. The two secrets resolve from **Key Vault references** in Azu
 | `CRUMB_BROKER_KEY` | ✓ | optional; required as `x-broker-key` when set |
 | `AGENT_PROFILE_URL` | — | optional; auto-derived from the request host if unset |
 
+## Make targets
+
+```sh
+make            # list targets
+make install    # create .venv (Python 3.11+) and install deps
+make test       # run unit tests (11; no network)
+make run        # uvicorn --reload on :8000
+make verify     # call Shopify directly via the broker's own UCPClient, using .env
+make verify-kv  # same, but pull client id/secret from Key Vault (RG=rg-crumb-agent)
+make smoke      # end-to-end against the DEPLOYED broker (BROKER=https://...)
+make health     # curl the broker's /healthz (BROKER=https://...)
+```
+
+Two verification layers:
+
+- **`make smoke BROKER=https://…`** — hits the deployed broker (`/healthz` then
+  `/catalog/search`). The token, profile, and Shopify call all happen server-side, so this
+  needs no local creds — the real "is it working?" check. Add `BROKER_KEY=…` if the broker
+  requires the `x-broker-key` header.
+- **`make verify`** (and `make verify-kv`) — runs the broker's `UCPClient` locally against
+  Shopify using `.env` (or Key Vault) creds, for pre-deploy debugging with full output.
+  Set `QUERY="..."` to change the search.
+
+  > `verify` needs `AGENT_PROFILE_URL` to be a **public** URL Shopify can fetch (e.g. your
+  > deployed broker's `/.well-known/ucp`) — a local/placeholder profile is rejected. This
+  > is why the deployed-broker `smoke` is the simpler end-to-end check.
+
 ## Run locally
 
 ```sh

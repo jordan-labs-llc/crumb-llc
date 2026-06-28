@@ -1,19 +1,36 @@
-"""Smoke tests for the FastAPI layer (no network, no credentials configured)."""
+"""Smoke tests for the FastAPI layer.
+
+These force an *unconfigured* broker (no credentials) regardless of any local `.env`, so
+they're deterministic on a developer machine that has real creds. No network is used.
+"""
 
 from __future__ import annotations
 
-import importlib
-
+import pytest
 from fastapi.testclient import TestClient
 
 import server
 from crumb_agent.config import get_settings
 
 
-def _client() -> TestClient:
-    # Ensure a clean, unconfigured settings + client for each test.
+@pytest.fixture(autouse=True)
+def unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Empty env vars take precedence over any `.env`, forcing has_credentials = False.
+    for key in (
+        "SHOPIFY_UCP_CLIENT_ID",
+        "SHOPIFY_UCP_CLIENT_SECRET",
+        "SHOPIFY_CATALOG_URL",
+        "CRUMB_BROKER_KEY",
+    ):
+        monkeypatch.setenv(key, "")
     get_settings.cache_clear()
-    importlib.reload(server)
+    server._client = None
+    yield
+    get_settings.cache_clear()
+    server._client = None
+
+
+def _client() -> TestClient:
     return TestClient(server.app)
 
 
@@ -22,7 +39,7 @@ def test_healthz_ok() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["configured"] is False  # no creds in the test env
+    assert body["configured"] is False
 
 
 def test_profile_advertises_catalog_search() -> None:
