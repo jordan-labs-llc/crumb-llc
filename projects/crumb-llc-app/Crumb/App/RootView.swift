@@ -14,7 +14,11 @@ struct RootView: View {
             CrumbColor.paper.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                AppHeader()
+                // Onboarding is a self-contained first-run flow with its own header and skip,
+                // so the app chrome (back / taste button) stays out of its way.
+                if model.route != .onboarding {
+                    AppHeader()
+                }
                 routedContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -23,8 +27,11 @@ struct RootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: model.route)
+        // Wake the (scale-to-zero) broker while the user gets oriented, so the first live
+        // mission usually lands warm. No-op on the mock.
+        .task { await model.warmUpCatalog() }
         .sheet(isPresented: $model.isShowingTasteProfile) {
-            TasteProfileView()
+            TasteProfileView(initial: model.tasteProfile)
                 .crumbExpandableSheet()
         }
         .sheet(item: $model.handoff) { handoff in
@@ -36,6 +43,7 @@ struct RootView: View {
     @ViewBuilder
     private var routedContent: some View {
         switch model.route {
+        case .onboarding: OnboardingView()
         case .missions: MissionsView()
         case .plan: PlanView()
         case .curate: CurateView()

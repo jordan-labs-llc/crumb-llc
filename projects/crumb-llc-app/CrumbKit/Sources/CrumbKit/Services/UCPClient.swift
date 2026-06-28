@@ -25,6 +25,20 @@ public protocol UCPClient: Sendable {
 
     /// Returns the per-shop checkout handoff URL (UCP `continue_url`).
     func checkoutHandoff(for shop: Shop, in cart: Cart) async throws -> URL
+
+    /// Best-effort nudge to wake a cold backend before the first real query.
+    ///
+    /// The live broker scales to zero, so the first request after an idle period can take
+    /// 20s+ (or time out). Firing this on launch lets the container warm up while the user is
+    /// still picking a mission, so the first catalog load usually lands warm. It must never
+    /// throw or block anything — the default is a no-op (the mock is always warm).
+    func warmUp() async
+}
+
+public extension UCPClient {
+    /// Default: nothing to warm. ``MockUCPClient`` and test doubles inherit this no-op so
+    /// only ``LiveUCPClient`` actually pings.
+    func warmUp() async {}
 }
 
 /// Errors surfaced by ``UCPClient`` implementations.

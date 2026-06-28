@@ -16,6 +16,9 @@ struct CurateView: View {
 
     var body: some View {
         VStack(spacing: CrumbMetrics.Space.l) {
+            if model.isRecurating {
+                recuratingBanner
+            }
             if let note = model.curatorFallbackNote {
                 fallbackNote(note)
             }
@@ -178,6 +181,23 @@ struct CurateView: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(accept ? "addButton" : "skipButton")
+    }
+
+    /// A quiet banner shown while a taste edit re-ranks and re-voices the on-screen deck, so
+    /// the personalization reads as a live response to the change the user just made.
+    private var recuratingBanner: some View {
+        HStack(spacing: CrumbMetrics.Space.s) {
+            ProgressView().controlSize(.small)
+            Text("Re-reading your taste…")
+                .font(CrumbType.caption)
+                .foregroundStyle(CrumbColor.ink2)
+            Spacer(minLength: 0)
+        }
+        .padding(CrumbMetrics.Space.m)
+        .background(CrumbColor.pineSoft, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Re-reading your taste")
+        .accessibilityIdentifier("recuratingBanner")
     }
 
     // MARK: Curator fallback note
