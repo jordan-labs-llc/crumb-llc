@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from crumb_agent.config import get_settings
@@ -78,7 +78,10 @@ def healthz() -> dict[str, Any]:
 
 
 @app.get("/.well-known/ucp")
-def ucp_profile(request: Request) -> dict[str, Any]:
+def ucp_profile(request: Request, response: Response) -> dict[str, Any]:
+    # Shopify fetches and caches this during UCP negotiation and rejects the profile
+    # ("profile_malformed: Invalid cache control") unless the response is cacheable.
+    response.headers["Cache-Control"] = "public, max-age=3600"
     return build_profile(get_settings(), profile_url=_profile_url(request))
 
 

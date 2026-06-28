@@ -50,6 +50,14 @@ def test_profile_advertises_catalog_search() -> None:
     assert "dev.ucp.shopping.checkout" not in caps
 
 
+def test_profile_is_cacheable() -> None:
+    # Shopify rejects the profile during UCP negotiation ("profile_malformed:
+    # Invalid cache control") unless the response carries a valid Cache-Control header.
+    resp = _client().get("/.well-known/ucp")
+    assert resp.status_code == 200
+    assert "max-age" in resp.headers.get("cache-control", "")
+
+
 def test_search_without_credentials_returns_503() -> None:
     resp = _client().post("/catalog/search", json={"query": "coffee"})
     assert resp.status_code == 503
