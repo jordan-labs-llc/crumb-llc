@@ -45,6 +45,15 @@ final class AppModel {
 
     private(set) var loadState: LoadState = .idle
 
+    /// Which curator voice produced the current deck. Drives the honest "AI curator
+    /// unavailable" note on the Curate screen (see ``curatorFallbackNote``).
+    private(set) var curatorTier: CuratorTier?
+
+    /// A short, user-facing note when Crumb wanted its AI curator but had to fall back to
+    /// the deterministic voice (older device, Apple Intelligence off, quota spent, offline).
+    /// `nil` when the AI curator ran, or when rule-based is the configured default.
+    var curatorFallbackNote: String? { curatorTier?.fallbackNote }
+
     /// `true` while Crumb is "scanning shops" on the Plan screen.
     var isScanning: Bool { loadState == .loading }
     /// `true` when the load failed outright (distinct from a successful empty result).
@@ -101,6 +110,7 @@ final class AppModel {
         kit.removeAll()
         candidates = []
         deck = []
+        curatorTier = nil
         loadState = .loading
         route = .plan
         Task { await loadCandidates(for: task) }
@@ -215,10 +225,13 @@ final class AppModel {
 
         var seen = Set<Product.ID>()
         let union = succeeded.flatMap { $0 }.filter { seen.insert($0.id).inserted }
-        let ranked = await curator.rank(union, for: tasteProfile)
+        // `curate` both ranks and rewrites each rationale into Crumb's voice, and reports the
+        // tier it used so the UI can be honest when it fell back from the AI curator.
+        let curated = await curator.curate(union, for: tasteProfile, mission: task)
         guard selectedTask?.id == task.id else { return }
-        candidates = ranked
-        deck = ranked
+        candidates = curated.products
+        deck = curated.products
+        curatorTier = curated.tier
         loadState = .loaded
     }
 

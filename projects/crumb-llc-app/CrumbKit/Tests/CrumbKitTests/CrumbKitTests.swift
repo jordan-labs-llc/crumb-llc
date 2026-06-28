@@ -64,6 +64,48 @@ struct CrumbKitTests {
         #expect(Set(first.map(\.id)) == Set(products.map(\.id))) // nothing dropped
     }
 
+    @Test("curate() default ranks like rank() and rewrites each rationale, no fallback note")
+    func curateDefault() async throws {
+        let curator = RuleBasedCurator()
+        let profile = SeedData.defaultTasteProfile
+        let products = SeedData.hikeProducts
+
+        let ranked = await curator.rank(products, for: profile)
+        let deck = await curator.curate(products, for: profile, mission: SeedData.hike)
+
+        // Same order as rank(), nothing dropped.
+        #expect(deck.products.map(\.id) == ranked.map(\.id))
+        // The default engine is a *chosen* default, not a degraded one → no honest note.
+        #expect(deck.tier == .ruleBased(nil))
+        #expect(deck.tier.fallbackNote == nil)
+        // Every card carries the curator's rationale (matches rationale(for:profile:)).
+        for product in deck.products {
+            #expect(product.rationale == curator.rationale(for: product, profile: profile))
+        }
+    }
+
+    @Test("withRationale replaces only the rationale")
+    func withRationale() {
+        let original = SeedData.hikeProducts[0]
+        let updated = original.withRationale("A quiet, weatherproof yes.")
+
+        #expect(updated.rationale == "A quiet, weatherproof yes.")
+        #expect(updated.id == original.id)
+        #expect(updated.name == original.name)
+        #expect(updated.price == original.price)
+        #expect(updated.imageURL == original.imageURL)
+        #expect(updated.variants == original.variants)
+    }
+
+    @Test("A fallback reason produces an honest note; a chosen default stays silent")
+    func curatorFallbackNotes() {
+        #expect(CuratorTier.ruleBased(nil).fallbackNote == nil)
+        #expect(CuratorTier.privateCloud.fallbackNote == nil)
+        #expect(CuratorTier.onDevice.fallbackNote == nil)
+        #expect(CuratorTier.ruleBased(.quotaExhausted).fallbackNote != nil)
+        #expect(CuratorTier.ruleBased(.deviceNotEligible).fallbackNote != nil)
+    }
+
     @Test("Default taste profile matches the brief")
     func defaultProfile() {
         let profile = SeedData.defaultTasteProfile

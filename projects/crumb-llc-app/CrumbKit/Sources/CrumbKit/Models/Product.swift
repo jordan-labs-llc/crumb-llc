@@ -52,4 +52,23 @@ public struct Product: Identifiable, Hashable, Sendable, Codable {
     public var defaultVariant: Variant {
         variants.first ?? Variant(id: "\(id).default", title: name, price: price)
     }
+
+    /// A copy of this product with the curator's rationale swapped in. The curator engines
+    /// use this to replace the raw merchant description with Crumb's voice copy — the card
+    /// renders `rationale` directly, so rewriting it here is what puts the voice on screen.
+    public func withRationale(_ rationale: String) -> Product {
+        Product(
+            id: id,
+            name: name,
+            shop: shop,
+            price: price,
+            rating: rating,
+            reviews: reviews,
+            rationale: rationale,
+            symbol: symbol,
+            gradient: gradient,
+            imageURL: imageURL,
+            variants: variants
+        )
+    }
 }

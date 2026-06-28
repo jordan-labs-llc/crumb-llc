@@ -93,7 +93,11 @@ struct ProductCard: View {
                 Text(product.shop.name)
                     .font(CrumbType.callout)
                     .foregroundStyle(CrumbColor.ink2)
-                RatingLabel(rating: product.rating, reviews: product.reviews)
+                // Live catalog products carry no rating/review data; a "0.0 ★ (0)" reads as
+                // a bad score, so we show stars only when there are real reviews to back them.
+                if product.reviews > 0 {
+                    RatingLabel(rating: product.rating, reviews: product.reviews)
+                }
             }
 
             Text(product.rationale)
@@ -107,10 +111,13 @@ struct ProductCard: View {
 
     private var accessibilitySummary: String {
         let price = product.price.formatted(.currency(code: "USD"))
-        let stars = product.rating.formatted(.number.precision(.fractionLength(1)))
         let kit = isInKit ? ", in your kit" : ""
-        return "\(product.name), \(price), from \(product.shop.name), "
-            + "rated \(stars) stars\(kit)"
+        var summary = "\(product.name), \(price), from \(product.shop.name)"
+        if product.reviews > 0 {
+            let stars = product.rating.formatted(.number.precision(.fractionLength(1)))
+            summary += ", rated \(stars) stars"
+        }
+        return summary + kit
     }
 }
 
