@@ -1,8 +1,12 @@
-// Crumb UCP broker — lean, stateless Azure footprint.
+// Crumb UCP broker — lean, stateless footprint on Azure Container Apps.
 //
-// Deploys into a resource group (create it first, see deploy.sh):
-//   Function App (Linux Consumption, Python) + Storage + Key Vault + user-assigned
-//   identity + App Insights/Log Analytics. No ACR, Postgres, or AI Search.
+// Container Apps (not Functions) because this subscription has zero App Service VM quota;
+// ACA Consumption is available (prod uses it), scales to zero, and is just as cheap.
+//
+// Deploys into a resource group (create it first — see deploy.sh):
+//   Container Apps Environment + Container App (scale-to-zero) + Key Vault + user-assigned
+//   identity. The image is pulled from the existing `acrcrumbprod` registry (in
+//   rg-crumb-prod) via an AcrPull role on the managed identity. No new ACR/Postgres/Search.
 //
 // Secrets are NOT in source. Pass them at deploy time; they are seeded into Key Vault and
 // surfaced to the app as Key Vault references resolved via the managed identity.
@@ -29,6 +33,22 @@ param shopifyCatalogUrl string = ''
 @description('UCP protocol version advertised by the agent profile')
 param ucpVersion string = '2026-04-08'
 
+@description('Optional broker access key — required as the x-broker-key header when set. Seeded into Key Vault when provided.')
+@secure()
+param brokerKey string = ''
+
+@description('Existing container registry name')
+param acrName string = 'acrcrumbprod'
+
+@description('Resource group of the existing container registry')
+param acrResourceGroup string = 'rg-crumb-prod'
+
+@description('Registry login server')
+param acrLoginServer string = 'acrcrumbprod.azurecr.io'
+
+@description('Image tag to deploy')
+param imageTag string = 'latest'
+
 // ---------------------------------------------------------------------------- names
 
 var suffix = uniqueString(resourceGroup().id)
@@ -37,14 +57,14 @@ var tags = {
   env: environmentName
   managedBy: 'bicep'
 }
-var storageName = take('stcrumbagent${suffix}', 24)
 var keyVaultName = take('kv-cagent-${suffix}', 24)
-var functionAppName = 'func-crumb-agent-${take(suffix, 8)}'
-var lawName = 'law-crumb-agent-${environmentName}'
-var appInsightsName = 'appi-crumb-agent-${environmentName}'
 var identityName = 'id-crumb-agent-${environmentName}'
+var envName = 'cae-crumb-agent-${environmentName}'
+var appName = 'ca-crumb-agent-${environmentName}'
+var image = '${acrLoginServer}/crumb-agent:${imageTag}'
 
 var credsProvided = !empty(shopifyClientId) && !empty(shopifyClientSecret)
+var brokerKeyProvided = !empty(brokerKey)
 
 // -------------------------------------------------------------------------- identity
 
@@ -54,45 +74,15 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' 
   tags: tags
 }
 
-// --------------------------------------------------------------------------- storage
+// ----------------------------------------------------------------------- acr pull role
 
-resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
-  name: storageName
-  location: location
-  tags: tags
-  sku: {
-    name: 'Standard_LRS'
-  }
-  kind: 'StorageV2'
-  properties: {
-    minimumTlsVersion: 'TLS1_2'
-    allowBlobPublicAccess: false
-    supportsHttpsTrafficOnly: true
-  }
-}
-
-// ------------------------------------------------------------------------ monitoring
-
-resource law 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
-  name: lawName
-  location: location
-  tags: tags
-  properties: {
-    sku: {
-      name: 'PerGB2018'
-    }
-    retentionInDays: 30
-  }
-}
-
-resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
-  name: appInsightsName
-  location: location
-  tags: tags
-  kind: 'web'
-  properties: {
-    Application_Type: 'web'
-    WorkspaceResourceId: law.id
+// Scoped to the registry's resource group so the assignment can target the ACR resource.
+module acrPull 'modules/acrPullRole.bicep' = {
+  name: 'acr-pull-role'
+  scope: resourceGroup(acrResourceGroup)
+  params: {
+    acrName: acrName
+    principalId: identity.properties.principalId
   }
 }
 
@@ -135,31 +125,53 @@ module kvClientSecret 'modules/keyVaultSecret.bicep' = if (credsProvided) {
   }
 }
 
-// ----------------------------------------------------------------------- app settings
+module kvBrokerKey 'modules/keyVaultSecret.bicep' = if (brokerKeyProvided) {
+  name: 'kv-broker-key'
+  params: {
+    keyVaultName: keyVault.outputs.name
+    secretName: 'crumb-broker-key'
+    secretValue: brokerKey
+  }
+}
 
-var storageConnectionString = 'DefaultEndpointsProtocol=https;AccountName=${storage.name};AccountKey=${storage.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
+// ---------------------------------------------------------------- container apps env
 
-var baseAppSettings = [
-  {
-    name: 'FUNCTIONS_EXTENSION_VERSION'
-    value: '~4'
+module containerEnv 'modules/containerAppsEnv.bicep' = {
+  name: 'container-env'
+  params: {
+    name: envName
+    location: location
+    tags: tags
   }
-  {
-    name: 'FUNCTIONS_WORKER_RUNTIME'
-    value: 'python'
-  }
-  {
-    name: 'AzureWebJobsStorage'
-    value: storageConnectionString
-  }
-  {
-    name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-    value: appInsights.properties.ConnectionString
-  }
-  {
-    name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
-    value: 'true'
-  }
+}
+
+// ---------------------------------------------------------------------- app settings
+
+var kvUri = keyVault.outputs.vaultUri
+
+var appSecrets = concat(
+  credsProvided ? [
+    {
+      name: 'shopify-ucp-client-id'
+      keyVaultUrl: '${kvUri}secrets/shopify-ucp-client-id'
+      identity: identity.id
+    }
+    {
+      name: 'shopify-ucp-client-secret'
+      keyVaultUrl: '${kvUri}secrets/shopify-ucp-client-secret'
+      identity: identity.id
+    }
+  ] : [],
+  brokerKeyProvided ? [
+    {
+      name: 'crumb-broker-key'
+      keyVaultUrl: '${kvUri}secrets/crumb-broker-key'
+      identity: identity.id
+    }
+  ] : []
+)
+
+var baseEnv = [
   {
     name: 'SHOPIFY_TOKEN_URL'
     value: 'https://api.shopify.com/auth/access_token'
@@ -174,41 +186,52 @@ var baseAppSettings = [
   }
 ]
 
-// Key Vault references — only wired when the secrets were actually seeded, so an
-// un-provisioned secret never surfaces as an unresolved reference.
-var secretAppSettings = credsProvided ? [
-  {
-    name: 'SHOPIFY_UCP_CLIENT_ID'
-    value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=shopify-ucp-client-id)'
-  }
-  {
-    name: 'SHOPIFY_UCP_CLIENT_SECRET'
-    value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=shopify-ucp-client-secret)'
-  }
-] : []
+var secretEnv = concat(
+  credsProvided ? [
+    {
+      name: 'SHOPIFY_UCP_CLIENT_ID'
+      secretRef: 'shopify-ucp-client-id'
+    }
+    {
+      name: 'SHOPIFY_UCP_CLIENT_SECRET'
+      secretRef: 'shopify-ucp-client-secret'
+    }
+  ] : [],
+  brokerKeyProvided ? [
+    {
+      name: 'CRUMB_BROKER_KEY'
+      secretRef: 'crumb-broker-key'
+    }
+  ] : []
+)
 
-// ----------------------------------------------------------------------- function app
+// ----------------------------------------------------------------------- container app
 
-module functionApp 'modules/functionApp.bicep' = {
-  name: 'functionapp'
+module containerApp 'modules/containerApp.bicep' = {
+  name: 'container-app'
   params: {
-    name: functionAppName
+    name: appName
     location: location
     tags: tags
+    environmentId: containerEnv.outputs.id
+    acrLoginServer: acrLoginServer
+    image: image
     identityId: identity.id
-    appSettings: concat(baseAppSettings, secretAppSettings)
+    env: concat(baseEnv, secretEnv)
+    secrets: appSecrets
   }
   dependsOn: [
+    acrPull
     kvClientId
     kvClientSecret
+    kvBrokerKey
   ]
 }
 
 // -------------------------------------------------------------------------- outputs
 
-output functionAppName string = functionApp.outputs.name
-output functionHostName string = functionApp.outputs.defaultHostName
-output brokerBaseUrl string = 'https://${functionApp.outputs.defaultHostName}'
-output agentProfileUrl string = 'https://${functionApp.outputs.defaultHostName}/.well-known/ucp'
+output containerAppName string = containerApp.outputs.name
+output brokerBaseUrl string = 'https://${containerApp.outputs.fqdn}'
+output agentProfileUrl string = 'https://${containerApp.outputs.fqdn}/.well-known/ucp'
 output keyVaultName string = keyVault.outputs.name
 output credentialsSeeded bool = credsProvided
