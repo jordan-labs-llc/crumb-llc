@@ -109,6 +109,23 @@ struct CrumbTests {
         #expect(model.candidates.isEmpty)
     }
 
+    @Test("beginHandoff presents the sheet with a nil url when no link resolves")
+    @MainActor
+    func handoffPresentsHonestSheet() async {
+        // FakeUCP always throws emptyShopHandoff — the sheet must still present (no silent
+        // no-op), carrying a nil url so the view can show the honest "no link" state.
+        let model = AppModel(ucp: FakeUCP(byQuery: [:]), curator: RuleBasedCurator())
+        let product = Self.fakeProduct("a")
+        model.accept(product)
+
+        await model.beginHandoff(for: product.shop)
+
+        let handoff = model.handoff
+        #expect(handoff != nil)
+        #expect(handoff?.url == nil)
+        #expect(handoff?.items.count == 1)
+    }
+
     // MARK: - Fixtures
 
     private static func fakeProduct(_ id: String) -> Product {

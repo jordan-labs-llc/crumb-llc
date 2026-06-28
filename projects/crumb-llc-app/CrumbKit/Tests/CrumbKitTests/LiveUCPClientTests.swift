@@ -64,6 +64,31 @@ struct LiveUCPClientTests {
             == "https://northbound.myshopify.com/cart/c/xyz")
     }
 
+    @Test("object-shaped description ({plain}) decodes tolerantly into rationale")
+    func tolerantDescription() async throws {
+        // The live catalog returns text fields as `{ "plain": "…" }` objects; the client
+        // must not choke on that (a typeMismatch would blank the whole search).
+        let json = """
+        { "products": [
+          { "id": "p", "title": "Cielo Rain Jacket",
+            "description": { "plain": "Eco-friendly rain jacket." },
+            "priceMin": { "amount": 5800, "currency": "USD" },
+            "sellerDomain": "www.cotopaxi.com",
+            "imageURL": "https://cdn.shopify.com/x.png",
+            "buyURL": "https://www.cotopaxi.com/products/cielo?variant=1",
+            "variantId": "gid://shopify/ProductVariant/1" } ] }
+        """
+        StubURLProtocol.responder = { _ in (200, Data(json.utf8)) }
+
+        let products = try await makeClient().searchCatalog("rain jacket", placements: [.organic])
+        let product = try #require(products.first)
+        #expect(product.name == "Cielo Rain Jacket")
+        #expect(product.rationale == "Eco-friendly rain jacket.")
+        #expect(product.shop.name == "cotopaxi.com")   // `www.` stripped, TLD kept
+        #expect(product.defaultVariant.checkoutURL?.absoluteString
+            == "https://www.cotopaxi.com/products/cielo?variant=1")
+    }
+
     @Test("product endpoint maps a single product")
     func productMaps() async throws {
         let json = """
@@ -99,5 +124,35 @@ struct LiveUCPClientTests {
 
         let handoff = try await makeClient().checkoutHandoff(for: shop, in: cart)
         #expect(handoff == url)
+    }
+
+    @Test("handoff falls back to the merchant storefront when no variant continue_url")
+    func handoffFallsBackToStorefront() async throws {
+        // Variant carries no checkoutURL, but the shop id is a real domain.
+        let shop = Shop(id: "www.cotopaxi.com", name: "cotopaxi")
+        let product = Product(
+            id: "p", name: "Jacket", shop: shop, price: 58, rating: 0, reviews: 0,
+            rationale: "", symbol: "bag", gradient: SeedData.Gradient.pine,
+            variants: [Variant(id: "v", title: "Standard", price: 58, checkoutURL: nil)]
+        )
+        let cart = Cart(items: [KitItem(product: product)])
+
+        let handoff = try await makeClient().checkoutHandoff(for: shop, in: cart)
+        #expect(handoff.absoluteString == "https://www.cotopaxi.com")
+    }
+
+    @Test("handoff throws when there is neither a continue_url nor a known domain")
+    func handoffThrowsWithoutTarget() async throws {
+        let shop = Shop(id: "unknown", name: "Shop")
+        let product = Product(
+            id: "p", name: "Jacket", shop: shop, price: 58, rating: 0, reviews: 0,
+            rationale: "", symbol: "bag", gradient: SeedData.Gradient.pine,
+            variants: [Variant(id: "v", title: "Standard", price: 58, checkoutURL: nil)]
+        )
+        let cart = Cart(items: [KitItem(product: product)])
+
+        await #expect(throws: UCPError.self) {
+            _ = try await makeClient().checkoutHandoff(for: shop, in: cart)
+        }
     }
 }
