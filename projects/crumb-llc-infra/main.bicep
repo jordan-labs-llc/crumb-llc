@@ -3,13 +3,12 @@
 // Container Apps (not Functions) because this subscription has zero App Service VM quota;
 // ACA Consumption is available (prod uses it), scales to zero, and is just as cheap.
 //
-// Deploys into a resource group (create it first — see deploy.sh):
-//   Container Apps Environment + Container App (scale-to-zero) + Key Vault + user-assigned
-//   identity. The image is pulled from the existing `acrcrumbprod` registry (in
-//   rg-crumb-prod) via an AcrPull role on the managed identity. No new ACR/Postgres/Search.
+// SECRET HANDLING: this template never receives secret values. It creates the Key Vault +
+// managed identity and wires the Container App to *reference* secrets by name. The secret
+// VALUES are written to Key Vault out-of-band (see set-secrets.sh) and resolved at runtime
+// via the managed identity. So the deployment carries no secrets.
 //
-// Secrets are NOT in source. Pass them at deploy time; they are seeded into Key Vault and
-// surfaced to the app as Key Vault references resolved via the managed identity.
+// Flow: deploy (idle) → set-secrets.sh → redeploy with enableShopify=true.
 
 targetScope = 'resourceGroup'
 
@@ -19,23 +18,17 @@ param location string = resourceGroup().location
 @description('Environment name (dev, prod, ...)')
 param environmentName string = 'dev'
 
-@description('Shopify UCP client id (Dev Dashboard → Catalogs → Get an API key). Seeded into Key Vault when provided.')
-@secure()
-param shopifyClientId string = ''
-
-@description('Shopify UCP client secret. Seeded into Key Vault when provided.')
-@secure()
-param shopifyClientSecret string = ''
-
-@description('Global Catalog MCP endpoint URL (Dev Dashboard → Catalogs → Copy URL)')
+@description('Global Catalog MCP endpoint URL (Dev Dashboard → Catalogs → Copy URL). Not a secret.')
 param shopifyCatalogUrl string = ''
 
 @description('UCP protocol version advertised by the agent profile')
 param ucpVersion string = '2026-04-08'
 
-@description('Optional broker access key — required as the x-broker-key header when set. Seeded into Key Vault when provided.')
-@secure()
-param brokerKey string = ''
+@description('Wire the Shopify Key Vault references. Set true AFTER the secrets exist in Key Vault (see set-secrets.sh).')
+param enableShopify bool = false
+
+@description('Wire the broker-key Key Vault reference (require the x-broker-key header). Set true after seeding crumb-broker-key.')
+param enableBrokerKey bool = false
 
 @description('Existing container registry name')
 param acrName string = 'acrcrumbprod'
@@ -63,9 +56,6 @@ var envName = 'cae-crumb-agent-${environmentName}'
 var appName = 'ca-crumb-agent-${environmentName}'
 var image = '${acrLoginServer}/crumb-agent:${imageTag}'
 
-var credsProvided = !empty(shopifyClientId) && !empty(shopifyClientSecret)
-var brokerKeyProvided = !empty(brokerKey)
-
 // -------------------------------------------------------------------------- identity
 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -88,6 +78,7 @@ module acrPull 'modules/acrPullRole.bicep' = {
 
 // -------------------------------------------------------------------------- key vault
 
+// Created empty. Secret VALUES are written by set-secrets.sh, not by this template.
 module keyVault 'modules/keyVault.bicep' = {
   name: 'keyvault'
   params: {
@@ -107,33 +98,6 @@ module keyVault 'modules/keyVault.bicep' = {
   }
 }
 
-module kvClientId 'modules/keyVaultSecret.bicep' = if (credsProvided) {
-  name: 'kv-shopify-client-id'
-  params: {
-    keyVaultName: keyVault.outputs.name
-    secretName: 'shopify-ucp-client-id'
-    secretValue: shopifyClientId
-  }
-}
-
-module kvClientSecret 'modules/keyVaultSecret.bicep' = if (credsProvided) {
-  name: 'kv-shopify-client-secret'
-  params: {
-    keyVaultName: keyVault.outputs.name
-    secretName: 'shopify-ucp-client-secret'
-    secretValue: shopifyClientSecret
-  }
-}
-
-module kvBrokerKey 'modules/keyVaultSecret.bicep' = if (brokerKeyProvided) {
-  name: 'kv-broker-key'
-  params: {
-    keyVaultName: keyVault.outputs.name
-    secretName: 'crumb-broker-key'
-    secretValue: brokerKey
-  }
-}
-
 // ---------------------------------------------------------------- container apps env
 
 module containerEnv 'modules/containerAppsEnv.bicep' = {
@@ -149,8 +113,9 @@ module containerEnv 'modules/containerAppsEnv.bicep' = {
 
 var kvUri = keyVault.outputs.vaultUri
 
+// Container App secret references — point at Key Vault secrets that set-secrets.sh writes.
 var appSecrets = concat(
-  credsProvided ? [
+  enableShopify ? [
     {
       name: 'shopify-ucp-client-id'
       keyVaultUrl: '${kvUri}secrets/shopify-ucp-client-id'
@@ -162,7 +127,7 @@ var appSecrets = concat(
       identity: identity.id
     }
   ] : [],
-  brokerKeyProvided ? [
+  enableBrokerKey ? [
     {
       name: 'crumb-broker-key'
       keyVaultUrl: '${kvUri}secrets/crumb-broker-key'
@@ -187,7 +152,7 @@ var baseEnv = [
 ]
 
 var secretEnv = concat(
-  credsProvided ? [
+  enableShopify ? [
     {
       name: 'SHOPIFY_UCP_CLIENT_ID'
       secretRef: 'shopify-ucp-client-id'
@@ -197,7 +162,7 @@ var secretEnv = concat(
       secretRef: 'shopify-ucp-client-secret'
     }
   ] : [],
-  brokerKeyProvided ? [
+  enableBrokerKey ? [
     {
       name: 'CRUMB_BROKER_KEY'
       secretRef: 'crumb-broker-key'
@@ -222,9 +187,6 @@ module containerApp 'modules/containerApp.bicep' = {
   }
   dependsOn: [
     acrPull
-    kvClientId
-    kvClientSecret
-    kvBrokerKey
   ]
 }
 
@@ -234,4 +196,4 @@ output containerAppName string = containerApp.outputs.name
 output brokerBaseUrl string = 'https://${containerApp.outputs.fqdn}'
 output agentProfileUrl string = 'https://${containerApp.outputs.fqdn}/.well-known/ucp'
 output keyVaultName string = keyVault.outputs.name
-output credentialsSeeded bool = credsProvided
+output shopifyEnabled bool = enableShopify

@@ -21,36 +21,51 @@ an `AcrPull` role on the managed identity — so no new registry. **Est. ~$0–3
 
 ## Secret model
 
-Secrets are **never** in source. At deploy time they're seeded into Key Vault and exposed
-to the Container App as **Key Vault references** (`{ keyVaultUrl, identity }` secrets →
-`secretRef` env vars) resolved through the managed identity.
+Secrets **never pass through the deployment** — not as `@secure()` params (which land in
+deployment history) and not on the deploy command line (which lands in `ps` / shell
+history). Instead:
+
+1. **Bicep** creates the Key Vault + identity and tells the Container App to *reference*
+   secrets by name (`{ keyVaultUrl, identity }` → `secretRef` env vars).
+2. **`set-secrets.sh`** writes the values into Key Vault out-of-band (read interactively,
+   hidden input).
+3. The Container App reads them **at runtime** via its managed identity.
 
 | Key Vault secret | App env var | Source |
 |---|---|---|
 | `shopify-ucp-client-id` | `SHOPIFY_UCP_CLIENT_ID` | Dev Dashboard → Catalogs → Get an API key |
 | `shopify-ucp-client-secret` | `SHOPIFY_UCP_CLIENT_SECRET` | same |
 | `crumb-broker-key` (optional) | `CRUMB_BROKER_KEY` | your choice; gates the `x-broker-key` header |
-| — | `SHOPIFY_CATALOG_URL` | Dev Dashboard → Catalogs → Copy URL (plain env) |
 
-Key Vault references are wired **only when** the matching secret is supplied, so the broker
-deploys cleanly unconfigured and returns `503` until creds exist.
+`SHOPIFY_CATALOG_URL` is **not** a secret — it lives in `environments/dev.bicepparam`.
+
+The Key Vault references are wired only when `enableShopify` (and `enableBrokerKey`) are
+true, so the broker deploys cleanly idle and returns `503` until the secrets exist + are
+enabled.
 
 ## Deploy
 
 ```sh
-# Validate locally
+# 0) Validate
 az bicep build --file main.bicep --stdout > /dev/null
 
-# Deploy. Builds the image with ACR Tasks (no local Docker), then provisions the app.
-# Without creds → broker runs idle (503 on catalog routes).
+# 1) Provision (creates Key Vault, identity, app — idle). No secrets involved.
 ./deploy.sh
 
-# With credentials (seeds Key Vault):
-SHOPIFY_CLIENT_ID=xxx SHOPIFY_CLIENT_SECRET=yyy SHOPIFY_CATALOG_URL=https://... ./deploy.sh
+# 2) Write the secrets into Key Vault (interactive, hidden input — nothing in history)
+./set-secrets.sh
+
+# 3) Wire the references and roll the app
+ENABLE_SHOPIFY=true ./deploy.sh
+#   add ENABLE_BROKER_KEY=true if you set a broker key
 ```
 
-Outputs include `brokerBaseUrl` and `agentProfileUrl` — use the base URL as the iOS app's
+Set `shopifyCatalogUrl` in `environments/dev.bicepparam` before step 3. Outputs include
+`brokerBaseUrl` and `agentProfileUrl` — use the base URL as the iOS app's
 `CRUMB_API_BASE_URL`.
+
+> For CI later, the pipeline does the same `az keyvault secret set` from its own secret
+> store (e.g. GitHub OIDC) — same separation, no secrets in the repo or workflow logs.
 
 ## Notes
 
