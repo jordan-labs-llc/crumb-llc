@@ -18,7 +18,10 @@ struct CrumbApp: App {
     init() {
         let config = UCPConfig.load()
         let ucp: any UCPClient = LiveUCPClient(config: config) ?? MockUCPClient()
-        let model = AppModel(ucp: ucp, curator: RuleBasedCurator())
+        // The Apple Foundation Models curator is the "real" voice; it self-degrades to the
+        // rule-based engine (and reports why) when no model tier is usable, so it's safe to
+        // always inject — mirroring LiveUCPClient ?? MockUCPClient for the catalog.
+        let model = AppModel(ucp: ucp, curator: AppleFoundationCurator())
         // Make the app model available to App Intents (`@Dependency`).
         AppDependencyManager.shared.add(dependency: model)
         _model = State(initialValue: model)

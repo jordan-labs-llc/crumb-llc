@@ -16,6 +16,9 @@ struct CurateView: View {
 
     var body: some View {
         VStack(spacing: CrumbMetrics.Space.l) {
+            if let note = model.curatorFallbackNote {
+                fallbackNote(note)
+            }
             if model.deck.isEmpty {
                 emptyState
             } else {
@@ -175,6 +178,31 @@ struct CurateView: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(accept ? "addButton" : "skipButton")
+    }
+
+    // MARK: Curator fallback note
+
+    /// An honest, quiet banner shown when Crumb wanted its AI curator but fell back to the
+    /// deterministic voice (older device, Apple Intelligence off, quota spent, or offline).
+    private func fallbackNote(_ note: String) -> some View {
+        HStack(alignment: .top, spacing: CrumbMetrics.Space.s) {
+            Image(systemName: "info.circle")
+                .foregroundStyle(CrumbColor.ink3)
+                .accessibilityHidden(true)
+            Text(note)
+                .font(CrumbType.caption)
+                .foregroundStyle(CrumbColor.ink2)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(CrumbMetrics.Space.m)
+        .background(CrumbColor.raised, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous)
+                .strokeBorder(CrumbColor.line, lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("curatorFallbackNote")
     }
 
     // MARK: Empty state
