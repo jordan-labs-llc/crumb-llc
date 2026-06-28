@@ -1,0 +1,28 @@
+# Normalize line endings.
+* text=auto eol=lf
+
+# Swift / Apple sources
+*.swift   text diff=swift
+*.h       text
+*.m       text
+*.plist   text
+*.xcconfig text
+*.entitlements text
+*.strings  text
+
+# Xcode project files — merge carefully, mark as generated for diffs.
+*.pbxproj  text -diff merge=union linguist-generated=true
+project.yml text
+
+# Docs / config
+*.md       text diff=markdown
+*.yml      text
+*.yaml     text
+*.json     text
+
+# Binary assets
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.pdf      binary
+*.icns     binary

@@ -1,0 +1,50 @@
+# ---- macOS ----
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+
+# ---- Xcode ----
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad
+DerivedData/
+build/
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# ---- Swift Package Manager ----
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+
+# ---- Secrets (never commit) ----
+Secrets.plist
+*.secrets.xcconfig
+*.xcconfig.local
+# Keep example/template configs:
+!Secrets.example.plist
+
+# ---- Node (future projects under projects/) ----
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnp.*
+
+# ---- Misc ----
+*.log
+.env
+.env.local
