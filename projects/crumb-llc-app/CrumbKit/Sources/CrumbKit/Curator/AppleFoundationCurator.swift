@@ -7,8 +7,8 @@ import FoundationModels
 /// product's raw merchant description with Crumb's own "why this is you" copy.
 ///
 /// ## Tiers & degrade order
-/// Ranking is deterministic (delegated to ``RuleBasedCurator``); only the *rationale* is
-/// model-written, one guided call per product. The model is chosen best-first:
+/// The model both **ranks** the deck (best-fit-for-you first) and **voices** each card. The
+/// model is chosen best-first:
 ///
 /// 1. **Private Cloud Compute** (`PrivateCloudComputeLanguageModel`, OS 27+) — best voice,
 ///    metered against the user's iCloud quota at no token cost to us. Needs an
@@ -17,12 +17,23 @@ import FoundationModels
 ///    `com.apple.developer.private-cloud-compute` entitlement traps the process** (see the
 ///    gate in `curate`). On-device is the working primary until that entitlement is granted.
 /// 2. **On-device** (`SystemLanguageModel.default`) — offline, lower quality, no entitlement.
-/// 3. **Rule-based** — the deterministic seed voice, used when neither model is usable.
+/// 3. **Rule-based** — the deterministic ``RuleBasedCurator`` order + seed voice, used when
+///    neither model is usable.
 ///
-/// A tier "proves" itself on the first product call: if that throws (offline / system not
-/// ready), curation cascades to the next tier. Once a tier is proven, a later per-product
-/// failure just leaves that one card on the rule-based rationale — one hiccup never blanks
-/// a card or downgrades the whole deck.
+/// ## What the model does vs. the deterministic floor
+/// On live products `RuleBasedCurator.score` is weak — rating/reviews are 0, so the order
+/// leans only on leanings/budget. So when a model tier is up, **the model picks the order**:
+/// one guided call returns the candidate IDs best-fit-first, which we reconcile into a total
+/// order (see ``reconcile(modelIDs:candidates:)``). The deterministic ``RuleBasedCurator/rank``
+/// stays the input order we feed the model, the order of the reconciliation tail, and the
+/// whole-deck fallback when no tier ranks.
+///
+/// ## How a tier proves itself
+/// The **ranking call is the tier probe**: if it throws (offline / system not ready) or
+/// returns no usable IDs, curation cascades to the next tier. Once ranking succeeds the tier
+/// is proven, and the per-product voice rewrite is then fully best-effort — a later
+/// per-product failure just leaves that one card on the rule-based rationale, never blanking
+/// a card or downgrading the whole deck.
 public struct AppleFoundationCurator: CuratorEngine {
 
     /// Ranking, plan, and the fallback rationale all come from the deterministic engine.
@@ -51,8 +62,10 @@ public struct AppleFoundationCurator: CuratorEngine {
         for profile: TasteProfile,
         mission: ShoppingTask
     ) async -> CuratedDeck {
-        let ranked = await rule.rank(products, for: profile)
-        guard !ranked.isEmpty else { return CuratedDeck(products: [], tier: .onDevice) }
+        // The deterministic order: the input we hand the model, the order of the
+        // reconciliation tail, and the whole-deck fallback when no tier ranks.
+        let baseline = await rule.rank(products, for: profile)
+        guard !baseline.isEmpty else { return CuratedDeck(products: [], tier: .onDevice) }
 
         // Tier 1 — Private Cloud Compute (OS 27+). Gated behind `CRUMB_PCC_ENABLED` because
         // *merely constructing or querying* `PrivateCloudComputeLanguageModel` traps the
@@ -64,11 +77,11 @@ public struct AppleFoundationCurator: CuratorEngine {
         if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) {
             let pcc = PrivateCloudComputeLanguageModel()
             if case .available = pcc.availability, !pcc.quotaUsage.isLimitReached {
-                let session: VoiceSession = { LanguageModelSession(model: pcc, instructions: $0) }
-                if let voiced = try? await rewrite(ranked, profile, mission, session: session) {
+                let session: MakeSession = { LanguageModelSession(model: pcc, instructions: $0) }
+                if let voiced = try? await rankAndVoice(baseline, profile, mission, session: session) {
                     return CuratedDeck(products: voiced, tier: .privateCloud)
                 }
-                // First call failed (offline / transient) — fall through to on-device.
+                // Ranking probe failed (offline / transient) — fall through to on-device.
             }
         }
         #endif
@@ -78,54 +91,99 @@ public struct AppleFoundationCurator: CuratorEngine {
         let device = SystemLanguageModel.default
         switch device.availability {
         case .available:
-            let session: VoiceSession = { LanguageModelSession(model: device, instructions: $0) }
-            if let voiced = try? await rewrite(ranked, profile, mission, session: session) {
+            let session: MakeSession = { LanguageModelSession(model: device, instructions: $0) }
+            if let voiced = try? await rankAndVoice(baseline, profile, mission, session: session) {
                 return CuratedDeck(products: voiced, tier: .onDevice)
             }
-            return fallback(ranked, profile, reason: .offlineOrError)
+            return fallback(baseline, profile, reason: .offlineOrError)
         case let .unavailable(reason):
-            return fallback(ranked, profile, reason: Self.map(reason))
+            return fallback(baseline, profile, reason: Self.map(reason))
         }
     }
 
-    // MARK: Rationale rewriting
+    // MARK: Rank, then voice
 
     /// Makes a session for a given instructions string. The only version-sensitive step —
-    /// the rest of the rewrite loop is API-version agnostic.
-    private typealias VoiceSession = @Sendable (_ instructions: String) -> LanguageModelSession
+    /// the rank/voice loops are API-version agnostic.
+    private typealias MakeSession = @Sendable (_ instructions: String) -> LanguageModelSession
 
-    /// Rewrites every product's rationale, throwing if the **first** call fails (so the
-    /// caller can cascade to the next tier). Later per-product failures keep the rule-based
-    /// rationale for that one product — one hiccup never blanks a card.
-    private func rewrite(
-        _ ranked: [Product],
+    /// The tier's whole job: model-rank the deck (the **probe** — throws if the tier is
+    /// unusable, so the caller cascades), then voice every card best-effort over that order.
+    private func rankAndVoice(
+        _ baseline: [Product],
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
-        session makeSession: @escaping VoiceSession
+        session makeSession: @escaping MakeSession
     ) async throws -> [Product] {
-        let instructions = Self.instructions(profile: profile, mission: mission)
+        let ordered = try await modelRankedOrder(baseline, profile, mission, session: makeSession)
+        return await voiceAll(ordered, profile, mission, session: makeSession)
+    }
 
-        // Probe the first product; a throw here means the tier is unusable → cascade.
-        var out = ranked
-        out[0] = ranked[0].withRationale(
-            try await Self.voice(for: ranked[0], makeSession(instructions))
+    /// One guided call asks the model to order the deck best-fit-first; the returned IDs are
+    /// reconciled into a total order. Throws when the call fails *or* (for a real multi-item
+    /// deck) returns no usable IDs — either way the tier hasn't proven it can rank, so the
+    /// caller cascades. A single-item deck can't be mis-ordered, so an empty reply still
+    /// proves the tier (reconciliation backfills the one product).
+    private func modelRankedOrder(
+        _ baseline: [Product],
+        _ profile: TasteProfile,
+        _ mission: ShoppingTask,
+        session makeSession: @escaping MakeSession
+    ) async throws -> [Product] {
+        // Cap what we send so a big live deck doesn't blow context/latency on the 3B model;
+        // products past the cap keep their deterministic order via the reconciliation tail.
+        let head = Array(baseline.prefix(Self.rankDeckCap))
+        let session = makeSession(Self.rankingInstructions(profile: profile, mission: mission))
+        let response = try await session.respond(
+            to: Self.rankPrompt(for: head),
+            generating: RankedOrder.self
         )
+        let ids = response.content.productIDs
+        let candidateIDs = Set(baseline.map(\.id))
+        let usable = Set(ids).intersection(candidateIDs)
+        if baseline.count > 1 && usable.isEmpty { throw CuratorRankError.noUsableIDs }
+        return Self.reconcile(modelIDs: ids, candidates: baseline)
+    }
 
-        guard ranked.count > 1 else { return out }
+    /// Folds the model's ID order back onto the candidate set into a **total** order that
+    /// never drops or duplicates a product: each valid, first-seen model ID in its given
+    /// order, then any candidate the model omitted (or that fell past the rank cap) appended
+    /// in the deterministic `candidates` order. Pure and model-free — this is the unit-tested
+    /// guarantee behind the model call.
+    static func reconcile(modelIDs: [String], candidates: [Product]) -> [Product] {
+        let byID = Dictionary(candidates.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var seen = Set<String>()
+        var ordered: [Product] = []
+        for id in modelIDs {
+            guard let product = byID[id], seen.insert(id).inserted else { continue }
+            ordered.append(product)
+        }
+        for product in candidates where !seen.contains(product.id) {
+            ordered.append(product)
+        }
+        return ordered
+    }
 
-        // Remaining products in parallel; a failure leaves the seed/rule-based rationale.
+    /// Voices every card best-effort: the tier is already proven by ranking, so a per-product
+    /// failure just keeps that card's rule-based rationale. Never throws.
+    private func voiceAll(
+        _ products: [Product],
+        _ profile: TasteProfile,
+        _ mission: ShoppingTask,
+        session makeSession: @escaping MakeSession
+    ) async -> [Product] {
+        let instructions = Self.instructions(profile: profile, mission: mission)
+        var out = products
         await withTaskGroup(of: (Int, String?).self) { group in
-            for index in ranked.indices.dropFirst() {
+            for index in products.indices {
                 group.addTask {
-                    let text = try? await Self.voice(
-                        for: ranked[index], makeSession(instructions)
-                    )
+                    let text = try? await Self.voice(for: products[index], makeSession(instructions))
                     return (index, text)
                 }
             }
             for await (index, text) in group {
-                out[index] = ranked[index].withRationale(
-                    text ?? rule.rationale(for: ranked[index], profile: profile)
+                out[index] = products[index].withRationale(
+                    text ?? rule.rationale(for: products[index], profile: profile)
                 )
             }
         }
@@ -157,13 +215,17 @@ public struct AppleFoundationCurator: CuratorEngine {
 
     // MARK: Prompt construction
 
-    /// The curator persona + this user's taste + the mission. Stable across the deck, so it
-    /// lives in the session's instructions; only the product varies per call.
-    static func instructions(profile: TasteProfile, mission: ShoppingTask) -> String {
+    /// How many candidates we actually send to the model to rank. A guard rail on context and
+    /// latency for the on-device 3B model; products past the cap keep their deterministic
+    /// order via the reconciliation tail (see ``reconcile(modelIDs:candidates:)``).
+    static let rankDeckCap = 25
+
+    /// The shared lede — who Crumb is + this user's taste + the mission. Used verbatim by both
+    /// the voice and ranking instructions so the two phases speak to the same persona.
+    private static func persona(profile: TasteProfile, mission: ShoppingTask) -> String {
         """
         You are Crumb, a personal shopping curator with a warm, plainspoken, slightly literary \
-        voice. You write the one-line "why this is you" note shown under a product the user is \
-        considering.
+        voice.
 
         The user's taste:
         - Vibe: \(profile.vibe.joined(separator: ", "))
@@ -172,8 +234,18 @@ public struct AppleFoundationCurator: CuratorEngine {
         - In their words: "\(profile.signatureLine)"
 
         Their current mission: "\(mission.title)" — \(mission.subtitle)
+        """
+    }
 
-        Write the rationale so it:
+    /// The voice instructions: persona + how to write one card's "why this is you" note.
+    /// Stable across the deck, so it lives in the session's instructions; only the product
+    /// varies per call.
+    static func instructions(profile: TasteProfile, mission: ShoppingTask) -> String {
+        """
+        \(Self.persona(profile: profile, mission: mission))
+
+        You write the one-line "why this is you" note shown under a product the user is \
+        considering. Write the rationale so it:
         - is ONE or at most TWO short sentences;
         - speaks to "you" and ties the product to this mission and at least one of their leanings;
         - is specific and honest about THIS product — never invent ratings, reviews, materials, \
@@ -181,6 +253,37 @@ public struct AppleFoundationCurator: CuratorEngine {
         - sounds like a trusted friend with taste, not a marketing blurb. No emoji, no hashtags, \
         no exclamation marks.
         """
+    }
+
+    /// The ranking instructions: persona + how to order the deck for *this* user. Honesty
+    /// matters more than novelty — on live products ratings/reviews are absent, so the model
+    /// must judge fit from taste and mission, not invent quality signals.
+    static func rankingInstructions(profile: TasteProfile, mission: ShoppingTask) -> String {
+        """
+        \(Self.persona(profile: profile, mission: mission))
+
+        You are ordering a deck of candidate products so the best fit for THIS user and \
+        mission comes first. Judge fit from their taste, leanings, budget comfort, and the \
+        mission — not from hype. Do not invent ratings, reviews, or facts you weren't given. \
+        Return the product IDs in your recommended order, best fit first, using only the IDs \
+        provided and including each one exactly once.
+        """
+    }
+
+    /// The deck the model orders: one terse line per candidate so the small model can hold the
+    /// whole set at once. IDs are echoed back as the ranking output.
+    static func rankPrompt(for products: [Product]) -> String {
+        var lines = ["Candidate products:"]
+        for product in products {
+            var line = "- [\(product.id)] \(product.name) — \(product.shop.name) — \(product.price) USD"
+            let description = product.rationale.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !description.isEmpty {
+                line += " — \(description.prefix(140))"
+            }
+            lines.append(line)
+        }
+        lines.append("Return the product IDs ordered best fit first for this user and mission.")
+        return lines.joined(separator: "\n")
     }
 
     static func prompt(for product: Product) -> String {
@@ -227,4 +330,19 @@ struct CuratorVoice {
 
 enum CuratorVoiceError: Error {
     case emptyRationale
+}
+
+/// The structured output of the ranking call: the candidate IDs in best-fit order. Guided
+/// generation keeps the model returning a clean list of IDs rather than prose we'd have to
+/// parse; `reconcile` then makes the order total and drop/dupe-free.
+@Generable
+struct RankedOrder {
+    @Guide(description: "The given product IDs, ordered best fit first, each ID included exactly once.")
+    var productIDs: [String]
+}
+
+enum CuratorRankError: Error {
+    /// The model returned no IDs that match the deck — for a real multi-item deck this means
+    /// the tier didn't actually rank, so the caller cascades to the next tier.
+    case noUsableIDs
 }
