@@ -1,0 +1,18 @@
+# Azure Functions local config (may contain real secrets) — never commit
+local.settings.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.python_packages/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Azure Functions build artifacts
+bin/
+obj/
+.func/

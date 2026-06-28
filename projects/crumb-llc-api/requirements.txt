@@ -1,0 +1,7 @@
+# Azure Functions Python worker
+azure-functions>=1.21,<2.0
+
+# HTTP + settings
+httpx>=0.27,<0.29
+pydantic>=2.7,<3.0
+pydantic-settings>=2.3,<3.0
