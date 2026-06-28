@@ -19,10 +19,31 @@ public struct LiveUCPClient: UCPClient {
     }
 
     /// Convenience init from a ``UCPConfig``; returns `nil` when no broker is configured.
-    public init?(config: UCPConfig, session: URLSession = .shared) {
+    ///
+    /// When no explicit `session` is passed it builds one with a longer request timeout than
+    /// `URLSession.shared`'s 60s default is comfortable with for our purposes: the broker
+    /// scales to zero, so the first request after idle can spend ~20s+ in a cold start. The
+    /// bumped timeout keeps that first real query from being cut off (paired with the
+    /// launch-time ``warmUp()`` ping, which usually warms the container first).
+    public init?(config: UCPConfig, session: URLSession? = nil) {
         guard let url = config.brokerBaseURL else { return nil }
-        self.init(baseURL: url, brokerKey: config.brokerKey, session: session)
+        self.init(
+            baseURL: url,
+            brokerKey: config.brokerKey,
+            session: session ?? Self.makeSession()
+        )
     }
+
+    /// A session tuned for the broker's cold-start latency.
+    static func makeSession() -> URLSession {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = coldStartTimeout
+        configuration.waitsForConnectivity = true
+        return URLSession(configuration: configuration)
+    }
+
+    /// Per-request timeout, sized for a scale-to-zero cold start (first hit can take 20s+).
+    static let coldStartTimeout: TimeInterval = 30
 
     // MARK: UCPClient
 
@@ -74,6 +95,16 @@ public struct LiveUCPClient: UCPClient {
         let domain = shop.id
         guard domain != "unknown", domain.contains(".") else { return nil }
         return URL(string: "https://\(domain)")
+    }
+
+    /// Wakes the (scale-to-zero) broker with a cheap, cacheable GET so the first real query
+    /// usually lands warm. Fire-and-forget: the result is discarded and every error is
+    /// swallowed — a failed warm-up is no worse than not warming up at all.
+    public func warmUp() async {
+        let url = baseURL.appending(path: ".well-known/ucp")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        _ = try? await session.data(for: request)
     }
 
     // MARK: Transport

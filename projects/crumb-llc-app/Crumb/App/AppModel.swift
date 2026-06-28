@@ -3,7 +3,11 @@ import Observation
 import CrumbKit
 
 /// Top-level navigation state for the Missions → Plan → Curate → Cart flow.
+///
+/// `onboarding` is the first-run entry: shown only when no ``TasteProfile`` has been
+/// persisted yet, so a returning user never sees it.
 enum Route: Hashable {
+    case onboarding
     case missions
     case plan
     case curate
@@ -28,7 +32,14 @@ final class AppModel {
     // MARK: Domain state
 
     private(set) var kit: [KitItem] = []
-    var tasteProfile: TasteProfile
+    /// The user's taste — the single persisted piece of domain state. Read-only to views;
+    /// all edits flow through ``updateTaste(_:)`` so every change is persisted *and* re-curates
+    /// the live deck.
+    private(set) var tasteProfile: TasteProfile
+
+    /// `true` while a profile edit is re-ranking and re-voicing the on-screen deck. Drives the
+    /// Curate screen's "re-reading your taste" shimmer so the personalization is *felt*.
+    private(set) var isRecurating = false
 
     /// Ranked candidate products for the selected mission.
     private(set) var candidates: [Product] = []
@@ -79,15 +90,30 @@ final class AppModel {
 
     let ucp: any UCPClient
     let curator: any CuratorEngine
+    let tasteExtractor: any TasteExtractor
+    private let tasteStore: any TasteStore
 
+    /// Builds the app model, restoring the persisted ``TasteProfile`` if one exists.
+    ///
+    /// The presence of a stored profile is also the first-run signal: with none, the app opens
+    /// on ``Route/onboarding`` (and falls back to the seed profile as the editable starting
+    /// point); with one, it opens straight on Missions. `tasteStore` and `tasteExtractor`
+    /// default to the keyless in-memory / manual doubles so existing tests and the mock
+    /// scaffold need no model or disk.
     init(
         ucp: any UCPClient,
         curator: any CuratorEngine,
-        tasteProfile: TasteProfile = SeedData.defaultTasteProfile
+        tasteStore: any TasteStore = InMemoryTasteStore(),
+        tasteExtractor: any TasteExtractor = ManualTasteExtractor()
     ) {
         self.ucp = ucp
         self.curator = curator
-        self.tasteProfile = tasteProfile
+        self.tasteStore = tasteStore
+        self.tasteExtractor = tasteExtractor
+
+        let stored = tasteStore.loadProfile()
+        self.tasteProfile = stored ?? SeedData.defaultTasteProfile
+        self.route = stored == nil ? .onboarding : .missions
     }
 
     // MARK: Derived
@@ -175,11 +201,70 @@ final class AppModel {
     /// Steps one level back in the flow.
     func back() {
         switch route {
-        case .missions: break
+        case .onboarding, .missions: break  // roots — nothing to step back to
         case .plan: route = .missions
         case .curate: route = .plan
         case .cart: route = .curate
         }
+    }
+
+    // MARK: Taste capture
+
+    /// Finishes first-run onboarding with the profile the user built, persists it, and routes
+    /// into the app. (No deck exists yet, so this never triggers a re-curate.)
+    func completeOnboarding(with profile: TasteProfile) {
+        updateTaste(profile)
+        route = .missions
+    }
+
+    /// Skips onboarding: keep the seed profile but persist it, so the store now has a value and
+    /// the user lands on the standard defaults instead of being asked again next launch.
+    func skipOnboarding() {
+        tasteStore.saveProfile(tasteProfile)
+        route = .missions
+    }
+
+    /// Replaces the taste profile, persists it, and — when a deck is already on screen —
+    /// **re-curates it in place** so the change is *felt*: the live candidates re-rank and
+    /// re-voice against the new taste without re-fetching the catalog. A no-op deck (nothing
+    /// loaded yet) just persists.
+    func updateTaste(_ profile: TasteProfile) {
+        tasteProfile = profile
+        tasteStore.saveProfile(profile)
+        guard !candidates.isEmpty else { return }
+        Task { await recurateCurrentDeck() }
+    }
+
+    /// Re-ranks and re-voices the current candidate set against the latest `tasteProfile`,
+    /// preserving the kit and re-dealing the rest in the new order. Used by ``updateTaste(_:)``
+    /// so an edit visibly reshapes the deck the user is looking at. Internal (not private) so
+    /// tests can drive the re-curate deterministically rather than racing the fire-and-forget
+    /// `Task` that ``updateTaste(_:)`` kicks off.
+    func recurateCurrentDeck() async {
+        guard let task = selectedTask, !candidates.isEmpty else { return }
+        isRecurating = true
+        defer { isRecurating = false }
+
+        let curated = await curator.curate(candidates, for: tasteProfile, mission: task)
+        // The user may have navigated to another mission while we were re-curating.
+        guard selectedTask?.id == task.id else { return }
+        candidates = curated.products
+        deck = curated.products.filter { !isInKit($0) }
+        curatorTier = curated.tier
+    }
+
+    /// Parses a free-text self-description into a profile via the injected ``TasteExtractor``,
+    /// topping up `base` for anything the text doesn't cover. `nil` means "no parse" (no model
+    /// available) — the caller keeps the user's hand-set values. Pure delegation, kept here so
+    /// the views talk only to the model.
+    func extractTaste(from text: String, base: TasteProfile) async -> TasteProfile? {
+        await tasteExtractor.extract(from: text, base: base)
+    }
+
+    /// Fire-and-forget nudge to wake the (scale-to-zero) broker on launch, so the first live
+    /// mission usually loads warm. No-op on the mock.
+    func warmUpCatalog() async {
+        await ucp.warmUp()
     }
 
     // MARK: Curation

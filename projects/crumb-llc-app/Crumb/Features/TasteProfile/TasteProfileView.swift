@@ -1,12 +1,19 @@
 import SwiftUI
 import CrumbKit
 
-/// The taste profile sheet: how Crumb reads the user. Shown as a bottom sheet from the
-/// header. Editable in spirit; the scaffold shows the default profile.
+/// The taste profile sheet: how Crumb reads the user — now **editable**. Opened from the
+/// header, it holds a working draft of the ``TasteProfile``; tapping Save persists it and
+/// (when a deck is on screen) re-curates so the change is felt immediately. Closing without
+/// saving discards the edits.
 struct TasteProfileView: View {
     @Environment(AppModel.self) private var model
 
-    private var profile: TasteProfile { model.tasteProfile }
+    /// A working copy edited in place; committed to the model only on Save.
+    @State private var draft: TasteProfile
+
+    init(initial: TasteProfile) {
+        _draft = State(initialValue: initial)
+    }
 
     var body: some View {
         BottomSheet(
@@ -15,52 +22,55 @@ struct TasteProfileView: View {
             onClose: { model.isShowingTasteProfile = false }
         ) {
             VStack(alignment: .leading, spacing: CrumbMetrics.Space.xl) {
-                signature
-                chipSection(title: "Vibe", items: profile.vibe, tint: CrumbColor.pine)
-                chipSection(title: "Leanings", items: profile.leanings, tint: CrumbColor.ink2)
-                budget
+                DescribeYourselfCard(draft: $draft)
+
+                EditableChipSection(
+                    title: "Vibe",
+                    tint: CrumbColor.pine,
+                    items: $draft.vibe,
+                    suggestions: TasteVocabulary.vibe
+                )
+                EditableChipSection(
+                    title: "Leanings",
+                    tint: CrumbColor.ink2,
+                    items: $draft.leanings,
+                    suggestions: TasteVocabulary.leanings
+                )
+                BudgetComfortSlider(value: $draft.budgetComfort)
+                SignatureEditor(text: $draft.signatureLine)
+
+                saveButton
             }
             .padding(.top, CrumbMetrics.Space.m)
         }
     }
 
-    private var signature: some View {
-        CuratorNote(profile.signatureLine, signoff: "Crumb")
-    }
-
-    private func chipSection(title: String, items: [String], tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
-            Text(title)
-                .font(CrumbType.headline)
-                .foregroundStyle(CrumbColor.ink)
-            FlowChips(items: items, tint: tint)
-        }
-    }
-
-    private var budget: some View {
-        VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
+    private var saveButton: some View {
+        Button {
+            model.updateTaste(draft.normalized)
+            model.isShowingTasteProfile = false
+        } label: {
             HStack {
-                Text("Budget comfort")
-                    .font(CrumbType.headline)
-                    .foregroundStyle(CrumbColor.ink)
                 Spacer()
-                Text(profile.budgetComfort, format: .percent.precision(.fractionLength(0)))
-                    .font(CrumbType.callout)
-                    .foregroundStyle(CrumbColor.ink2)
-                    .monospacedDigit()
+                Text("Save taste")
+                    .font(CrumbType.headline)
+                Image(systemName: "checkmark")
+                Spacer()
             }
-            ProgressView(value: profile.budgetComfort)
-                .tint(CrumbColor.ochre)
-            Text("Thrifty ↔ Splurge")
-                .font(CrumbType.caption)
-                .foregroundStyle(CrumbColor.ink3)
+            .foregroundStyle(.white)
+            .padding(CrumbMetrics.Space.l)
+            .background(CrumbColor.pine, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
+            .crumbShadow()
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Budget comfort \(Int(profile.budgetComfort * 100)) percent")
+        .buttonStyle(.plain)
+        .padding(.top, CrumbMetrics.Space.s)
+        .accessibilityIdentifier("saveTasteButton")
     }
 }
 
-/// A simple wrapping row of pill chips.
+// MARK: - Read-only chips (still used elsewhere)
+
+/// A simple wrapping row of pill chips (non-editable).
 struct FlowChips: View {
     let items: [String]
     var tint: Color = CrumbColor.pine

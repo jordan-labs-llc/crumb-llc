@@ -8,10 +8,15 @@ import CrumbKit
 @Suite("Crumb app smoke tests")
 struct CrumbTests {
 
-    @Test("App starts on the Missions route with three seed missions")
+    @Test("A returning user (saved profile) starts on Missions with three seed missions")
     @MainActor
     func launchesToMissions() {
-        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
+        // A persisted profile is the "returning user" signal — straight to Missions.
+        let model = AppModel(
+            ucp: MockUCPClient(),
+            curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
+        )
         #expect(model.route == .missions)
         #expect(model.missions.count == 3)
         #expect(model.kit.isEmpty)
@@ -126,6 +131,100 @@ struct CrumbTests {
         #expect(handoff?.items.count == 1)
     }
 
+    // MARK: - Taste capture & onboarding
+
+    @Test("First run (no saved profile) opens onboarding")
+    @MainActor
+    func firstRunOpensOnboarding() {
+        let model = AppModel(
+            ucp: MockUCPClient(),
+            curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore()   // empty → first run
+        )
+        #expect(model.route == .onboarding)
+        // The seed profile is the editable starting point until they finish.
+        #expect(model.tasteProfile == SeedData.defaultTasteProfile)
+    }
+
+    @Test("Completing onboarding persists the profile and routes into the app")
+    @MainActor
+    func completeOnboardingPersists() {
+        let store = InMemoryTasteStore()
+        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator(), tasteStore: store)
+        let built = TasteProfile(
+            vibe: ["Bold"], leanings: ["Tech-forward"],
+            budgetComfort: 0.9, signatureLine: "Give me the best."
+        )
+
+        model.completeOnboarding(with: built)
+
+        #expect(model.route == .missions)
+        #expect(model.tasteProfile == built)
+        #expect(store.loadProfile() == built)            // survives relaunch
+    }
+
+    @Test("Skipping onboarding still persists a profile so it doesn't reappear")
+    @MainActor
+    func skipOnboardingPersistsSeed() {
+        let store = InMemoryTasteStore()
+        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator(), tasteStore: store)
+
+        model.skipOnboarding()
+
+        #expect(model.route == .missions)
+        #expect(store.loadProfile() == SeedData.defaultTasteProfile)
+        // A fresh launch over the same store now sees a returning user.
+        let relaunched = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator(), tasteStore: store)
+        #expect(relaunched.route == .missions)
+    }
+
+    @Test("Editing taste persists it and re-curates the live deck (personalization is felt)")
+    @MainActor
+    func updateTasteRecuratesDeck() async {
+        let store = InMemoryTasteStore(Self.thrifty)
+        let model = AppModel(
+            ucp: MockUCPClient(),
+            curator: ProfileSortCurator(),
+            tasteStore: store
+        )
+        model.select(SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        // Thrifty profile → ProfileSortCurator deals the deck id-ascending.
+        let before = model.deck.map(\.id)
+        #expect(before == before.sorted())
+
+        // Flip to splurge and re-curate the deck in place.
+        model.updateTaste(Self.splurge)
+        await model.recurateCurrentDeck()
+
+        let after = model.deck.map(\.id)
+        #expect(after == before.sorted(by: >))       // visibly re-ranked (now descending)
+        #expect(Set(after) == Set(before))           // same set, nothing lost
+        #expect(model.tasteProfile == Self.splurge)
+        #expect(store.loadProfile() == Self.splurge) // and persisted
+    }
+
+    @Test("Editing taste with nothing loaded just persists (no deck to re-curate)")
+    @MainActor
+    func updateTasteWithoutDeckPersists() {
+        let store = InMemoryTasteStore(SeedData.defaultTasteProfile)
+        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator(), tasteStore: store)
+        #expect(model.candidates.isEmpty)
+
+        model.updateTaste(Self.splurge)
+
+        #expect(model.tasteProfile == Self.splurge)
+        #expect(store.loadProfile() == Self.splurge)
+        #expect(model.isRecurating == false)
+    }
+
+    private static let thrifty = TasteProfile(
+        vibe: [], leanings: [], budgetComfort: 0.1, signatureLine: ""
+    )
+    private static let splurge = TasteProfile(
+        vibe: [], leanings: [], budgetComfort: 0.9, signatureLine: ""
+    )
+
     // MARK: - Fixtures
 
     private static func fakeProduct(_ id: String) -> Product {
@@ -142,6 +241,29 @@ struct CrumbTests {
             id: "fake", title: "Fake", subtitle: "", plan: [], curatorNote: "",
             accentHex: 0, candidateIDs: [], searchQueries: queries
         )
+    }
+}
+
+/// A test curator whose order depends on the profile, so a taste change produces a *visible*
+/// re-rank: low budget comfort deals id-ascending, high deals id-descending. (Deterministic,
+/// no model — the whole point is to prove `updateTaste` re-curates against the new profile.)
+private struct ProfileSortCurator: CuratorEngine {
+    func plan(for task: ShoppingTask) async -> [String] { task.plan }
+
+    func rank(_ products: [Product], for profile: TasteProfile) async -> [Product] {
+        profile.budgetComfort < 0.5
+            ? products.sorted { $0.id < $1.id }
+            : products.sorted { $0.id > $1.id }
+    }
+
+    func rationale(for product: Product, profile: TasteProfile) -> String { product.rationale }
+
+    func curate(
+        _ products: [Product],
+        for profile: TasteProfile,
+        mission: ShoppingTask
+    ) async -> CuratedDeck {
+        CuratedDeck(products: await rank(products, for: profile), tier: .onDevice)
     }
 }
 

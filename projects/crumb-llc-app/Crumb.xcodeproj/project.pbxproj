@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0020306BCE0325C7B4DAB2AD /* ProductCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CD60E78A98B93B9526DBD8D /* ProductCard.swift */; };
 		0977683C1BACB17215A04510 /* SiriHandoffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFE8A88BB1C7340314D1DE3C /* SiriHandoffView.swift */; };
+		180EDA4F5CE0E7BDABE7DB25 /* TasteEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61C52B2400B3457774228546 /* TasteEditor.swift */; };
 		186DAFE618981282D949E448 /* CuratorNote.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2636664F2FF6491635448E6 /* CuratorNote.swift */; };
 		1B488B510C8896EAB8A206F3 /* TasteProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C032FB2C786FD91F4A2C0D /* TasteProfileView.swift */; };
 		20262747383980085049D2BE /* ApiTag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88E88478E6D27F43A1624825 /* ApiTag.swift */; };
@@ -22,16 +23,17 @@
 		77CB08A82302A2B725A76544 /* PlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02E208AB6AE4BD44B00EE2E0 /* PlanView.swift */; };
 		7E0F32D23984C28C3CC632CE /* CurateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57C7249333139EE164B9BDE8 /* CurateView.swift */; };
 		86AAF236CC8DB3B5FDDDF192 /* CrumbKit in Frameworks */ = {isa = PBXBuildFile; productRef = D936D5DF956C9B5DC6AF69F5 /* CrumbKit */; };
+		89EAE1A11546F89C1ABB1B30 /* Secrets.plist in Resources */ = {isa = PBXBuildFile; fileRef = 51452F38ECE9387FD5B7DBD7 /* Secrets.plist */; };
 		8A22D99E08AD2E8D980D1D34 /* CrumbUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F614DD6F8A672D44B5BAF770 /* CrumbUITests.swift */; };
 		A31B66102BAD5A5FDEBC7600 /* CrumbShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70EC9E0E97E33310BA1EF53F /* CrumbShortcuts.swift */; };
 		A8C6056943126209BC9C6E94 /* ShoppingTaskEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AE5545DEEC0BE6D2198334F /* ShoppingTaskEntity.swift */; };
 		A8D652EF801A782561E69C19 /* CrumbApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B2BEB51F0585270E292671 /* CrumbApp.swift */; };
 		ADDA43C3C97D0933F32F31B7 /* Secrets.example.plist in Resources */ = {isa = PBXBuildFile; fileRef = E5EFDFEC4C56A1BDC5A24787 /* Secrets.example.plist */; };
-		5EC8E751000000000000A002 /* Secrets.plist in Resources */ = {isa = PBXBuildFile; fileRef = 5EC8E751000000000000A001 /* Secrets.plist */; };
 		B40D7919A125D611ACE585F3 /* CheckoutHandoffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5634C3D5A9161C070E889854 /* CheckoutHandoffView.swift */; };
 		B9D795A2F906443965EB59E2 /* CrumbColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B39838CC41131244B136FB45 /* CrumbColor.swift */; };
 		BE0B2799512B6F3CC7CF867C /* SheetSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67043AB0F0B4615612F05F08 /* SheetSupport.swift */; };
 		BFF32D8DC61A0B3A18C5BB7F /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F5499C641BDC9AEA7B42120 /* AppModel.swift */; };
+		C72A95D78DE9E6663BC0E62E /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 852440CA683F418082909F40 /* OnboardingView.swift */; };
 		C73ACC304819971F35FA166E /* CrumbType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31A60DFD88D0193AE3DBC125 /* CrumbType.swift */; };
 		D94CF92CC4FA821A481A9062 /* CrumbKit in Frameworks */ = {isa = PBXBuildFile; productRef = ECEC8D61420FB33F67060AD5 /* CrumbKit */; };
 		E5B50E8435E6962D09AF2504 /* KitTray.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9166722AFAFB67FB518791DC /* KitTray.swift */; };
@@ -63,13 +65,16 @@
 		25B0DC245999B2D241B52BD2 /* CrumbMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbMetrics.swift; sourceTree = "<group>"; };
 		31A60DFD88D0193AE3DBC125 /* CrumbType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbType.swift; sourceTree = "<group>"; };
 		3AC0237066E37113D0DEDED9 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		51452F38ECE9387FD5B7DBD7 /* Secrets.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Secrets.plist; sourceTree = "<group>"; };
 		5634C3D5A9161C070E889854 /* CheckoutHandoffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckoutHandoffView.swift; sourceTree = "<group>"; };
 		56FE2CF46CB3AC6F0554827A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		57C7249333139EE164B9BDE8 /* CurateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurateView.swift; sourceTree = "<group>"; };
 		5F5499C641BDC9AEA7B42120 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		61C52B2400B3457774228546 /* TasteEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasteEditor.swift; sourceTree = "<group>"; };
 		67043AB0F0B4615612F05F08 /* SheetSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SheetSupport.swift; sourceTree = "<group>"; };
 		70EC9E0E97E33310BA1EF53F /* CrumbShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbShortcuts.swift; sourceTree = "<group>"; };
 		769625F3ADB578C3FFED06E4 /* MissionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionsView.swift; sourceTree = "<group>"; };
+		852440CA683F418082909F40 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		88E88478E6D27F43A1624825 /* ApiTag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApiTag.swift; sourceTree = "<group>"; };
 		9166722AFAFB67FB518791DC /* KitTray.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KitTray.swift; sourceTree = "<group>"; };
 		A6C032FB2C786FD91F4A2C0D /* TasteProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasteProfileView.swift; sourceTree = "<group>"; };
@@ -83,7 +88,6 @@
 		E138427809827F842B00492D /* CurateKitIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurateKitIntent.swift; sourceTree = "<group>"; };
 		E2636664F2FF6491635448E6 /* CuratorNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CuratorNote.swift; sourceTree = "<group>"; };
 		E5EFDFEC4C56A1BDC5A24787 /* Secrets.example.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Secrets.example.plist; sourceTree = "<group>"; };
-		5EC8E751000000000000A001 /* Secrets.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Secrets.plist; sourceTree = "<group>"; };
 		F5A3B9520F2253A5F03A94A0 /* CrumbUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CrumbUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F614DD6F8A672D44B5BAF770 /* CrumbUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbUITests.swift; sourceTree = "<group>"; };
 		F65639EFF2FF1E75D8FAB265 /* Crumb.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Crumb.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -112,9 +116,18 @@
 		24D764DBB646598C34AE6B88 /* TasteProfile */ = {
 			isa = PBXGroup;
 			children = (
+				61C52B2400B3457774228546 /* TasteEditor.swift */,
 				A6C032FB2C786FD91F4A2C0D /* TasteProfileView.swift */,
 			);
 			path = TasteProfile;
+			sourceTree = "<group>";
+		};
+		273113C56D404EEB6C839FFA /* Onboarding */ = {
+			isa = PBXGroup;
+			children = (
+				852440CA683F418082909F40 /* OnboardingView.swift */,
+			);
+			path = Onboarding;
 			sourceTree = "<group>";
 		};
 		47FD6E5C080043C7DE1B937A /* Siri */ = {
@@ -138,7 +151,7 @@
 			children = (
 				56FE2CF46CB3AC6F0554827A /* Assets.xcassets */,
 				E5EFDFEC4C56A1BDC5A24787 /* Secrets.example.plist */,
-				5EC8E751000000000000A001 /* Secrets.plist */,
+				51452F38ECE9387FD5B7DBD7 /* Secrets.plist */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -169,6 +182,7 @@
 				F82C5D8A0C651B005EC1C222 /* Cart */,
 				52446DDA969F46F06E92C917 /* Curate */,
 				C23BFCA1E2D7A5E571734E32 /* Missions */,
+				273113C56D404EEB6C839FFA /* Onboarding */,
 				D865229523A2DAA2C763958B /* Plan */,
 				47FD6E5C080043C7DE1B937A /* Siri */,
 				24D764DBB646598C34AE6B88 /* TasteProfile */,
@@ -398,7 +412,7 @@
 			files = (
 				5A8CAE78CE348B88B7BFEDEA /* Assets.xcassets in Resources */,
 				ADDA43C3C97D0933F32F31B7 /* Secrets.example.plist in Resources */,
-				5EC8E751000000000000A002 /* Secrets.plist in Resources */,
+				89EAE1A11546F89C1ABB1B30 /* Secrets.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -432,12 +446,14 @@
 				186DAFE618981282D949E448 /* CuratorNote.swift in Sources */,
 				E5B50E8435E6962D09AF2504 /* KitTray.swift in Sources */,
 				F75F3A9439503E440572EF6A /* MissionsView.swift in Sources */,
+				C72A95D78DE9E6663BC0E62E /* OnboardingView.swift in Sources */,
 				77CB08A82302A2B725A76544 /* PlanView.swift in Sources */,
 				0020306BCE0325C7B4DAB2AD /* ProductCard.swift in Sources */,
 				71D1D43E4F3A01C8E758E78B /* RootView.swift in Sources */,
 				BE0B2799512B6F3CC7CF867C /* SheetSupport.swift in Sources */,
 				A8C6056943126209BC9C6E94 /* ShoppingTaskEntity.swift in Sources */,
 				0977683C1BACB17215A04510 /* SiriHandoffView.swift in Sources */,
+				180EDA4F5CE0E7BDABE7DB25 /* TasteEditor.swift in Sources */,
 				1B488B510C8896EAB8A206F3 /* TasteProfileView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
