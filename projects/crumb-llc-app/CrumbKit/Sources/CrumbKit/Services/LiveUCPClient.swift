@@ -54,14 +54,26 @@ public struct LiveUCPClient: UCPClient {
     }
 
     public func checkoutHandoff(for shop: Shop, in cart: Cart) async throws -> URL {
-        // Use the per-shop `continue_url` carried on a chosen variant.
-        let handoff = cart.items(for: shop)
-            .compactMap { $0.variant.checkoutURL }
-            .first
-        guard let url = handoff else {
-            throw UCPError.emptyShopHandoff(shop.id)
+        // Prefer the per-shop `continue_url` carried on a chosen variant (the real,
+        // variant-specific secure-checkout link from the catalog).
+        if let url = cart.items(for: shop).compactMap({ $0.variant.checkoutURL }).first {
+            return url
         }
-        return url
+        // Fallback: when no variant carries a continue_url but we at least know the
+        // merchant's domain, hand off to its storefront homepage so checkout still does
+        // something honest. (`shop.id` is the seller domain in live results.)
+        if let url = Self.storefrontURL(for: shop) {
+            return url
+        }
+        throw UCPError.emptyShopHandoff(shop.id)
+    }
+
+    /// The merchant's storefront homepage, when `shop.id` looks like a real domain.
+    /// Returns `nil` for the synthesized `"unknown"` shop (no seller domain in the data).
+    static func storefrontURL(for shop: Shop) -> URL? {
+        let domain = shop.id
+        guard domain != "unknown", domain.contains(".") else { return nil }
+        return URL(string: "https://\(domain)")
     }
 
     // MARK: Transport
@@ -125,10 +137,32 @@ private struct BrokerOption: Decodable {
     let values: [String]?
 }
 
+/// A UCP text field that may arrive as a bare string *or* a `{ "plain": "…" }` object.
+///
+/// The broker flattens these to plain strings, but decoding tolerantly here means a future
+/// shape change (or talking to an older broker) degrades to `nil` instead of failing the
+/// whole product — one bad field must never blank an entire search.
+private struct FlexibleText: Decodable {
+    let value: String?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let string = try? container.decode(String.self) {
+            value = string
+        } else if let object = try? container.decode(Plain.self) {
+            value = object.plain
+        } else {
+            value = nil
+        }
+    }
+
+    private struct Plain: Decodable { let plain: String? }
+}
+
 private struct BrokerProduct: Decodable {
     let id: String?
     let title: String?
-    let description: String?
+    let description: FlexibleText?
     let imageURL: String?
     let priceMin: BrokerMoney?
     let priceMax: BrokerMoney?
@@ -163,7 +197,7 @@ private extension BrokerProduct {
             price: price,
             rating: 0,
             reviews: 0,
-            rationale: description ?? "",
+            rationale: description?.value ?? "",
             symbol: "bag",
             gradient: gradient(for: identifier),
             // Real product photo when the catalog carries one; the card falls back to the

@@ -56,10 +56,12 @@ final class AppModel {
     /// When set, the per-shop checkout handoff sheet is presented.
     var handoff: Handoff?
 
-    /// A resolved per-shop checkout handoff (UCP `continue_url`).
+    /// A per-shop checkout handoff. `url` is the resolved UCP `continue_url` (or the
+    /// merchant storefront fallback); `nil` means no handoff target exists for this shop —
+    /// the sheet surfaces that honestly instead of the button silently doing nothing.
     struct Handoff: Identifiable, Hashable {
         let shop: Shop
-        let url: URL
+        let url: URL?
         let items: [KitItem]
         var id: String { shop.id }
     }
@@ -251,13 +253,13 @@ final class AppModel {
     // MARK: Checkout handoff (per shop)
 
     /// Resolves the per-shop UCP handoff URL and presents the handoff sheet.
+    ///
+    /// The sheet is *always* presented so the "Continue" tap is never a silent no-op: if
+    /// no handoff target can be resolved (no `continue_url`, no merchant domain, or the
+    /// broker errors) the handoff carries a `nil` url and the sheet says so plainly.
     func beginHandoff(for shop: Shop) async {
-        do {
-            let cart = currentCart
-            let url = try await ucp.checkoutHandoff(for: shop, in: cart)
-            handoff = Handoff(shop: shop, url: url, items: cart.items(for: shop))
-        } catch {
-            handoff = nil
-        }
+        let cart = currentCart
+        let url = try? await ucp.checkoutHandoff(for: shop, in: cart)
+        handoff = Handoff(shop: shop, url: url, items: cart.items(for: shop))
     }
 }

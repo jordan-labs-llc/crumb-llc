@@ -11,7 +11,8 @@ never on the device).
 > in prod. The HTTP layer is the only thing that differs — the core logic in
 > `crumb_agent/` is framework-agnostic and unit-tested.
 
-Scope (v1): **discovery only** — `search_catalog` + `get_product`. No cart, no checkout
+Scope (v1): **discovery only** — `search_catalog` (the `get_product` endpoint exists but
+the GA catalog does not yet expose that tool — see Notes). No cart, no checkout
 completion, no customer data. Checkout stays a per-shop `continue_url` handoff.
 
 ## Endpoints
@@ -108,9 +109,17 @@ Built and deployed by `../crumb-llc-infra/deploy.sh`, which runs `az acr build` 
 build — no local Docker needed) to push the image to the existing `acrcrumbprod` registry,
 then deploys the Container App via Bicep.
 
-## Notes / to confirm against a live key
+## Notes / confirmed against the live catalog (2026-04-08)
 
+- **Real product shape.** A `search_catalog` product carries `media[]` (images),
+  `variants[]` (each with `id`, `url`, `price`), `price_range.{min,max}`, and `{plain}`
+  text objects — **not** the top-level `images`/`seller`/`buy_url`/`variant_id` we first
+  guessed. `crumb_agent/models.py` now maps the real fields (image ← `media[0].url`,
+  buy/handoff link ← `variants[0].url`, seller domain ← host of that URL) with the old
+  names kept as tolerant fallbacks. See `tests/test_models.py` for the pinned shape.
+- **`get_product` is not exposed by the GA Global Catalog.** Calling it returns
+  `-32602 "Tool not found: get_product"`, so `POST /catalog/product` currently surfaces a
+  502 `upstream_error`. This doesn't affect the app: `search_catalog` returns full
+  product + variant data (including the buy URL), and the iOS client's `product(id:)` has
+  no callers in the main flow. Revisit if/when a product-detail tool ships.
 - The exact `SHOPIFY_CATALOG_URL` host comes from the Dev Dashboard.
-- The `get_product` `selected` argument schema should be checked with
-  `ucp catalog get_product --input-schema` once a real catalog exists; normalization in
-  `crumb_agent/models.py` is deliberately tolerant of schema variation.

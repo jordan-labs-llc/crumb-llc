@@ -99,7 +99,10 @@ struct MissionCard: View {
                 HStack(spacing: CrumbMetrics.Space.xs) {
                     Image(systemName: "list.bullet")
                         .imageScale(.small)
-                    Text("^[\(task.plan.count) part](inflect: true) · ^[\(task.candidateIDs.count) pick](inflect: true)")
+                    // Just the plan size here — the live pick count isn't known until the
+                    // catalog load runs, so the Plan screen reports it instead (and the
+                    // seed `candidateIDs.count` would be stale against live results).
+                    Text("^[\(task.plan.count) part](inflect: true)")
                 }
                 .font(CrumbType.caption)
                 .foregroundStyle(CrumbColor.ink3)
