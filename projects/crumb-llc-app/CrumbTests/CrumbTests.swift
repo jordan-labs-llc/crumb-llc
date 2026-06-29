@@ -22,21 +22,70 @@ struct CrumbTests {
         #expect(model.kit.isEmpty)
     }
 
-    @Test("startMission(matching:) routes to Plan with a resolved mission")
+    // MARK: - Free-text planning (the composer / Siri entry)
+
+    @Test("Planning a shoppable goal routes to an editable Plan and records a recent")
     @MainActor
-    func startMissionRoutesToPlan() {
-        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
-        model.startMission(matching: "pack me for a rainy hike")
+    func planRoutesToEditablePlan() async {
+        let recents = InMemoryRecentMissionsStore()
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            recentsStore: recents
+        )
+        await model.runPlan(goal: "Set up my pour-over corner")
+
         #expect(model.route == .plan)
-        #expect(model.selectedTask?.id == "hike")
+        #expect(model.selectedTask != nil)
+        #expect(!model.draftParts.isEmpty)              // an editable plan was produced
+        #expect(model.planDecline == nil)
+        #expect(model.recentGoals.first == "Set up my pour-over corner") // recorded, most-recent-first
     }
 
-    @Test("Unknown phrases fall back to the hike mission")
+    @Test("A non-shopping goal declines gracefully and stays on Missions")
     @MainActor
-    func startMissionFallsBack() {
+    func planDeclinesNonShoppingGoal() async {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
+        )
+        await model.runPlan(goal: "what is the weather?")
+
+        #expect(model.route == .missions)              // no navigation into an empty plan
+        #expect(model.selectedTask == nil)
+        #expect(model.planDecline != nil)              // a friendly message instead
+        #expect(model.recentGoals.isEmpty)             // nonsense isn't remembered
+    }
+
+    @Test("Editing the plan then curating searches the edited queries and advances to Curate")
+    @MainActor
+    func editPlanThenCurate() async {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
+        )
+        await model.runPlan(goal: "Set up my pour-over corner")
+        let firstPart = try! #require(model.draftParts.first)
+        model.updatePart(firstPart, label: "gooseneck kettle")    // reword → re-derives the query
+        model.addPart(label: "burr coffee grinder")
+
+        await model.beginCuration()
+
+        #expect(model.route == .curate)
+        #expect(model.loadState == .loaded)
+        #expect(!model.candidates.isEmpty)             // the mock resolved the edited queries
+    }
+
+    @Test("Removing a part drops it from the draft plan")
+    @MainActor
+    func removePart() async {
         let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
-        model.startMission(matching: "qwerty nonsense")
-        #expect(model.selectedTask?.id == "hike")
+        await model.runPlan(goal: "Make my desk feel calm")
+        let count = model.draftParts.count
+        let part = try! #require(model.draftParts.first)
+        model.removePart(part)
+        #expect(model.draftParts.count == count - 1)
+        #expect(!model.draftParts.contains(part))
     }
 
     @Test("Accepting a product adds it to the kit once")

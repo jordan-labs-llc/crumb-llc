@@ -1,20 +1,21 @@
 import AppIntents
 
-/// The "Hey Siri, ask Crumb…" entry point. Opens the app, resolves the spoken phrase to a
-/// seed mission, and routes to the Plan screen.
+/// The "Hey Siri, ask Crumb to <any goal>" entry point. Opens the app and routes the spoken
+/// goal through the same on-device ``MissionPlanner`` the in-app composer uses, so Siri can
+/// decompose an open-ended goal into an editable plan — not just match a fixed mission.
 struct CurateKitIntent: AppIntent {
     static let title: LocalizedStringResource = "Curate a kit"
     static let openAppWhenRun = true
 
-    @Parameter(title: "Mission")
-    var mission: ShoppingTaskEntity
+    @Parameter(title: "Goal", requestValueDialog: "What do you want to shop for?")
+    var goal: String
 
     /// The `AppModel` registered at launch (see `CrumbApp.init`).
     @Dependency var model: AppModel
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        model.startMission(missionID: mission.id)
+        model.planMission(goal: goal)
         return .result()
     }
 }

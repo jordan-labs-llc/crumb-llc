@@ -2,8 +2,8 @@ import SwiftUI
 import CrumbKit
 
 /// An in-app demo of the OS-level Siri handoff. Mirrors what `CurateKitIntent` does when
-/// invoked by "Hey Siri, ask Crumb…": resolve the phrase to a seed mission and land on
-/// the Plan screen.
+/// invoked by "Hey Siri, ask Crumb…": run the spoken goal through the on-device planner and
+/// land on the editable Plan screen.
 struct SiriHandoffView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -25,15 +25,15 @@ struct SiriHandoffView: View {
             }
             .padding(.top, CrumbMetrics.Space.l)
 
-            Text("Saying any of these routes straight into the Plan screen with the "
-                + "mission preselected. Try one here:")
+            Text("Saying any of these hands the goal to Crumb's planner, which breaks it down "
+                + "into an editable plan. Try one here:")
                 .font(CrumbType.curator)
                 .foregroundStyle(CrumbColor.ink2)
                 .fixedSize(horizontal: false, vertical: true)
 
             ForEach(examples, id: \.self) { phrase in
                 Button {
-                    model.startMission(matching: phrase)
+                    model.planMission(goal: phrase)
                     dismiss()
                 } label: {
                     HStack(spacing: CrumbMetrics.Space.m) {

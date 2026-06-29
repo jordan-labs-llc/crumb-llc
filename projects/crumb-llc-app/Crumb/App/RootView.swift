@@ -39,6 +39,9 @@ struct RootView: View {
             switch env["CRUMB_SCREENSHOT"] {
             case "curate": await model.presentCurateForScreenshot(missionID: mission)
             case "kit": await model.presentFullKitForScreenshot(missionID: mission)
+            case "plan": model.presentPlanForScreenshot(missionID: mission)
+            // "composer" (and anything else) lands on Missions; the composer pre-fills its
+            // field from `CRUMB_GOAL` since `simctl` can't inject keystrokes.
             default: break
             }
         }

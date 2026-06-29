@@ -14,12 +14,38 @@ enum Route: Hashable {
     case cart
 }
 
+/// One editable row of a generated plan: a human label plus the catalog query that finds it.
+/// The composer's planner produces these; ``PlanView`` lets the user reword / add / remove them
+/// before curating. Rewording a label re-derives its query (see ``AppModel/updatePart(_:label:)``).
+struct PlanPart: Identifiable, Hashable {
+    let id = UUID()
+    var label: String
+    var query: String
+}
+
+extension ShoppingTask {
+    /// An immutable copy with a new plan + queries, keeping the mission's identity (id, title,
+    /// note, accent). Used to commit the user's plan edits back before curating.
+    func rebuilt(plan: [String], searchQueries: [String]) -> ShoppingTask {
+        ShoppingTask(
+            id: id,
+            title: title,
+            subtitle: subtitle,
+            plan: plan,
+            curatorNote: curatorNote,
+            accentHex: accentHex,
+            candidateIDs: candidateIDs,
+            searchQueries: searchQueries
+        )
+    }
+}
+
 /// The app's single source of truth.
 ///
 /// `@Observable` (Observation framework) and `@MainActor`. Owns navigation `route`, the
 /// selected mission, the user's `kit`, the `tasteProfile`, and the injected `UCPClient`
 /// + `CuratorEngine` seams. Registered as an App Intents dependency at launch so Siri /
-/// Shortcuts can drive navigation (see ``startMission(matching:)``).
+/// Shortcuts can drive navigation (see ``planMission(goal:)``).
 @MainActor
 @Observable
 final class AppModel {
@@ -28,6 +54,38 @@ final class AppModel {
 
     var route: Route = .missions
     private(set) var selectedTask: ShoppingTask?
+
+    // MARK: Planning (the free-text composer → plan)
+
+    /// `true` while the on-device planner is decomposing a typed goal into a mission. Drives the
+    /// composer's "thinking" state.
+    private(set) var isPlanning = false
+
+    /// A short, friendly message when a typed goal isn't something Crumb can shop for (a
+    /// question, nonsense, empty). `nil` when the last goal planned cleanly. Shown inline under
+    /// the composer instead of routing into an empty plan.
+    private(set) var planDecline: String?
+
+    /// Which planner tier produced the current plan. Drives the honest "smart planning
+    /// unavailable" note on the Plan screen (see ``plannerFallbackNote``).
+    private(set) var plannerTier: PlannerTier?
+
+    /// A short, user-facing note when Crumb wanted its AI planner but fell back to the simple
+    /// deterministic plan (older device, Apple Intelligence off, offline). `nil` otherwise.
+    var plannerFallbackNote: String? { plannerTier?.fallbackNote }
+
+    /// The editable parts of the current plan — the curator's decomposition, which the user can
+    /// reword / add to / trim on the Plan screen before curating. Committed back into the
+    /// mission's queries when they tap "Curate my kit" (see ``beginCuration()``).
+    private(set) var draftParts: [PlanPart] = []
+
+    /// `true` when the plan has been edited (or freshly planned) since the last successful
+    /// candidate load, so "Curate my kit" knows to re-run the search rather than reuse a
+    /// stale deck.
+    private var planDirty = false
+
+    /// Recently typed goals, most-recent-first, surfaced as quick-tap chips in the composer.
+    private(set) var recentGoals: [String] = []
 
     // MARK: Domain state
 
@@ -91,7 +149,9 @@ final class AppModel {
     let ucp: any UCPClient
     let curator: any CuratorEngine
     let tasteExtractor: any TasteExtractor
+    let planner: any MissionPlanner
     private let tasteStore: any TasteStore
+    private let recentsStore: any RecentMissionsStore
 
     /// Builds the app model, restoring the persisted ``TasteProfile`` if one exists.
     ///
@@ -104,16 +164,21 @@ final class AppModel {
         ucp: any UCPClient,
         curator: any CuratorEngine,
         tasteStore: any TasteStore = InMemoryTasteStore(),
-        tasteExtractor: any TasteExtractor = ManualTasteExtractor()
+        tasteExtractor: any TasteExtractor = ManualTasteExtractor(),
+        planner: any MissionPlanner = RuleBasedMissionPlanner(),
+        recentsStore: any RecentMissionsStore = InMemoryRecentMissionsStore()
     ) {
         self.ucp = ucp
         self.curator = curator
         self.tasteStore = tasteStore
         self.tasteExtractor = tasteExtractor
+        self.planner = planner
+        self.recentsStore = recentsStore
 
         let stored = tasteStore.loadProfile()
         self.tasteProfile = stored ?? SeedData.defaultTasteProfile
         self.route = stored == nil ? .onboarding : .missions
+        self.recentGoals = recentsStore.loadRecents()
     }
 
     // MARK: Derived
@@ -130,64 +195,127 @@ final class AppModel {
 
     // MARK: Navigation actions
 
-    /// Selects a mission, routes to Plan, and kicks off the "scanning shops" load.
+    /// Selects a pre-built mission and routes to Plan, kicking off the "scanning shops" load
+    /// immediately. The seed-mission path used by tests and the screenshot hooks; the live
+    /// composer path goes through ``runPlan(goal:)`` → ``enterPlan(with:)`` instead, which
+    /// defers the search until the user has edited the plan and tapped "Curate my kit".
     func select(_ task: ShoppingTask) {
-        selectedTask = task
-        kit.removeAll()
-        candidates = []
-        deck = []
-        curatorTier = nil
+        enterPlan(with: task)
         loadState = .loading
-        route = .plan
+        planDirty = false
         Task { await loadCandidates(for: task) }
     }
 
     /// Re-runs the candidate load for the current mission (the Plan screen's "Retry").
     func retryLoad() {
-        guard let task = selectedTask else { return }
-        Task { await loadCandidates(for: task) }
+        guard selectedTask != nil else { return }
+        startCurating()
     }
 
-    /// App Intents entry: naive match against seed missions (defaulting to the rainy-hike
-    /// task), then route to Plan with that mission preselected.
-    func startMission(matching query: String) {
-        let task = resolveMission(matching: query)
-        select(task)
+    // MARK: Planning (free-text composer)
+
+    /// Plans a typed goal in the background (the composer's "Plan it"). Fire-and-forget wrapper
+    /// over ``runPlan(goal:)`` so the button stays synchronous; the async core is what tests
+    /// drive deterministically.
+    func planMission(goal: String) {
+        Task { await runPlan(goal: goal) }
     }
 
-    /// App Intents entry by resolved mission id (from `ShoppingTaskEntity`). Falls back to
-    /// the hike mission if the id is unknown.
-    func startMission(missionID id: String) {
-        let task = missions.first { $0.id == id } ?? SeedData.hike
-        select(task)
-    }
+    /// Decomposes `goal` via the injected ``MissionPlanner`` and either routes into an editable
+    /// Plan (shoppable) or surfaces a friendly decline under the composer (not shoppable). A
+    /// shoppable goal is also recorded in recents. Internal (not private) so tests can await it
+    /// rather than racing the fire-and-forget `Task`.
+    func runPlan(goal: String) async {
+        let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        isPlanning = true
+        planDecline = nil
+        defer { isPlanning = false }
 
-    /// Resolves free text to a seed mission, defaulting to the hike mission.
-    func resolveMission(matching query: String) -> ShoppingTask {
-        let needle = query.lowercased()
-        let scored = missions.max { lhs, rhs in
-            matchScore(lhs, needle) < matchScore(rhs, needle)
+        let planned = await planner.plan(goal: trimmed, profile: tasteProfile)
+        if let task = planned.task {
+            recentsStore.addRecent(trimmed)
+            recentGoals = recentsStore.loadRecents()
+            plannerTier = planned.tier
+            enterPlan(with: task)
+        } else {
+            planDecline = planned.decline
+                ?? "I'm a shopping curator — hand me something to shop for."
         }
-        if let scored, matchScore(scored, needle) > 0 { return scored }
-        return SeedData.hike
     }
 
-    private func matchScore(_ task: ShoppingTask, _ needle: String) -> Int {
-        guard !needle.isEmpty else { return 0 }
-        var score = 0
-        if needle.contains(task.id) { score += 3 }
-        for word in task.title.lowercased().split(separator: " ") where needle.contains(word) {
-            score += 1
-        }
-        for keyword in task.subtitle.lowercased().split(separator: " ") where needle.contains(keyword) {
-            score += 1
-        }
-        return score
+    /// Sets up the Plan screen for `task`: seeds the editable parts, resets the deck, and routes
+    /// to Plan **without** searching yet (the search runs on "Curate my kit", after edits).
+    func enterPlan(with task: ShoppingTask) {
+        selectedTask = task
+        draftParts = Self.draftParts(from: task)
+        kit.removeAll()
+        candidates = []
+        deck = []
+        curatorTier = nil
+        loadState = .idle
+        planDirty = true
+        route = .plan
     }
 
-    /// Advances from Plan to the swipe deck.
+    /// Builds editable parts from a task, pairing each plan label with its query by index and
+    /// deriving a query from the label when the arrays don't line up (e.g. seed missions, whose
+    /// labels and queries aren't 1:1).
+    private static func draftParts(from task: ShoppingTask) -> [PlanPart] {
+        task.plan.enumerated().map { index, label in
+            let raw = index < task.searchQueries.count ? task.searchQueries[index] : label
+            return PlanPart(label: label, query: RuleBasedMissionPlanner.clean(query: raw))
+        }
+    }
+
+    // MARK: Plan editing
+
+    /// Adds a new part to the draft plan (capped at ``RuleBasedMissionPlanner/maxParts``). Its
+    /// query is derived from the label.
+    func addPart(label: String) {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, draftParts.count < RuleBasedMissionPlanner.maxParts else { return }
+        draftParts.append(PlanPart(label: trimmed, query: RuleBasedMissionPlanner.clean(query: trimmed)))
+        planDirty = true
+    }
+
+    /// Removes a part from the draft plan.
+    func removePart(_ part: PlanPart) {
+        draftParts.removeAll { $0.id == part.id }
+        planDirty = true
+    }
+
+    /// Rewords a part's label and re-derives its query, so a reworded part re-runs against a
+    /// query that matches the new wording when the user next curates.
+    func updatePart(_ part: PlanPart, label: String) {
+        guard let index = draftParts.firstIndex(where: { $0.id == part.id }) else { return }
+        draftParts[index].label = label
+        draftParts[index].query = RuleBasedMissionPlanner.clean(query: label)
+        planDirty = true
+    }
+
+    /// Advances from Plan to the swipe deck, committing any plan edits and (re-)running the
+    /// catalog search first. Fire-and-forget wrapper over ``beginCuration()``.
     func startCurating() {
-        route = .curate
+        Task { await beginCuration() }
+    }
+
+    /// Commits the edited plan into the mission's queries and loads candidates, then advances
+    /// to Curate on success (staying on Plan to show the scanning / failed state otherwise). A
+    /// clean, already-loaded plan (e.g. returning from Curate without edits) skips the reload.
+    func beginCuration() async {
+        guard let base = selectedTask else { return }
+        if !planDirty, loadState == .loaded, !candidates.isEmpty {
+            route = .curate
+            return
+        }
+        let queries = draftParts.map(\.query).filter { !$0.isEmpty }
+        guard !queries.isEmpty else { return }   // nothing searchable — CTA is disabled anyway
+        let task = base.rebuilt(plan: draftParts.map(\.label), searchQueries: queries)
+        selectedTask = task
+        planDirty = false
+        await loadCandidates(for: task)
+        if loadState == .loaded { route = .curate }
     }
 
     #if DEBUG
@@ -210,6 +338,14 @@ final class AppModel {
     func presentFullKitForScreenshot(missionID: String) async {
         await presentCurateForScreenshot(missionID: missionID)
         for product in deck { accept(product) }
+    }
+
+    /// Screenshot hook: land on the editable Plan screen for a seed mission (which carries a
+    /// rich multi-part plan), so the plan-editor surface can be captured headlessly. The live
+    /// composer can't be typed into via `simctl`; this stands in for a freshly planned mission.
+    func presentPlanForScreenshot(missionID: String) {
+        let task = missions.first { $0.id == missionID } ?? SeedData.hike
+        enterPlan(with: task)
     }
     #endif
 
