@@ -27,7 +27,6 @@
 		8A22D99E08AD2E8D980D1D34 /* CrumbUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F614DD6F8A672D44B5BAF770 /* CrumbUITests.swift */; };
 		95068A1AB77BB4410ACECD29 /* CrumbArt in Frameworks */ = {isa = PBXBuildFile; productRef = 3EF3B1AC6F8837B41B7C259A /* CrumbArt */; };
 		A31B66102BAD5A5FDEBC7600 /* CrumbShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70EC9E0E97E33310BA1EF53F /* CrumbShortcuts.swift */; };
-		A8C6056943126209BC9C6E94 /* ShoppingTaskEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AE5545DEEC0BE6D2198334F /* ShoppingTaskEntity.swift */; };
 		A8D652EF801A782561E69C19 /* CrumbApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B2BEB51F0585270E292671 /* CrumbApp.swift */; };
 		ADDA43C3C97D0933F32F31B7 /* Secrets.example.plist in Resources */ = {isa = PBXBuildFile; fileRef = E5EFDFEC4C56A1BDC5A24787 /* Secrets.example.plist */; };
 		B40D7919A125D611ACE585F3 /* CheckoutHandoffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5634C3D5A9161C070E889854 /* CheckoutHandoffView.swift */; };
@@ -61,7 +60,6 @@
 /* Begin PBXFileReference section */
 		02E208AB6AE4BD44B00EE2E0 /* PlanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanView.swift; sourceTree = "<group>"; };
 		11B2BEB51F0585270E292671 /* CrumbApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbApp.swift; sourceTree = "<group>"; };
-		1AE5545DEEC0BE6D2198334F /* ShoppingTaskEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShoppingTaskEntity.swift; sourceTree = "<group>"; };
 		1CD60E78A98B93B9526DBD8D /* ProductCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductCard.swift; sourceTree = "<group>"; };
 		25B0DC245999B2D241B52BD2 /* CrumbMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbMetrics.swift; sourceTree = "<group>"; };
 		31A60DFD88D0193AE3DBC125 /* CrumbType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbType.swift; sourceTree = "<group>"; };
@@ -164,7 +162,6 @@
 			children = (
 				70EC9E0E97E33310BA1EF53F /* CrumbShortcuts.swift */,
 				E138427809827F842B00492D /* CurateKitIntent.swift */,
-				1AE5545DEEC0BE6D2198334F /* ShoppingTaskEntity.swift */,
 			);
 			path = Intents;
 			sourceTree = "<group>";
@@ -457,7 +454,6 @@
 				0020306BCE0325C7B4DAB2AD /* ProductCard.swift in Sources */,
 				71D1D43E4F3A01C8E758E78B /* RootView.swift in Sources */,
 				BE0B2799512B6F3CC7CF867C /* SheetSupport.swift in Sources */,
-				A8C6056943126209BC9C6E94 /* ShoppingTaskEntity.swift in Sources */,
 				0977683C1BACB17215A04510 /* SiriHandoffView.swift in Sources */,
 				180EDA4F5CE0E7BDABE7DB25 /* TasteEditor.swift in Sources */,
 				1B488B510C8896EAB8A206F3 /* TasteProfileView.swift in Sources */,

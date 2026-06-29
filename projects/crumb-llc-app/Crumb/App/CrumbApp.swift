@@ -31,11 +31,16 @@ struct CrumbApp: App {
         // always inject — mirroring LiveUCPClient ?? MockUCPClient for the catalog.
         // The taste extractor is the input twin: it parses a free-text self-description, and
         // self-degrades to `nil` (manual capture) when no model is available.
+        // The Apple Foundation Models mission planner decomposes a free-text goal into a plan;
+        // like the curator it self-degrades to the deterministic `RuleBasedMissionPlanner` (and
+        // reports why) when no model tier is usable, so it's safe to always inject.
         let model = AppModel(
             ucp: ucp,
             curator: AppleFoundationCurator(),
             tasteStore: Self.makeTasteStore(),
-            tasteExtractor: AppleFoundationTasteExtractor()
+            tasteExtractor: AppleFoundationTasteExtractor(),
+            planner: AppleFoundationMissionPlanner(),
+            recentsStore: Self.makeRecentsStore()
         )
         // Make the app model available to App Intents (`@Dependency`).
         AppDependencyManager.shared.add(dependency: model)
@@ -58,6 +63,17 @@ struct CrumbApp: App {
         }
         #endif
         return (try? SwiftDataTasteStore()) ?? InMemoryTasteStore()
+    }
+
+    /// The SwiftData-backed recent-goals store, degrading to in-memory if the container can't be
+    /// built. Under the composer screenshot env it's seeded so the "Recent" chips render.
+    private static func makeRecentsStore() -> any RecentMissionsStore {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] == "composer" {
+            return InMemoryRecentMissionsStore(["Make my desk feel calm", "Pack me for a rainy weekend hike"])
+        }
+        #endif
+        return (try? SwiftDataRecentMissionsStore()) ?? InMemoryRecentMissionsStore()
     }
 
     var body: some Scene {
