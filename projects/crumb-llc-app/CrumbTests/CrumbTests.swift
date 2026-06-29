@@ -180,6 +180,139 @@ struct CrumbTests {
         #expect(handoff?.items.count == 1)
     }
 
+    // MARK: - Conversational refinement
+
+    @Test("A refinement reworks the deck in place, preserving the kit")
+    @MainActor
+    func refineReworksDeckInPlace() async {
+        // ScriptedRefiner emits a price-cheaper directive; the rule-based curate default sorts the
+        // deck by ascending price, so the rework is visible and deterministic.
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            refiner: ScriptedRefiner(.init(priceDirection: .cheaper))
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        let kept = try! #require(model.deck.first)
+        model.accept(kept)                                  // one item in the kit
+
+        await model.applyRefinement(text: "make it cheaper")
+
+        let prices = model.deck.map(\.price)
+        #expect(prices == prices.sorted(by: <))             // re-sorted ascending
+        #expect(model.isInKit(kept))                        // kit preserved
+        #expect(!model.deck.contains { $0.id == kept.id })  // kit item not re-dealt
+        #expect(model.refinementTurns == ["make it cheaper"])
+        #expect(model.canSaveRefinementToTaste)             // the offer is now available
+    }
+
+    @Test("An addQueries refinement searches and merges new items, deduped")
+    @MainActor
+    func refineAddQueriesMergesNewItems() async {
+        let base = Self.fakeProduct("base")
+        let extra = Self.fakeProduct("extra")
+        let fake = FakeUCP(byQuery: ["base": [base], "rain pants": [extra, base]]) // base overlaps → dedupe
+        let model = AppModel(
+            ucp: fake, curator: RuleBasedCurator(),
+            refiner: ScriptedRefiner(.init(addQueries: ["rain pants"]))
+        )
+        let task = Self.fakeTask(queries: ["base"])
+        model.enterPlan(with: task)      // sets selectedTask without a background load (avoids a race)
+        await model.loadCandidates(for: task)
+        #expect(model.candidates.map(\.id) == ["base"])
+
+        await model.applyRefinement(text: "add rain pants")
+
+        #expect(Set(model.candidates.map(\.id)) == ["base", "extra"]) // merged, deduped
+    }
+
+    @Test("Reset restores the originally dealt deck and clears the conversation")
+    @MainActor
+    func resetRestoresBaseDeck() async {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            refiner: ScriptedRefiner(.init(removeHints: ["down"]))
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        let before = model.deck.map(\.id)
+
+        await model.applyRefinement(text: "no down")
+        model.resetRefinements()
+
+        #expect(model.deck.map(\.id) == before)             // back to the original order
+        #expect(model.refinementTurns.isEmpty)
+        #expect(!model.canSaveRefinementToTaste)
+    }
+
+    @Test("Entering a new mission clears the refinement conversation (ephemeral)")
+    @MainActor
+    func enterPlanClearsRefinement() async {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            refiner: ScriptedRefiner(.init(emphasis: "warmer"))
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        await model.applyRefinement(text: "warmer")
+        #expect(!model.refinementTurns.isEmpty)
+
+        await model.runPlan(goal: "Set up my pour-over corner")   // new mission
+
+        #expect(model.refinementTurns.isEmpty)
+        #expect(model.refinementTier == nil)
+        #expect(!model.canSaveRefinementToTaste)
+    }
+
+    @Test("Save to taste folds the refinement in via the extractor when a model is available")
+    @MainActor
+    func saveToTasteUsesExtractor() async {
+        let store = InMemoryTasteStore(SeedData.defaultTasteProfile)
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: store,
+            tasteExtractor: StubExtractor(Self.splurge),     // a model "read" of the refinement
+            refiner: ScriptedRefiner(.init(emphasis: "warmer"))
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        await model.applyRefinement(text: "warmer")
+
+        await model.saveRefinementToTaste()
+
+        #expect(model.tasteProfile == Self.splurge.normalized)
+        #expect(store.loadProfile() == Self.splurge.normalized)  // persisted for future missions
+        #expect(!model.canSaveRefinementToTaste)                 // offer consumed
+    }
+
+    @Test("Save to taste falls back to a deterministic fold when no model is available")
+    @MainActor
+    func saveToTasteDeterministicFold() async {
+        let store = InMemoryTasteStore(Self.balanced)
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: store,
+            tasteExtractor: ManualTasteExtractor(),          // nil → deterministic floor
+            refiner: ScriptedRefiner(.init(emphasis: "warmer tones", priceDirection: .cheaper))
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        await model.applyRefinement(text: "warmer tones, cheaper")
+
+        await model.saveRefinementToTaste()
+
+        #expect(model.tasteProfile.budgetComfort < Self.balanced.budgetComfort) // cheaper nudged down
+        #expect(model.tasteProfile.leanings.contains("warmer tones"))           // emphasis → leaning
+        #expect(store.loadProfile() == model.tasteProfile)                      // persisted
+    }
+
+    private static let balanced = TasteProfile(
+        vibe: [], leanings: [], budgetComfort: 0.5, signatureLine: ""
+    )
+
     // MARK: - Taste capture & onboarding
 
     @Test("First run (no saved profile) opens onboarding")
@@ -236,7 +369,7 @@ struct CrumbTests {
             curator: ProfileSortCurator(),
             tasteStore: store
         )
-        model.select(SeedData.hike)
+        model.enterPlan(with: SeedData.hike)
         await model.loadCandidates(for: SeedData.hike)
         // Thrifty profile → ProfileSortCurator deals the deck id-ascending.
         let before = model.deck.map(\.id)
@@ -314,6 +447,31 @@ private struct ProfileSortCurator: CuratorEngine {
     ) async -> CuratedDeck {
         CuratedDeck(products: await rank(products, for: profile), tier: .onDevice)
     }
+}
+
+/// A deterministic ``RefinementInterpreter`` for tests: it ignores the text and always returns a
+/// scripted directive on the on-device tier, so `AppModel`'s rework path can be exercised without
+/// a model (which is unavailable on the sim/CI).
+private struct ScriptedRefiner: RefinementInterpreter {
+    let directive: RefinementDirective
+    init(_ directive: RefinementDirective) { self.directive = directive }
+
+    func interpret(
+        _ refinement: String,
+        conversation: [String],
+        mission: ShoppingTask,
+        profile: TasteProfile
+    ) async -> InterpretedRefinement {
+        InterpretedRefinement(directive: directive, tier: .onDevice)
+    }
+}
+
+/// A ``TasteExtractor`` test double that returns a fixed profile (standing in for a real model
+/// "read" of the refinement text), so the save-to-taste extractor path is testable on CI.
+private struct StubExtractor: TasteExtractor {
+    let result: TasteProfile
+    init(_ result: TasteProfile) { self.result = result }
+    func extract(from text: String, base: TasteProfile) async -> TasteProfile? { result }
 }
 
 /// An in-test ``UCPClient`` that maps queries to canned results and can fail selectively.

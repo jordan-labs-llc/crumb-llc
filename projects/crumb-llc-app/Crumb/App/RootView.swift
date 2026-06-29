@@ -40,6 +40,10 @@ struct RootView: View {
             case "curate": await model.presentCurateForScreenshot(missionID: mission)
             case "kit": await model.presentFullKitForScreenshot(missionID: mission)
             case "plan": model.presentPlanForScreenshot(missionID: mission)
+            case "refine":
+                // Deal a deck then run a canned refinement so the reworked deck + bar render.
+                let refinement = env["CRUMB_REFINE"] ?? "make it cheaper"
+                await model.presentRefinedDeckForScreenshot(missionID: mission, refinement: refinement)
             // "composer" (and anything else) lands on Missions; the composer pre-fills its
             // field from `CRUMB_GOAL` since `simctl` can't inject keystrokes.
             default: break

@@ -29,19 +29,49 @@ public protocol CuratorEngine: Sendable {
         for profile: TasteProfile,
         mission: ShoppingTask
     ) async -> CuratedDeck
+
+    /// Refinement-aware curation: ranks + voices the deck while honoring a conversational
+    /// ``RefinementContext`` (the user's "make it cheaper / warmer / add rain pants" ask plus
+    /// the running refinement conversation). `refinement == nil` is identical to the plain
+    /// ``curate(_:for:mission:)``.
+    ///
+    /// The default implementation reuses `rank`, then applies the directive's *structured* asks
+    /// deterministically via ``RefinementContext/apply(_:to:)`` (price lean, emphasis boost,
+    /// remove demote) before voicing — so ``RuleBasedCurator`` honors a refinement with no extra
+    /// code. ``AppleFoundationCurator`` overrides it to thread the emphasis + conversation into
+    /// the model's ranking and voice instructions.
+    func curate(
+        _ products: [Product],
+        for profile: TasteProfile,
+        mission: ShoppingTask,
+        refinement: RefinementContext?
+    ) async -> CuratedDeck
 }
 
 public extension CuratorEngine {
-    /// Default curation: deterministic rank, then per-product seed-voice rationale. Reports
-    /// ``CuratorTier/ruleBased(_:)`` with no fallback reason — this is a *chosen* engine, not
-    /// a degraded one, so the UI stays quiet about it.
+    /// The plain curation entry point — refinement-free curation is just the refinement-aware
+    /// path with no context. Kept so every existing call site (and `RuleBasedCurator`) is
+    /// unchanged.
     func curate(
         _ products: [Product],
         for profile: TasteProfile,
         mission: ShoppingTask
     ) async -> CuratedDeck {
+        await curate(products, for: profile, mission: mission, refinement: nil)
+    }
+
+    /// Default curation: deterministic rank, the directive's deterministic shaping, then
+    /// per-product seed-voice rationale. Reports ``CuratorTier/ruleBased(_:)`` with no fallback
+    /// reason — this is a *chosen* engine, not a degraded one, so the UI stays quiet about it.
+    func curate(
+        _ products: [Product],
+        for profile: TasteProfile,
+        mission: ShoppingTask,
+        refinement: RefinementContext?
+    ) async -> CuratedDeck {
         let ranked = await rank(products, for: profile)
-        let voiced = ranked.map { $0.withRationale(rationale(for: $0, profile: profile)) }
+        let shaped = RefinementContext.apply(refinement, to: ranked)
+        let voiced = shaped.map { $0.withRationale(rationale(for: $0, profile: profile)) }
         return CuratedDeck(products: voiced, tier: .ruleBased(nil))
     }
 }

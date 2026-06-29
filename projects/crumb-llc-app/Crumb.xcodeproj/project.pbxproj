@@ -14,6 +14,7 @@
 		1B488B510C8896EAB8A206F3 /* TasteProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C032FB2C786FD91F4A2C0D /* TasteProfileView.swift */; };
 		20262747383980085049D2BE /* ApiTag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88E88478E6D27F43A1624825 /* ApiTag.swift */; };
 		238F1E27A199F57F5DA84CE9 /* CrumbMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25B0DC245999B2D241B52BD2 /* CrumbMetrics.swift */; };
+		2C26E20A09349A027858C2AC /* RefinementBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF5727CC8D39C14EA8882090 /* RefinementBar.swift */; };
 		2F67D6673EA5A566A3638E49 /* CurateKitIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = E138427809827F842B00492D /* CurateKitIntent.swift */; };
 		3F58D9CEB003994A68988948 /* CartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0F3D5A8552124AB50E0BF6D /* CartView.swift */; };
 		5A8CAE78CE348B88B7BFEDEA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 56FE2CF46CB3AC6F0554827A /* Assets.xcassets */; };
@@ -91,6 +92,7 @@
 		F5A3B9520F2253A5F03A94A0 /* CrumbUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CrumbUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F614DD6F8A672D44B5BAF770 /* CrumbUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbUITests.swift; sourceTree = "<group>"; };
 		F65639EFF2FF1E75D8FAB265 /* Crumb.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Crumb.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		FF5727CC8D39C14EA8882090 /* RefinementBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefinementBar.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -143,6 +145,7 @@
 			isa = PBXGroup;
 			children = (
 				57C7249333139EE164B9BDE8 /* CurateView.swift */,
+				FF5727CC8D39C14EA8882090 /* RefinementBar.swift */,
 			);
 			path = Curate;
 			sourceTree = "<group>";
@@ -452,6 +455,7 @@
 				C72A95D78DE9E6663BC0E62E /* OnboardingView.swift in Sources */,
 				77CB08A82302A2B725A76544 /* PlanView.swift in Sources */,
 				0020306BCE0325C7B4DAB2AD /* ProductCard.swift in Sources */,
+				2C26E20A09349A027858C2AC /* RefinementBar.swift in Sources */,
 				71D1D43E4F3A01C8E758E78B /* RootView.swift in Sources */,
 				BE0B2799512B6F3CC7CF867C /* SheetSupport.swift in Sources */,
 				0977683C1BACB17215A04510 /* SiriHandoffView.swift in Sources */,

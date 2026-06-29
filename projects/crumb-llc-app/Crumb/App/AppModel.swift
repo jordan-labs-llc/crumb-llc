@@ -99,6 +99,37 @@ final class AppModel {
     /// Curate screen's "re-reading your taste" shimmer so the personalization is *felt*.
     private(set) var isRecurating = false
 
+    // MARK: Conversational refinement (talk back to the curator)
+
+    /// The running per-mission refinement conversation, oldest-first ("make it cheaper", then
+    /// "but keep the kettle"). Fed to the interpreter every time so refinements compose.
+    /// **Ephemeral**: cleared on `enterPlan` (a new mission) and never persisted across launches.
+    private(set) var refinementTurns: [String] = []
+
+    /// `true` while a refinement is reworking the on-screen deck. Drives the Curate screen's
+    /// "Reworking the deck…" shimmer (the sibling of `isRecurating`).
+    private(set) var isReworking = false
+
+    /// Which interpreter tier read the latest refinement. Drives the honest "smart refining
+    /// unavailable" note on the Curate screen (see ``refinementFallbackNote``).
+    private(set) var refinementTier: RefinementTier?
+
+    /// A short, user-facing note when Crumb wanted its AI interpreter but fell back to the
+    /// deterministic refinement read. `nil` otherwise.
+    var refinementFallbackNote: String? { refinementTier?.fallbackNote }
+
+    /// `true` once at least one refinement has been applied this mission (and not yet saved or
+    /// reset), so the Curate screen can offer the quiet "make this part of your taste" affordance.
+    private(set) var canSaveRefinementToTaste = false
+
+    /// The directives applied this mission, kept so "save to taste" can deterministically fold
+    /// them into the profile when no model is available to re-read the text (sim/CI).
+    private var refinementDirectives: [RefinementDirective] = []
+
+    /// The deck as first dealt for this mission, before any refinement — the snapshot
+    /// ``resetRefinements()`` restores so Reset truly undoes the conversation.
+    private var baseCandidates: [Product] = []
+
     /// Ranked candidate products for the selected mission.
     private(set) var candidates: [Product] = []
     /// The remaining swipe deck (candidates not yet decided on).
@@ -150,6 +181,7 @@ final class AppModel {
     let curator: any CuratorEngine
     let tasteExtractor: any TasteExtractor
     let planner: any MissionPlanner
+    let refiner: any RefinementInterpreter
     private let tasteStore: any TasteStore
     private let recentsStore: any RecentMissionsStore
 
@@ -166,6 +198,7 @@ final class AppModel {
         tasteStore: any TasteStore = InMemoryTasteStore(),
         tasteExtractor: any TasteExtractor = ManualTasteExtractor(),
         planner: any MissionPlanner = RuleBasedMissionPlanner(),
+        refiner: any RefinementInterpreter = RuleBasedRefinementInterpreter(),
         recentsStore: any RecentMissionsStore = InMemoryRecentMissionsStore()
     ) {
         self.ucp = ucp
@@ -173,6 +206,7 @@ final class AppModel {
         self.tasteStore = tasteStore
         self.tasteExtractor = tasteExtractor
         self.planner = planner
+        self.refiner = refiner
         self.recentsStore = recentsStore
 
         let stored = tasteStore.loadProfile()
@@ -253,9 +287,21 @@ final class AppModel {
         candidates = []
         deck = []
         curatorTier = nil
+        clearRefinement()
         loadState = .idle
         planDirty = true
         route = .plan
+    }
+
+    /// Resets the ephemeral refinement conversation and its derived state — called whenever a new
+    /// mission is entered (so refinements never leak across missions) and when a fresh deck is
+    /// dealt. Does not touch the persisted ``TasteProfile``.
+    private func clearRefinement() {
+        refinementTurns = []
+        refinementTier = nil
+        refinementDirectives = []
+        canSaveRefinementToTaste = false
+        isReworking = false
     }
 
     /// Builds editable parts from a task, pairing each plan label with its query by index and
@@ -329,6 +375,7 @@ final class AppModel {
         candidates = []
         deck = []
         curatorTier = nil
+        clearRefinement()
         await loadCandidates(for: task)
         route = .curate
     }
@@ -346,6 +393,14 @@ final class AppModel {
     func presentPlanForScreenshot(missionID: String) {
         let task = missions.first { $0.id == missionID } ?? SeedData.hike
         enterPlan(with: task)
+    }
+
+    /// Screenshot hook: deal a mission's deck then run a canned `refinement` through the (sim's
+    /// rule-based) interpreter so the reworked deck, the "Reworking…" state, and the refinement
+    /// bar all render headlessly — `simctl` can inject neither taps nor keystrokes.
+    func presentRefinedDeckForScreenshot(missionID: String, refinement: String) async {
+        await presentCurateForScreenshot(missionID: missionID)
+        await applyRefinement(text: refinement)
     }
     #endif
 
@@ -412,6 +467,104 @@ final class AppModel {
         curatorTier = curated.tier
     }
 
+    // MARK: Conversational refinement
+
+    /// Applies a typed/chip refinement to the dealt deck (the Curate bar's submit). Fire-and-forget
+    /// wrapper over ``applyRefinement(text:)`` so the bar stays synchronous; the async core is what
+    /// tests drive deterministically.
+    func refine(_ text: String) {
+        Task { await applyRefinement(text: text) }
+    }
+
+    /// Reworks the current deck from a refinement line: interprets it (in the context of the
+    /// running conversation) into a ``RefinementDirective``, re-searches + merges only when the
+    /// directive carries `addQueries`, then re-curates the working set with the directive so
+    /// ranking AND voice honor it. The kit is preserved; the rest is re-dealt in the new order.
+    /// Internal (not private) so tests can await it rather than racing the fire-and-forget `Task`.
+    func applyRefinement(text: String) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let task = selectedTask, !trimmed.isEmpty, !candidates.isEmpty else { return }
+
+        refinementTurns.append(trimmed)
+        isReworking = true
+        defer { isReworking = false }
+
+        let interpreted = await refiner.interpret(
+            trimmed, conversation: refinementTurns, mission: task, profile: tasteProfile
+        )
+        refinementTier = interpreted.tier
+        refinementDirectives.append(interpreted.directive)
+
+        // Pull in new candidates only when the refinement asked for something not in the deck
+        // (e.g. "add rain pants"); otherwise re-curate the existing deck in place.
+        var working = candidates
+        if !interpreted.directive.addQueries.isEmpty, let found = await search(interpreted.directive.addQueries) {
+            guard selectedTask?.id == task.id else { return }
+            var seen = Set(working.map(\.id))
+            working += found.filter { seen.insert($0.id).inserted }
+        }
+
+        let context = RefinementContext(directive: interpreted.directive, conversation: refinementTurns)
+        let curated = await curator.curate(working, for: tasteProfile, mission: task, refinement: context)
+        // The user may have navigated to another mission while we were reworking.
+        guard selectedTask?.id == task.id else { return }
+        candidates = curated.products
+        deck = curated.products.filter { !isInKit($0) }
+        curatorTier = curated.tier
+        canSaveRefinementToTaste = refinementDirectives.contains { $0.isActionable }
+    }
+
+    /// Clears the refinement conversation and restores the deck as first dealt (the
+    /// ``baseCandidates`` snapshot), preserving the kit. Synchronous and model-free — the base
+    /// deck already carries Crumb's voice, so Reset is an instant undo, not a re-curate.
+    func resetRefinements() {
+        clearRefinement()
+        candidates = baseCandidates
+        deck = baseCandidates.filter { !isInKit($0) }
+    }
+
+    /// Folds the accumulated refinement into the persisted ``TasteProfile`` so future missions
+    /// inherit it (the quiet, opt-in "make this part of your taste"). Primary path: re-read the
+    /// refinement text through the injected ``TasteExtractor`` (richer, on-device). Floor: when no
+    /// model is available (sim/CI → `nil`), fold the structured directives deterministically so
+    /// the save still does something honest and is testable. Persists but does **not** re-curate —
+    /// the on-screen deck already reflects the refinement; this is for *next* time.
+    func saveRefinementToTaste() async {
+        guard canSaveRefinementToTaste, !refinementTurns.isEmpty else { return }
+        let combined = refinementTurns.joined(separator: ". ")
+        let extracted = await tasteExtractor.extract(from: combined, base: tasteProfile)
+        let updated = extracted ?? Self.fold(refinementDirectives, into: tasteProfile)
+        let normalized = updated.normalized
+        tasteProfile = normalized
+        tasteStore.saveProfile(normalized)
+        canSaveRefinementToTaste = false
+    }
+
+    /// Deterministically folds refinement directives into a profile (the no-model floor for
+    /// "save to taste"): a price lean nudges `budgetComfort`, an emphasis becomes a leaning, and a
+    /// remove hint becomes a "Less …" leaning. The caller normalizes (clamp + dedupe), so repeated
+    /// or conflicting asks can't corrupt the profile.
+    static func fold(_ directives: [RefinementDirective], into base: TasteProfile) -> TasteProfile {
+        var leanings = base.leanings
+        var budget = base.budgetComfort
+        for directive in directives {
+            switch directive.priceDirection {
+            case .cheaper: budget -= 0.15
+            case .pricier: budget += 0.15
+            case .none: break
+            }
+            let emphasis = directive.emphasis.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !emphasis.isEmpty { leanings.append(emphasis) }
+            for hint in directive.removeHints { leanings.append("Less \(hint)") }
+        }
+        return TasteProfile(
+            vibe: base.vibe,
+            leanings: leanings,
+            budgetComfort: budget,
+            signatureLine: base.signatureLine
+        )
+    }
+
     /// Parses a free-text self-description into a profile via the injected ``TasteExtractor``,
     /// topping up `base` for anything the text doesn't cover. `nil` means "no parse" (no model
     /// available) — the caller keeps the user's hand-set values. Pure delegation, kept here so
@@ -442,9 +595,39 @@ final class AppModel {
     func loadCandidates(for task: ShoppingTask) async {
         loadState = .loading
         let queries = task.searchQueries.isEmpty ? [task.id] : task.searchQueries
+        let union = await search(queries)
 
-        // Parallel fan-out. `try?` keeps a failed query from cancelling its siblings;
-        // a failure surfaces as a `nil` batch.
+        // Only mutate if the user is still on this task.
+        guard selectedTask?.id == task.id else { return }
+
+        guard let union else {
+            candidates = []
+            deck = []
+            baseCandidates = []
+            loadState = .failed
+            return
+        }
+
+        // `curate` both ranks and rewrites each rationale into Crumb's voice, and reports the
+        // tier it used so the UI can be honest when it fell back from the AI curator.
+        let curated = await curator.curate(union, for: tasteProfile, mission: task)
+        guard selectedTask?.id == task.id else { return }
+        candidates = curated.products
+        deck = curated.products
+        baseCandidates = curated.products   // the snapshot Reset restores
+        curatorTier = curated.tier
+        loadState = .loaded
+        // Note: the refinement conversation is reset by `enterPlan` (a new mission) and the
+        // screenshot hook, NOT here — clearing it on every (re)load would race a refinement that
+        // arrived while an earlier load was still settling.
+    }
+
+    /// Fans `queries` out to the catalog **in parallel** and dedupes the union by product id.
+    /// Returns `nil` only when *every* query errored (a real outage), so the caller can tell an
+    /// outage from a successful-but-empty result. Shared by the initial ``loadCandidates(for:)``
+    /// and by an `addQueries` refinement, so both fan out and dedupe identically.
+    private func search(_ queries: [String]) async -> [Product]? {
+        // `try?` keeps a failed query from cancelling its siblings; a failure surfaces as `nil`.
         let batches: [[Product]?] = await withTaskGroup(of: [Product]?.self) { group in
             for query in queries {
                 group.addTask { [ucp] in
@@ -455,28 +638,10 @@ final class AppModel {
             for await batch in group { collected.append(batch) }
             return collected
         }
-
-        // Only mutate if the user is still on this task.
-        guard selectedTask?.id == task.id else { return }
-
         let succeeded = batches.compactMap { $0 }
-        if succeeded.isEmpty {
-            candidates = []
-            deck = []
-            loadState = .failed
-            return
-        }
-
+        guard !succeeded.isEmpty else { return nil }
         var seen = Set<Product.ID>()
-        let union = succeeded.flatMap { $0 }.filter { seen.insert($0.id).inserted }
-        // `curate` both ranks and rewrites each rationale into Crumb's voice, and reports the
-        // tier it used so the UI can be honest when it fell back from the AI curator.
-        let curated = await curator.curate(union, for: tasteProfile, mission: task)
-        guard selectedTask?.id == task.id else { return }
-        candidates = curated.products
-        deck = curated.products
-        curatorTier = curated.tier
-        loadState = .loaded
+        return succeeded.flatMap { $0 }.filter { seen.insert($0.id).inserted }
     }
 
     // MARK: Swipe deck
