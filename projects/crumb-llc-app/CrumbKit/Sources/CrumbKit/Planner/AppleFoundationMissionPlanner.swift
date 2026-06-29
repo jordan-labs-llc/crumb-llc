@@ -43,19 +43,16 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
             return RuleBasedMissionPlanner.plan(goal: trimmed, reason: nil)
         }
 
-        // Tier 1 — Private Cloud Compute (OS 27+), gated for the same entitlement-trap reason
-        // as the curator. `try?` cannot rescue the trap, so the only safe gate is "don't
-        // reference the type unless provisioned."
+        // Tier 1 — Private Cloud Compute, gated behind `CRUMB_PCC_ENABLED` for the same
+        // entitlement-trap reason as the curator: *constructing or querying* the type without the
+        // entitlement traps the process (an uncatchable fatal error, not a throw).
         #if CRUMB_PCC_ENABLED
-        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) {
-            let pcc = PrivateCloudComputeLanguageModel()
-            if case .available = pcc.availability, !pcc.quotaUsage.isLimitReached {
-                let session: MakeSession = { LanguageModelSession(model: pcc, instructions: $0) }
-                if let planned = await attemptDecompose(trimmed, profile, session: session, tier: .privateCloud) {
-                    return planned
-                }
-                // Planning probe failed (offline / transient) — fall through to on-device.
+        let pcc = PrivateCloudComputeLanguageModel()
+        if case .available = pcc.availability, !pcc.quotaUsage.isLimitReached {
+            if let planned = await attemptDecompose(trimmed, profile, model: pcc, deepReasoning: true, tier: .privateCloud) {
+                return planned
             }
+            // Planning probe failed (offline / transient) — fall through to on-device.
         }
         #endif
 
@@ -63,8 +60,7 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
         let device = SystemLanguageModel.default
         switch device.availability {
         case .available:
-            let session: MakeSession = { LanguageModelSession(model: device, instructions: $0) }
-            if let planned = await attemptDecompose(trimmed, profile, session: session, tier: .onDevice) {
+            if let planned = await attemptDecompose(trimmed, profile, model: device, deepReasoning: false, tier: .onDevice) {
                 return planned
             }
             return RuleBasedMissionPlanner.plan(goal: trimmed, reason: .offlineOrError)
@@ -75,34 +71,37 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
 
     // MARK: Decompose
 
-    private typealias MakeSession = @Sendable (_ instructions: String) -> LanguageModelSession
-
     /// The on-device model's context window is 4096 tokens; the transcript is *instructions +
     /// prompt + the model's generated plan*. Left unbounded, an occasional runaway generation
     /// pushes the transcript past 4096 and `respond(generating:)` throws
-    /// `LanguageModelError` ("…exceeds the maximum allowed context size of 4096") — the very
-    /// error `try?` used to swallow into a single-query fallback. A normal ``MissionDraft`` plan
-    /// is well under this cap, so bounding the response can't truncate a real plan; it only
+    /// `GenerationError.exceededContextWindowSize` — the very error `try?` used to swallow into a
+    /// single-query fallback. We now bound the response on the session's `Profile` via
+    /// `.maximumResponseTokens` (a *declared* policy, not an inline `GenerationOptions` band-aid)
+    /// and pair it with `.transcriptErrorHandlingPolicy(.revertTranscript)`. A normal
+    /// ``MissionDraft`` plan is well under the cap, so bounding can't truncate a real plan; it only
     /// fences off the runaway. The fixed prompt cost is kept small by ``cappedGoal(_:)``.
     static let maxResponseTokens = 1024
-    static let generationOptions = GenerationOptions(maximumResponseTokens: maxResponseTokens)
+    /// Planning wants structure with a little creative latitude in labels — cooler than the recap,
+    /// warmer than the parse seams.
+    static let temperature = 0.55
 
     /// Runs the planning probe with a single retry, **logging** (not silently swallowing) a
     /// thrown error. With default sampling a second generation is usually shorter, so a transient
     /// near-the-limit overflow recovers rather than degrading the user to the single-query floor.
     /// Returns `nil` only when both attempts throw — the caller then cascades / degrades.
-    private func attemptDecompose(
+    private func attemptDecompose<M: LanguageModel>(
         _ goal: String,
         _ profile: TasteProfile,
-        session makeSession: @escaping MakeSession,
+        model: M,
+        deepReasoning: Bool,
         tier: PlannerTier
     ) async -> PlannedMission? {
         do {
-            return try await decompose(goal, profile, session: makeSession, tier: tier)
+            return try await decompose(goal, profile, model: model, deepReasoning: deepReasoning, tier: tier)
         } catch {
             Self.log.error("Planner generation threw (attempt 1, retrying): \(error.localizedDescription, privacy: .public)")
             do {
-                return try await decompose(goal, profile, session: makeSession, tier: tier)
+                return try await decompose(goal, profile, model: model, deepReasoning: deepReasoning, tier: tier)
             } catch {
                 Self.log.error("Planner generation threw (attempt 2, degrading to rule-based): \(error.localizedDescription, privacy: .public)")
                 return nil
@@ -113,21 +112,41 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
     /// One guided generation reads the goal into a ``MissionDraft``, which the pure
     /// ``mission(from:goal:tier:)`` folds into a searchable mission. Throws when the call fails,
     /// so the tier cascade / rule-based fallback in ``plan(goal:profile:)`` takes over. The
-    /// response is bounded (see ``generationOptions``) so a runaway generation can't overflow the
-    /// context window.
-    private func decompose(
+    /// response bound + context policy live on the session's profile (see ``planSession``), so a
+    /// runaway generation can't overflow the context window.
+    private func decompose<M: LanguageModel>(
         _ goal: String,
         _ profile: TasteProfile,
-        session makeSession: @escaping MakeSession,
+        model: M,
+        deepReasoning: Bool,
         tier: PlannerTier
     ) async throws -> PlannedMission {
-        let session = makeSession(Self.instructions(profile: profile))
+        let session = Self.planSession(profile: profile, model: model, deepReasoning: deepReasoning)
         let response = try await session.respond(
             to: Self.prompt(for: goal),
-            generating: MissionDraft.self,
-            options: Self.generationOptions
+            generating: MissionDraft.self
         )
         return Self.mission(from: response.content, goal: goal, tier: tier)
+    }
+
+    /// Builds the planning session: ``PlannerInstructions`` in a profile that selects the tier's
+    /// model and declares the planning tuning + context policy. Reasoning is applied only on the
+    /// deep-reasoning (PCC) tier — the on-device model rejects `.reasoningLevel`.
+    static func planSession<M: LanguageModel>(
+        profile: TasteProfile,
+        model: M,
+        deepReasoning: Bool
+    ) -> LanguageModelSession {
+        let base = LanguageModelSession.Profile { PlannerInstructions(profile: profile) }
+            .model(model)
+            .temperature(temperature)
+            .maximumResponseTokens(maxResponseTokens)
+            .historyTransform { CrumbContext.trimmed($0) }
+            .transcriptErrorHandlingPolicy(.revertTranscript)
+        if deepReasoning {
+            return LanguageModelSession(profile: base.reasoningLevel(.deep))
+        }
+        return LanguageModelSession(profile: base)
     }
 
     // MARK: Reconcile (pure — the unit-tested guarantee behind the model call)
@@ -220,30 +239,6 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
 
     // MARK: Prompt construction
 
-    /// The planner persona + this user's taste, so the decomposition leans toward what they'd
-    /// actually want. Used as the session's instructions (stable across the single call).
-    static func instructions(profile: TasteProfile) -> String {
-        """
-        You are Crumb, a personal shopping curator with a warm, plainspoken, slightly literary \
-        voice. You turn a person's shopping goal into a concrete plan you can shop for.
-
-        The user's taste:
-        - Vibe: \(profile.vibe.joined(separator: ", "))
-        - Leanings: \(profile.leanings.joined(separator: "; "))
-        - In their words: "\(profile.signatureLine)"
-
-        Break the goal into 3 to \(RuleBasedMissionPlanner.maxParts) concrete parts to shop for. \
-        For each part give a short human label (what it is) and a concise catalog search query \
-        (a few plain keywords, no punctuation) you'd type into a shop's search. Lean the plan \
-        toward this person's taste, but never invent constraints they didn't imply. Keep the \
-        title and subtitle short and in their intent.
-
-        If the goal is NOT something a shop can fulfill — a question, nonsense, or a non-shopping \
-        request — set isShoppable to false and write one short, friendly sentence telling them \
-        you shop for things and to try a shopping goal.
-        """
-    }
-
     static func prompt(for goal: String) -> String {
         """
         The user's goal:
@@ -282,6 +277,34 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
         @unknown default: return .offlineOrError
         }
     }
+}
+
+/// The planner instructions: the shared Crumb persona + the decomposition role + this user's taste
+/// + how to break the goal into searchable parts (or decline). The dynamic-session replacement for
+/// the planner's old hand-built instruction string, composed from the shared ``CrumbPersona`` /
+/// ``TasteBlock`` blocks plus a planner-specific role + guide leaf.
+struct PlannerInstructions: DynamicInstructions {
+    let profile: TasteProfile
+
+    var body: some DynamicInstructions {
+        CrumbPersona(recipient: nil)
+        Instructions("You turn a person's shopping goal into a concrete plan you can shop for.")
+        TasteBlock(profile: profile, recipient: nil, includeBudget: false)
+        Instructions(Self.guide)
+    }
+
+    /// The decomposition + decline guidance. Pure — unit-tested.
+    static let guide = """
+        Break the goal into 3 to \(RuleBasedMissionPlanner.maxParts) concrete parts to shop for. \
+        For each part give a short human label (what it is) and a concise catalog search query \
+        (a few plain keywords, no punctuation) you'd type into a shop's search. Lean the plan \
+        toward this person's taste, but never invent constraints they didn't imply. Keep the \
+        title and subtitle short and in their intent.
+
+        If the goal is NOT something a shop can fulfill — a question, nonsense, or a non-shopping \
+        request — set isShoppable to false and write one short, friendly sentence telling them \
+        you shop for things and to try a shopping goal.
+        """
 }
 
 /// The structured output of a planning call. Guided generation keeps the model returning a

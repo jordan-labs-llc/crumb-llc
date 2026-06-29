@@ -52,21 +52,41 @@ public struct AppleFoundationRelevanceGate: RelevanceGate {
 
     // MARK: Model pass
 
-    /// One guided call returns the IDs the model judges clearly off-topic. Bounded response so it
-    /// can't overflow the on-device context (the same lesson as the planner).
+    /// Conservative temperature — the gate is a precision classification (only drop the plainly
+    /// off-topic), not a creative task.
+    static let temperature = 0.2
+    /// Response bound for the ID list — declared on the session's `Profile` (see ``gateSession``),
+    /// the principled replacement for the inline `maximumResponseTokens` band-aid.
+    static let maxResponseTokens = 512
+
+    /// One guided call returns the IDs the model judges clearly off-topic. The response bound +
+    /// context policy live on the session's profile so it can't overflow the on-device context (the
+    /// same lesson as the planner). The gate has no server tier, so it never sets `.reasoningLevel`
+    /// (the on-device model rejects it).
     private func modelOffTopicIDs(
         in products: [Product],
         mission: ShoppingTask,
         model: SystemLanguageModel
     ) async throws -> [String] {
         let head = Array(products.prefix(Self.gateCap))
-        let session = LanguageModelSession(model: model, instructions: Self.instructions(mission: mission))
+        let session = Self.gateSession(mission: mission, model: model)
         let response = try await session.respond(
             to: Self.prompt(for: head),
-            generating: OffTopicSelection.self,
-            options: GenerationOptions(maximumResponseTokens: 512)
+            generating: OffTopicSelection.self
         )
         return response.content.offTopicIDs
+    }
+
+    /// Builds the relevance session: ``GateInstructions`` in a profile that declares the gate's
+    /// tuning + context policy.
+    static func gateSession(mission: ShoppingTask, model: SystemLanguageModel) -> LanguageModelSession {
+        let profile = LanguageModelSession.Profile { GateInstructions(mission: mission) }
+            .model(model)
+            .temperature(temperature)
+            .maximumResponseTokens(maxResponseTokens)
+            .historyTransform { CrumbContext.trimmed($0) }
+            .transcriptErrorHandlingPolicy(.revertTranscript)
+        return LanguageModelSession(profile: profile)
     }
 
     /// Removes `ids` from `products`, but **never below the floor**: if the drop would strand the
@@ -81,21 +101,6 @@ public struct AppleFoundationRelevanceGate: RelevanceGate {
 
     // MARK: Prompt construction
 
-    static func instructions(mission: ShoppingTask) -> String {
-        """
-        You are Crumb, a personal shopping curator. The current mission is:
-        "\(mission.title)" — \(mission.subtitle)
-        It is about: \(mission.plan.joined(separator: ", ")).
-
-        You are given candidate products. Identify ONLY the ones that are clearly off-topic for \
-        this mission — a different sport, category, or use entirely (for example, a rowing shirt \
-        among lacrosse gear, or a kitchen item among camping gear). When in doubt, keep it: do not \
-        list a product unless it plainly does not belong. Return only the IDs of the clearly \
-        off-topic products, using only the IDs provided; if every candidate is plausibly on-topic, \
-        return an empty list.
-        """
-    }
-
     static func prompt(for products: [Product]) -> String {
         var lines = ["Candidate products:"]
         for product in products {
@@ -107,6 +112,30 @@ public struct AppleFoundationRelevanceGate: RelevanceGate {
         lines.append("Return the IDs of only the clearly off-topic products (empty if none).")
         return lines.joined(separator: "\n")
     }
+}
+
+/// The relevance-gate instructions: the shared Crumb persona + the mission (title/subtitle/plan) +
+/// how to pick only the clearly off-topic products. The dynamic-session replacement for the gate's
+/// old hand-built instruction string.
+struct GateInstructions: DynamicInstructions {
+    let mission: ShoppingTask
+
+    var body: some DynamicInstructions {
+        CrumbPersona(recipient: nil)
+        MissionBlock(mission: mission)
+        Instructions("It is about: \(mission.plan.joined(separator: ", ")).")
+        Instructions(Self.guide)
+    }
+
+    /// The off-topic selection guidance. Pure — unit-tested.
+    static let guide = """
+        You are given candidate products. Identify ONLY the ones that are clearly off-topic for \
+        this mission — a different sport, category, or use entirely (for example, a rowing shirt \
+        among lacrosse gear, or a kitchen item among camping gear). When in doubt, keep it: do not \
+        list a product unless it plainly does not belong. Return only the IDs of the clearly \
+        off-topic products, using only the IDs provided; if every candidate is plausibly on-topic, \
+        return an empty list.
+        """
 }
 
 /// The structured output of a relevance pass: the IDs to drop. Guided generation keeps the model
