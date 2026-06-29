@@ -615,6 +615,170 @@ struct CrumbTests {
         #expect(entry.title != entry.goal)                             // title is the cased derivation
     }
 
+    // MARK: - Gift missions (shop for someone else)
+
+    /// A recipient whose taste is *distinct* from the owner, so a gift mission's lens is observable.
+    private static func giftRecipient() -> Recipient {
+        Recipient(
+            id: "mom", name: "Mom", relationship: "my mom",
+            taste: Self.splurge,                       // ≠ the owner's default profile
+            accentHex: 0x9A6A4F, createdAt: Date(timeIntervalSinceReferenceDate: 0)
+        )
+    }
+
+    @Test("A gift mission curates through the recipient's taste, not the owner's")
+    @MainActor
+    func giftMissionUsesRecipientTaste() async {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: ProfileSortCurator(),   // order encodes which taste ran
+            tasteStore: InMemoryTasteStore(Self.thrifty)           // owner = thrifty → id-ascending
+        )
+        let mom = Self.giftRecipient()                             // splurge → id-descending
+        model.enterPlan(with: SeedData.hike, recipient: mom)
+        #expect(model.activeRecipient?.id == "mom")
+        #expect(model.activeTaste == Self.splurge)                 // the switch resolves to her taste
+
+        await model.loadCandidates(for: SeedData.hike)
+        let ids = model.deck.map(\.id)
+        #expect(ids == ids.sorted(by: >))                          // ranked by *her* (splurge) taste
+        #expect(model.tasteProfile == Self.thrifty)                // owner profile untouched
+    }
+
+    @Test("Selecting Yourself behaves exactly as today (no recipient, owner taste)")
+    @MainActor
+    func yourselfIsRegressionFree() async {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: ProfileSortCurator(),
+            tasteStore: InMemoryTasteStore(Self.thrifty)
+        )
+        model.enterPlan(with: SeedData.hike)                       // no recipient
+        #expect(model.activeRecipient == nil)
+        #expect(model.activeTaste == Self.thrifty)
+        #expect(model.activeRecipientRef == nil)
+        await model.loadCandidates(for: SeedData.hike)
+        let ids = model.deck.map(\.id)
+        #expect(ids == ids.sorted())                               // owner (thrifty) order
+    }
+
+    @Test("A gift kit records the recipient on its history entry; an owner kit records none")
+    @MainActor
+    func giftKitTagsHistory() async throws {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
+        )
+        model.enterPlan(with: SeedData.hike, recipient: Self.giftRecipient())
+        await model.loadCandidates(for: SeedData.hike)
+        model.accept(try #require(model.deck.first))
+        await model.recordCurrentKit()
+
+        let entry = try #require(model.historyEntries.first)
+        #expect(entry.recipient?.id == "mom")
+        #expect(entry.recipient?.name == "Mom")
+        #expect(entry.recapLine.contains("a gift for Mom"))        // deterministic gift floor (CI)
+    }
+
+    @Test("Save-to-taste during a gift mission folds into the recipient; the owner is untouched")
+    @MainActor
+    func saveToTasteTargetsRecipient() async {
+        let recipientStore = InMemoryRecipientStore([Self.giftRecipient()])
+        let tasteStore = InMemoryTasteStore(Self.balanced)
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: tasteStore,
+            tasteExtractor: ManualTasteExtractor(),                // nil → deterministic fold
+            refiner: ScriptedRefiner(.init(emphasis: "ceramic", priceDirection: .cheaper)),
+            recipientStore: recipientStore
+        )
+        let mom = try! #require(model.recipients.first)
+        model.enterPlan(with: SeedData.hike, recipient: mom)
+        await model.loadCandidates(for: SeedData.hike)
+        await model.applyRefinement(text: "more ceramic, cheaper")
+
+        #expect(model.saveToTasteLabel == "Make this part of Mom's taste")
+        await model.saveRefinementToTaste()
+
+        let saved = try! #require(recipientStore.loadRecipients().first { $0.id == "mom" })
+        #expect(saved.taste.leanings.contains("ceramic"))          // folded into *her* profile…
+        #expect(model.activeRecipient?.taste.leanings.contains("ceramic") == true) // …and the live lens
+        #expect(tasteStore.loadProfile() == Self.balanced)         // owner profile untouched
+    }
+
+    @Test("People CRUD: add assigns id+accent, edit replaces, delete removes (and clears composer)")
+    @MainActor
+    func peopleRosterCRUD() {
+        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
+        #expect(model.recipients.isEmpty)
+
+        let dad = model.addRecipient(name: "Dad", relationship: "my dad", taste: Self.splurge)
+        #expect(model.recipients.map(\.name) == ["Dad"])
+        #expect(!dad.id.isEmpty)
+        #expect(dad.accentHex == AppModel.recipientAccents[0])
+
+        var edited = dad
+        edited.name = "Papa"
+        model.composerRecipient = dad
+        model.updateRecipient(edited)
+        #expect(model.recipients.first?.name == "Papa")
+        #expect(model.composerRecipient?.name == "Papa")           // live selection follows the edit
+
+        model.deleteRecipient(id: dad.id)
+        #expect(model.recipients.isEmpty)
+        #expect(model.composerRecipient == nil)                    // selection cleared on delete
+    }
+
+    @Test("Plan-this-again for a gift entry re-targets the same person when still in the roster")
+    @MainActor
+    func planAgainResolvesRecipient() async {
+        let recipientStore = InMemoryRecipientStore([Self.giftRecipient()])
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            recipientStore: recipientStore
+        )
+        let mom = try! #require(model.recipients.first)
+        model.enterPlan(with: SeedData.coffee, recipient: mom)
+        await model.loadCandidates(for: SeedData.coffee)
+        model.accept(model.deck.first!)
+        await model.recordCurrentKit()
+        let entry = try! #require(model.historyEntries.first)
+
+        await model.runPlan(goal: entry.goal, for: model.recipients.first { $0.id == entry.recipient?.id })
+        #expect(model.activeRecipient?.id == "mom")                // re-planned for Mom
+    }
+
+    @Test("The History recipient filter narrows the timeline and the stats header")
+    @MainActor
+    func historyFilterNarrows() {
+        let momRef = RecipientRef(id: "mom", name: "Mom", accentHex: 0x9A6A4F)
+        let store = InMemoryHistoryStore([
+            Self.historyFixture(id: "gift", recipient: momRef),
+            Self.historyFixture(id: "owned", recipient: nil),
+        ])
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            historyStore: store
+        )
+        #expect(model.historyFacets.map(\.id) == ["all", "yourself", "person-mom"])
+        #expect(model.filteredHistoryEntries.count == 2)
+
+        model.historyRecipientFilter = .person("mom")
+        #expect(model.filteredHistoryEntries.map(\.id) == ["gift"])
+        #expect(model.historyStats.kitCount == 1)                  // stats follow the filter
+    }
+
+    private static func historyFixture(id: String, recipient: RecipientRef?) -> HistoryEntry {
+        HistoryEntry(
+            id: id, goal: "g", title: "T", subtitle: "s", plan: ["a"], searchQueries: ["a"],
+            curatorNote: "", accentHex: 0, recapTag: "Tag", recapLine: "Line",
+            items: [HistoryItem(productID: "p", name: "Item", shop: Shop(id: "s", name: "Shop"),
+                                price: 10, variantTitle: "Standard")],
+            recipient: recipient, handedOff: false,
+            createdAt: Date(timeIntervalSinceReferenceDate: 0)
+        )
+    }
+
     // MARK: - Fixtures
 
     private static func fakeProduct(_ id: String) -> Product {
@@ -651,7 +815,9 @@ private struct ProfileSortCurator: CuratorEngine {
     func curate(
         _ products: [Product],
         for profile: TasteProfile,
-        mission: ShoppingTask
+        mission: ShoppingTask,
+        refinement: RefinementContext?,
+        recipient: RecipientRef?
     ) async -> CuratedDeck {
         CuratedDeck(products: await rank(products, for: profile), tier: .onDevice)
     }
@@ -680,7 +846,7 @@ private struct ScriptedRefiner: RefinementInterpreter {
 private final class CountingRecapWriter: RecapWriter {
     private(set) var calls = 0
     nonisolated func writeRecap(
-        goal: String, plan: [String], items: [RecapFact], profile: TasteProfile
+        goal: String, plan: [String], items: [RecapFact], profile: TasteProfile, recipient: RecipientRef?
     ) async -> WrittenRecap {
         await MainActor.run {
             calls += 1

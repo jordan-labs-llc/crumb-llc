@@ -86,6 +86,11 @@ public struct HistoryEntry: Identifiable, Hashable, Sendable, Codable {
     public let recapLine: String
     /// The kept items, snapshotted at save time.
     public let items: [HistoryItem]
+    /// Who this kit was for, when it was a gift — a lean snapshot of the recipient at save time
+    /// (consistent with History's offline-receipt philosophy: a faithful record, not a live
+    /// reference, so it survives the person being edited or deleted). `nil` means "for Yourself"
+    /// (the owner) — which is also how every pre-gift-feature row decodes.
+    public let recipient: RecipientRef?
     /// `true` once the user opened a real checkout link for this kit (outcome flag).
     public let handedOff: Bool
     /// When the kit was first assembled (drives timeline grouping + ordering).
@@ -103,6 +108,7 @@ public struct HistoryEntry: Identifiable, Hashable, Sendable, Codable {
         recapTag: String,
         recapLine: String,
         items: [HistoryItem],
+        recipient: RecipientRef? = nil,
         handedOff: Bool,
         createdAt: Date
     ) {
@@ -117,6 +123,7 @@ public struct HistoryEntry: Identifiable, Hashable, Sendable, Codable {
         self.recapTag = recapTag
         self.recapLine = recapLine
         self.items = items
+        self.recipient = recipient
         self.handedOff = handedOff
         self.createdAt = createdAt
     }
@@ -155,8 +162,8 @@ public struct HistoryEntry: Identifiable, Hashable, Sendable, Codable {
         HistoryEntry(
             id: id, goal: goal, title: title, subtitle: subtitle, plan: plan,
             searchQueries: searchQueries, curatorNote: curatorNote, accentHex: accentHex,
-            recapTag: recapTag, recapLine: recapLine, items: items, handedOff: value,
-            createdAt: createdAt
+            recapTag: recapTag, recapLine: recapLine, items: items, recipient: recipient,
+            handedOff: value, createdAt: createdAt
         )
     }
 }
@@ -210,6 +217,75 @@ public struct HistorySection: Identifiable, Sendable, Equatable {
     public init(bucket: HistoryBucket, entries: [HistoryEntry]) {
         self.bucket = bucket
         self.entries = entries
+    }
+}
+
+/// A History timeline filter by who a kit was for — the chip row at the top of the timeline.
+/// `.all` shows everything; `.yourself` shows owner kits (no recipient); `.person(id)` shows a
+/// single saved person's kits. Pure + `Hashable` so it drives a `@State`/`Picker` cleanly.
+public enum HistoryRecipientFilter: Hashable, Sendable {
+    case all
+    case yourself
+    case person(String)
+
+    /// Whether `entry` passes this filter.
+    public func matches(_ entry: HistoryEntry) -> Bool {
+        switch self {
+        case .all: return true
+        case .yourself: return entry.recipient == nil
+        case let .person(id): return entry.recipient?.id == id
+        }
+    }
+}
+
+/// One filter chip on the History timeline — a filter plus how to render it (label + optional
+/// accent for tinting). Pure value so the facet set is deterministic and unit-testable.
+public struct HistoryRecipientFacet: Identifiable, Sendable, Equatable {
+    public let filter: HistoryRecipientFilter
+    public let label: String
+    /// The tint for this chip (the person's accent, or the owner accent for You). `nil` for All.
+    public let accentHex: UInt32?
+
+    public init(filter: HistoryRecipientFilter, label: String, accentHex: UInt32?) {
+        self.filter = filter
+        self.label = label
+        self.accentHex = accentHex
+    }
+
+    public var id: String {
+        switch filter {
+        case .all: return "all"
+        case .yourself: return "yourself"
+        case let .person(id): return "person-\(id)"
+        }
+    }
+}
+
+/// Pure helpers for the History per-recipient filter — deriving the chips present in a history and
+/// applying a chosen filter. Kept here next to the timeline grouping; both are unit-tested.
+public enum HistoryFacets {
+    /// The filter chips a history warrants: always **All**; **You** when at least one owner kit
+    /// (no recipient) exists; and one chip per distinct recipient in first-seen order, labeled by
+    /// name and tinted by their accent. A history with no gifts yet yields just `[All, You]` (the
+    /// UI can choose to hide the row until there's more than one real facet).
+    public static func facets(_ entries: [HistoryEntry], ownerAccentHex: UInt32) -> [HistoryRecipientFacet] {
+        var out: [HistoryRecipientFacet] = [HistoryRecipientFacet(filter: .all, label: "All", accentHex: nil)]
+        if entries.contains(where: { $0.recipient == nil }) {
+            out.append(HistoryRecipientFacet(filter: .yourself, label: "You", accentHex: ownerAccentHex))
+        }
+        var seen = Set<String>()
+        for entry in entries {
+            guard let recipient = entry.recipient, seen.insert(recipient.id).inserted else { continue }
+            out.append(HistoryRecipientFacet(
+                filter: .person(recipient.id), label: recipient.name, accentHex: recipient.accentHex
+            ))
+        }
+        return out
+    }
+
+    /// Entries passing `filter`, preserving the input's recency order.
+    public static func apply(_ filter: HistoryRecipientFilter, to entries: [HistoryEntry]) -> [HistoryEntry] {
+        entries.filter(filter.matches)
     }
 }
 

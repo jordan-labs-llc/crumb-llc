@@ -87,6 +87,7 @@ struct MissionComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: CrumbMetrics.Space.m) {
+            RecipientPicker()
             composerField
             ctaRow
 
@@ -201,22 +202,24 @@ struct MissionComposer: View {
         let trimmed = goal.trimmed
         guard !trimmed.isEmpty, !model.isPlanning else { return }
         focused = false
-        model.planMission(goal: trimmed)
+        model.planMission(goal: trimmed, for: model.composerRecipient)
     }
 
-    /// Tapping an example/recent fills the field (so the choice is visible) and plans it.
+    /// Tapping an example/recent fills the field (so the choice is visible) and plans it for the
+    /// currently chosen recipient (You by default).
     private func start(_ prompt: String) {
         guard !model.isPlanning else { return }
         goal = prompt
         focused = false
-        model.planMission(goal: prompt)
+        model.planMission(goal: prompt, for: model.composerRecipient)
     }
 
     /// In DEBUG screenshot mode, pre-fill the field from `CRUMB_GOAL` so the composer can be
     /// captured "mid-typing" without `simctl` being able to inject keystrokes.
     private static var seededGoal: String {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] == "composer" {
+        let mode = ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"]
+        if mode == "composer" || mode == "composer-gift" {
             return ProcessInfo.processInfo.environment["CRUMB_GOAL"] ?? ""
         }
         #endif

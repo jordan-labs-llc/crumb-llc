@@ -30,12 +30,13 @@ public struct AppleFoundationRecapWriter: RecapWriter {
         goal: String,
         plan: [String],
         items: [RecapFact],
-        profile: TasteProfile
+        profile: TasteProfile,
+        recipient: RecipientRef?
     ) async -> WrittenRecap {
         // An empty kit never reaches the model — there's nothing to voice (and we never save a
         // zero-item entry anyway).
         guard !items.isEmpty else {
-            return RuleBasedRecapWriter.recap(goal: goal, plan: plan, items: items, profile: profile, reason: nil)
+            return RuleBasedRecapWriter.recap(goal: goal, plan: plan, items: items, profile: profile, recipient: recipient, reason: nil)
         }
 
         // Tier 1 — Private Cloud Compute (OS 27+), gated for the same entitlement-trap reason as the
@@ -46,7 +47,7 @@ public struct AppleFoundationRecapWriter: RecapWriter {
             let pcc = PrivateCloudComputeLanguageModel()
             if case .available = pcc.availability, !pcc.quotaUsage.isLimitReached {
                 let session: MakeSession = { LanguageModelSession(model: pcc, instructions: $0) }
-                if let written = try? await compose(goal, plan, items, profile, session: session, tier: .privateCloud) {
+                if let written = try? await compose(goal, plan, items, profile, recipient, session: session, tier: .privateCloud) {
                     return written
                 }
                 // Writing probe failed (offline / transient) — fall through to on-device.
@@ -59,12 +60,12 @@ public struct AppleFoundationRecapWriter: RecapWriter {
         switch device.availability {
         case .available:
             let session: MakeSession = { LanguageModelSession(model: device, instructions: $0) }
-            if let written = try? await compose(goal, plan, items, profile, session: session, tier: .onDevice) {
+            if let written = try? await compose(goal, plan, items, profile, recipient, session: session, tier: .onDevice) {
                 return written
             }
-            return RuleBasedRecapWriter.recap(goal: goal, plan: plan, items: items, profile: profile, reason: .offlineOrError)
+            return RuleBasedRecapWriter.recap(goal: goal, plan: plan, items: items, profile: profile, recipient: recipient, reason: .offlineOrError)
         case let .unavailable(reason):
-            return RuleBasedRecapWriter.recap(goal: goal, plan: plan, items: items, profile: profile, reason: Self.map(reason))
+            return RuleBasedRecapWriter.recap(goal: goal, plan: plan, items: items, profile: profile, recipient: recipient, reason: Self.map(reason))
         }
     }
 
@@ -80,15 +81,16 @@ public struct AppleFoundationRecapWriter: RecapWriter {
         _ plan: [String],
         _ items: [RecapFact],
         _ profile: TasteProfile,
+        _ recipient: RecipientRef?,
         session makeSession: @escaping MakeSession,
         tier: RecapTier
     ) async throws -> WrittenRecap {
-        let session = makeSession(Self.instructions(profile: profile))
+        let session = makeSession(Self.instructions(profile: profile, recipient: recipient))
         let response = try await session.respond(
-            to: Self.prompt(goal: goal, plan: plan, items: items),
+            to: Self.prompt(goal: goal, plan: plan, items: items, recipient: recipient),
             generating: RecapDraft.self
         )
-        return Self.recap(from: response.content, goal: goal, plan: plan, items: items, profile: profile, tier: tier)
+        return Self.recap(from: response.content, goal: goal, plan: plan, items: items, profile: profile, recipient: recipient, tier: tier)
     }
 
     // MARK: Reconcile (pure — the unit-tested guarantee behind the model call)
@@ -103,13 +105,14 @@ public struct AppleFoundationRecapWriter: RecapWriter {
         plan: [String],
         items: [RecapFact],
         profile: TasteProfile,
+        recipient: RecipientRef? = nil,
         tier: RecapTier
     ) -> WrittenRecap {
         let tag = clean(draft.tag, max: maxTagLength)
         let line = clean(draft.line, max: maxLineLength)
         return WrittenRecap(
             tag: tag.isEmpty ? RuleBasedRecapWriter.tag(forGoal: goal) : tag,
-            line: line.isEmpty ? RuleBasedRecapWriter.line(items: items, profile: profile) : line,
+            line: line.isEmpty ? RuleBasedRecapWriter.line(items: items, profile: profile, recipient: recipient) : line,
             tier: tier
         )
     }
@@ -135,32 +138,50 @@ public struct AppleFoundationRecapWriter: RecapWriter {
 
     /// The writer persona + this user's taste, so the recap sounds like Crumb addressing them. Used
     /// as the session's instructions (stable across the single call).
-    static func instructions(profile: TasteProfile) -> String {
-        """
-        You are Crumb, a personal shopping curator with a warm, plainspoken, slightly literary \
-        voice. You are writing a one-line memory of a kit a person just put together, for their \
-        history — something they'll enjoy seeing again later.
+    static func instructions(profile: TasteProfile, recipient: RecipientRef? = nil) -> String {
+        let context: String
+        let lineGuide: String
+        if let recipient {
+            let who = recipient.trimmedRelationship.map { "\(recipient.name), \($0)" } ?? recipient.name
+            context = """
+            You are writing a one-line memory of a gift kit someone just assembled for \(who), \
+            curated to \(recipient.name)'s taste:
+            """
+            lineGuide = "one short line in your voice that captures the gift — acknowledge it's for \(recipient.name), grounded in what was actually kept, never inventing specifics"
+        } else {
+            context = """
+            You are writing a one-line memory of a kit a person just put together, for their \
+            history — something they'll enjoy seeing again later.
 
-        The user's taste:
+            The user's taste:
+            """
+            lineGuide = "one short line in your voice that captures the feeling of the kit — grounded in what they actually kept, never inventing specifics"
+        }
+        return """
+        You are Crumb, a personal shopping curator with a warm, plainspoken, slightly literary \
+        voice. \(context)
         - Vibe: \(profile.vibe.joined(separator: ", "))
         - Leanings: \(profile.leanings.joined(separator: "; "))
         - In their words: "\(profile.signatureLine)"
 
         Write a short 2 to 4 word tag naming the kit (like "Rainy-hike kit" or "Pour-over corner") \
-        and one short line in your voice that captures the feeling of the kit — grounded in what \
-        they actually kept, never inventing specifics. No emoji, no exclamation marks, no quotes.
+        and \(lineGuide). No emoji, no exclamation marks, no quotes.
         """
     }
 
-    static func prompt(goal: String, plan: [String], items: [RecapFact]) -> String {
+    static func prompt(goal: String, plan: [String], items: [RecapFact], recipient: RecipientRef? = nil) -> String {
         let kept = items
             .map { "- \($0.name) (\($0.shop))" }
             .joined(separator: "\n")
         let planText = plan.isEmpty ? "(none)" : plan.joined(separator: ", ")
+        let giftLine = recipient.map { rec in
+            let who = rec.trimmedRelationship.map { "\(rec.name) (\($0))" } ?? rec.name
+            return "\nThis kit is a gift for \(who).\n"
+        } ?? ""
         return """
         Their goal:
         "\(goal)"
-
+        \(giftLine)
         The plan they ran: \(planText)
 
         What they kept:

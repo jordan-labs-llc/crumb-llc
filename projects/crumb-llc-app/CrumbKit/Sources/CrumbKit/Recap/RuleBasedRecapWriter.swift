@@ -16,27 +16,30 @@ public struct RuleBasedRecapWriter: RecapWriter {
         goal: String,
         plan: [String],
         items: [RecapFact],
-        profile: TasteProfile
+        profile: TasteProfile,
+        recipient: RecipientRef?
     ) async -> WrittenRecap {
         // `reason: nil` — a *chosen* default here (mock scaffold / sim), so the UI stays quiet.
-        Self.recap(goal: goal, plan: plan, items: items, profile: profile, reason: nil)
+        Self.recap(goal: goal, plan: plan, items: items, profile: profile, recipient: recipient, reason: nil)
     }
 
     /// The deterministic recap, with an explicit fallback `reason` so the AI writer can reuse this
     /// floor and still report *why* it degraded. Pure (no model, no I/O) — the unit-tested guarantee
     /// behind the seam. Public so the app can seed a brand-new history entry with a recap
     /// *synchronously* (the row must be complete the instant it's saved), then upgrade it with the
-    /// on-device writer without ever leaving the entry half-written.
+    /// on-device writer without ever leaving the entry half-written. When `recipient` is set the line
+    /// is gift-aware ("… — a gift for Mom.") — the deterministic guarantee the sim/CI actually renders.
     public static func recap(
         goal: String,
         plan: [String],
         items: [RecapFact],
         profile: TasteProfile,
+        recipient: RecipientRef? = nil,
         reason: RecapTier.Fallback?
     ) -> WrittenRecap {
         WrittenRecap(
             tag: tag(forGoal: goal),
-            line: line(items: items, profile: profile),
+            line: line(items: items, profile: profile, recipient: recipient),
             tier: .ruleBased(reason)
         )
     }
@@ -64,9 +67,12 @@ public struct RuleBasedRecapWriter: RecapWriter {
 
     /// A warm, honest record line from the facts on hand: piece count, shop count, and the user's
     /// top leaning when they have one. No invented product qualities — those are the model's to add.
-    public static func line(items: [RecapFact], profile: TasteProfile) -> String {
+    /// When `recipient` is set the line closes with "— a gift for <Name>." so the deterministic floor
+    /// (what the sim/CI renders) honestly reads as a gift; `recipient == nil` is the owner kit.
+    public static func line(items: [RecapFact], profile: TasteProfile, recipient: RecipientRef? = nil) -> String {
         let n = items.count
-        guard n > 0 else { return "A kit, saved for later." }
+        let giftSuffix = recipient.map { " — a gift for \($0.name)" } ?? ""
+        guard n > 0 else { return "A kit, saved for later\(giftSuffix)." }
 
         let pieces = "\(n) \(n == 1 ? "piece" : "pieces")"
         let shopCount = Set(items.map(\.shop)).count
@@ -77,7 +83,7 @@ public struct RuleBasedRecapWriter: RecapWriter {
             .flatMap { $0.isEmpty ? nil : ", leaning \($0.lowercased())" }
             ?? ""
 
-        return "\(pieces) from \(shops)\(lean)."
+        return "\(pieces) from \(shops)\(lean)\(giftSuffix)."
     }
 
     /// How many content words the tag may carry before it stops reading as a title.

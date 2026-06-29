@@ -48,18 +48,43 @@ public struct RuleBasedCurator: CuratorEngine {
     }
 
     public func rationale(for product: Product, profile: TasteProfile) -> String {
-        // The curator speaks in the seed voice. If the product's rationale already echoes
-        // one of the profile's leanings, let it stand; otherwise add a quiet nod so the
-        // copy feels addressed to this user.
+        rationale(for: product, profile: profile, recipient: nil)
+    }
+
+    /// Gift-aware deterministic voice — **this is what renders on the sim/CI** (no model), so it's
+    /// the unit-tested floor. When `recipient` is `nil` it's the owner's voice (today's behavior):
+    /// the product's rationale stands if it already echoes a leaning, else a quiet "Fits your lean
+    /// toward …" nod. When `recipient` is set, the nod is addressed to *them* by name — "Fits Mom's
+    /// lean toward …" — and a card that already echoes a leaning gets a light "A gift for Mom." tag,
+    /// so every gift card honestly reads as a gift for that person without repeating a full sentence.
+    public func rationale(for product: Product, profile: TasteProfile, recipient: RecipientRef?) -> String {
         let lowered = product.rationale.lowercased()
-        if profile.leanings.contains(where: { lowered.contains(keyword(from: $0)) }) {
+        let echoesLeaning = profile.leanings.contains { lowered.contains(keyword(from: $0)) }
+
+        guard let recipient else {
+            // Owner voice — unchanged.
+            if echoesLeaning { return product.rationale }
+            if let leaning = profile.leanings.first {
+                return "\(product.rationale) Fits your lean toward \(leaning.lowercased())."
+            }
             return product.rationale
         }
-        if let leaning = profile.leanings.first {
-            return "\(product.rationale) Fits your lean toward \(leaning.lowercased())."
+
+        // Gift voice — addressed to the recipient by name.
+        let name = recipient.name
+        if echoesLeaning {
+            return "\(product.rationale) A gift for \(name)."
         }
-        return product.rationale
+        if let leaning = profile.leanings.first {
+            return "\(product.rationale) Fits \(possessive(name))'s lean toward \(leaning.lowercased())."
+        }
+        return "\(product.rationale) A gift for \(name)."
     }
+
+    /// The base for a possessive — Crumb writes "Mom's", "Dad's", "Alex's". We append "'s" in the
+    /// caller, so this just yields the name; kept as a seam in case a name already ends in "s" and we
+    /// later want "Chris'" styling. For now every name takes "'s".
+    private func possessive(_ name: String) -> String { name }
 
     // MARK: - Scoring
 

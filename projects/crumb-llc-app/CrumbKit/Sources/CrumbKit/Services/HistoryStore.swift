@@ -144,6 +144,10 @@ public final class HistoryEntryRecord {
     public var recapTag: String
     public var recapLine: String
     public var itemsData: Data
+    /// The gift recipient snapshot (a JSON-encoded ``RecipientRef``), or `nil` for an owner kit.
+    /// **Optional** so it's a lightweight SwiftData migration: every pre-gift-feature row decodes
+    /// with `recipientData == nil` ⇒ `recipient == nil` ⇒ "for Yourself".
+    public var recipientData: Data?
     public var handedOff: Bool
     public var createdAt: Date
 
@@ -159,6 +163,7 @@ public final class HistoryEntryRecord {
         self.recapTag = entry.recapTag
         self.recapLine = entry.recapLine
         self.itemsData = Self.encode(entry.items)
+        self.recipientData = Self.encodeRecipient(entry.recipient)
         self.handedOff = entry.handedOff
         self.createdAt = entry.createdAt
     }
@@ -177,6 +182,7 @@ public final class HistoryEntryRecord {
             recapTag: recapTag,
             recapLine: recapLine,
             items: Self.decode(itemsData),
+            recipient: Self.decodeRecipient(recipientData),
             handedOff: handedOff,
             createdAt: createdAt
         )
@@ -195,6 +201,7 @@ public final class HistoryEntryRecord {
         recapTag = entry.recapTag
         recapLine = entry.recapLine
         itemsData = Self.encode(entry.items)
+        recipientData = Self.encodeRecipient(entry.recipient)
         handedOff = entry.handedOff
         createdAt = entry.createdAt
     }
@@ -205,6 +212,16 @@ public final class HistoryEntryRecord {
 
     private static func decode(_ data: Data) -> [HistoryItem] {
         (try? JSONDecoder().decode([HistoryItem].self, from: data)) ?? []
+    }
+
+    private static func encodeRecipient(_ recipient: RecipientRef?) -> Data? {
+        guard let recipient else { return nil }
+        return try? JSONEncoder().encode(recipient)
+    }
+
+    private static func decodeRecipient(_ data: Data?) -> RecipientRef? {
+        guard let data else { return nil }
+        return try? JSONDecoder().decode(RecipientRef.self, from: data)
     }
 }
 

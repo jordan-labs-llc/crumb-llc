@@ -55,13 +55,18 @@ public struct AppleFoundationCurator: CuratorEngine {
         rule.rationale(for: product, profile: profile)
     }
 
+    public func rationale(for product: Product, profile: TasteProfile, recipient: RecipientRef?) -> String {
+        rule.rationale(for: product, profile: profile, recipient: recipient)
+    }
+
     // MARK: Curation
 
     public func curate(
         _ products: [Product],
         for profile: TasteProfile,
         mission: ShoppingTask,
-        refinement: RefinementContext?
+        refinement: RefinementContext?,
+        recipient: RecipientRef?
     ) async -> CuratedDeck {
         // The deterministic order: the input we hand the model, the order of the
         // reconciliation tail, and the whole-deck fallback when no tier ranks.
@@ -79,7 +84,7 @@ public struct AppleFoundationCurator: CuratorEngine {
             let pcc = PrivateCloudComputeLanguageModel()
             if case .available = pcc.availability, !pcc.quotaUsage.isLimitReached {
                 let session: MakeSession = { LanguageModelSession(model: pcc, instructions: $0) }
-                if let voiced = try? await rankAndVoice(baseline, profile, mission, refinement, session: session) {
+                if let voiced = try? await rankAndVoice(baseline, profile, mission, refinement, recipient, session: session) {
                     return CuratedDeck(products: voiced, tier: .privateCloud)
                 }
                 // Ranking probe failed (offline / transient) — fall through to on-device.
@@ -93,12 +98,12 @@ public struct AppleFoundationCurator: CuratorEngine {
         switch device.availability {
         case .available:
             let session: MakeSession = { LanguageModelSession(model: device, instructions: $0) }
-            if let voiced = try? await rankAndVoice(baseline, profile, mission, refinement, session: session) {
+            if let voiced = try? await rankAndVoice(baseline, profile, mission, refinement, recipient, session: session) {
                 return CuratedDeck(products: voiced, tier: .onDevice)
             }
-            return fallback(baseline, profile, refinement, reason: .offlineOrError)
+            return fallback(baseline, profile, refinement, recipient, reason: .offlineOrError)
         case let .unavailable(reason):
-            return fallback(baseline, profile, refinement, reason: Self.map(reason))
+            return fallback(baseline, profile, refinement, recipient, reason: Self.map(reason))
         }
     }
 
@@ -118,10 +123,11 @@ public struct AppleFoundationCurator: CuratorEngine {
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
         _ refinement: RefinementContext?,
+        _ recipient: RecipientRef?,
         session makeSession: @escaping MakeSession
     ) async throws -> [Product] {
-        let ordered = try await modelRankedOrder(baseline, profile, mission, refinement, session: makeSession)
-        return await voiceAll(ordered, profile, mission, refinement, session: makeSession)
+        let ordered = try await modelRankedOrder(baseline, profile, mission, refinement, recipient, session: makeSession)
+        return await voiceAll(ordered, profile, mission, refinement, recipient, session: makeSession)
     }
 
     /// One guided call asks the model to order the deck best-fit-first; the returned IDs are
@@ -134,12 +140,13 @@ public struct AppleFoundationCurator: CuratorEngine {
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
         _ refinement: RefinementContext?,
+        _ recipient: RecipientRef?,
         session makeSession: @escaping MakeSession
     ) async throws -> [Product] {
         // Cap what we send so a big live deck doesn't blow context/latency on the 3B model;
         // products past the cap keep their deterministic order via the reconciliation tail.
         let head = Array(baseline.prefix(Self.rankDeckCap))
-        let session = makeSession(Self.rankingInstructions(profile: profile, mission: mission, refinement: refinement))
+        let session = makeSession(Self.rankingInstructions(profile: profile, mission: mission, refinement: refinement, recipient: recipient))
         let response = try await session.respond(
             to: Self.rankPrompt(for: head),
             generating: RankedOrder.self
@@ -177,9 +184,10 @@ public struct AppleFoundationCurator: CuratorEngine {
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
         _ refinement: RefinementContext?,
+        _ recipient: RecipientRef?,
         session makeSession: @escaping MakeSession
     ) async -> [Product] {
-        let instructions = Self.instructions(profile: profile, mission: mission, refinement: refinement)
+        let instructions = Self.instructions(profile: profile, mission: mission, refinement: refinement, recipient: recipient)
         var out = products
         await withTaskGroup(of: (Int, String?).self) { group in
             for index in products.indices {
@@ -190,7 +198,7 @@ public struct AppleFoundationCurator: CuratorEngine {
             }
             for await (index, text) in group {
                 out[index] = products[index].withRationale(
-                    text ?? rule.rationale(for: products[index], profile: profile)
+                    text ?? rule.rationale(for: products[index], profile: profile, recipient: recipient)
                 )
             }
         }
@@ -219,10 +227,11 @@ public struct AppleFoundationCurator: CuratorEngine {
         _ ranked: [Product],
         _ profile: TasteProfile,
         _ refinement: RefinementContext?,
+        _ recipient: RecipientRef?,
         reason: CuratorTier.Fallback
     ) -> CuratedDeck {
         let shaped = RefinementContext.apply(refinement, to: ranked)
-        let voiced = shaped.map { $0.withRationale(rule.rationale(for: $0, profile: profile)) }
+        let voiced = shaped.map { $0.withRationale(rule.rationale(for: $0, profile: profile, recipient: recipient)) }
         return CuratedDeck(products: voiced, tier: .ruleBased(reason))
     }
 
@@ -235,32 +244,53 @@ public struct AppleFoundationCurator: CuratorEngine {
 
     /// The shared lede — who Crumb is + this user's taste + the mission. Used verbatim by both
     /// the voice and ranking instructions so the two phases speak to the same persona.
-    private static func persona(profile: TasteProfile, mission: ShoppingTask) -> String {
-        """
-        You are Crumb, a personal shopping curator with a warm, plainspoken, slightly literary \
-        voice.
+    private static func persona(profile: TasteProfile, mission: ShoppingTask, recipient: RecipientRef? = nil) -> String {
+        // When shopping for someone else, the taste below is *theirs*, so the persona addresses the
+        // gift directly and the rest of the prompt's "the user" reads as "the person you're gifting".
+        let lede: String
+        let tasteOwner: String
+        if let recipient {
+            let who = recipient.trimmedRelationship.map { "\(recipient.name), \($0)" } ?? recipient.name
+            lede = """
+            You are Crumb, a personal shopping curator with a warm, plainspoken, slightly literary \
+            voice. You are helping someone shop for a gift for \(who). Curate to \(recipient.name)'s \
+            taste — become their shopper.
+            """
+            tasteOwner = "\(recipient.name)'s taste"
+        } else {
+            lede = """
+            You are Crumb, a personal shopping curator with a warm, plainspoken, slightly literary \
+            voice.
+            """
+            tasteOwner = "The user's taste"
+        }
+        return """
+        \(lede)
 
-        The user's taste:
+        \(tasteOwner):
         - Vibe: \(profile.vibe.joined(separator: ", "))
         - Leanings: \(profile.leanings.joined(separator: "; "))
         - Budget comfort: \(Self.budgetPhrase(profile.budgetComfort))
         - In their words: "\(profile.signatureLine)"
 
-        Their current mission: "\(mission.title)" — \(mission.subtitle)
+        The current mission: "\(mission.title)" — \(mission.subtitle)
         """
     }
 
     /// The voice instructions: persona + how to write one card's "why this is you" note.
     /// Stable across the deck, so it lives in the session's instructions; only the product
     /// varies per call.
-    static func instructions(profile: TasteProfile, mission: ShoppingTask, refinement: RefinementContext? = nil) -> String {
-        """
-        \(Self.persona(profile: profile, mission: mission))\(Self.refinementClause(refinement))
+    static func instructions(profile: TasteProfile, mission: ShoppingTask, refinement: RefinementContext? = nil, recipient: RecipientRef? = nil) -> String {
+        let voiceGuide = recipient.map { rec in
+            "- frames the product as a gift for \(rec.name) and ties it to their taste (you may name \(rec.name) once);"
+        } ?? "- speaks to \"you\" and ties the product to this mission and at least one of their leanings;"
+        return """
+        \(Self.persona(profile: profile, mission: mission, recipient: recipient))\(Self.refinementClause(refinement))
 
-        You write the one-line "why this is you" note shown under a product the user is \
-        considering. Write the rationale so it:
+        You write the one-line "why this is you" note shown under a product being considered. \
+        Write the rationale so it:
         - is ONE or at most TWO short sentences;
-        - speaks to "you" and ties the product to this mission and at least one of their leanings;
+        \(voiceGuide)
         - is specific and honest about THIS product — never invent ratings, reviews, materials, \
         or facts you weren't given;
         - reflects the refinement above when one is present (e.g. lead with value if they asked \
@@ -273,11 +303,12 @@ public struct AppleFoundationCurator: CuratorEngine {
     /// The ranking instructions: persona + how to order the deck for *this* user. Honesty
     /// matters more than novelty — on live products ratings/reviews are absent, so the model
     /// must judge fit from taste and mission, not invent quality signals.
-    static func rankingInstructions(profile: TasteProfile, mission: ShoppingTask, refinement: RefinementContext? = nil) -> String {
-        """
-        \(Self.persona(profile: profile, mission: mission))\(Self.refinementClause(refinement))
+    static func rankingInstructions(profile: TasteProfile, mission: ShoppingTask, refinement: RefinementContext? = nil, recipient: RecipientRef? = nil) -> String {
+        let subject = recipient.map { "\($0.name) (the gift's recipient)" } ?? "THIS user"
+        return """
+        \(Self.persona(profile: profile, mission: mission, recipient: recipient))\(Self.refinementClause(refinement))
 
-        You are ordering a deck of candidate products so the best fit for THIS user and \
+        You are ordering a deck of candidate products so the best fit for \(subject) and the \
         mission comes first. Judge fit from their taste, leanings, budget comfort, the \
         mission — and the refinement above when one is present (order cheaper products first if \
         they asked for cheaper, warmer ones first if warmer, and push anything they asked to \

@@ -16,6 +16,8 @@ enum Route: Hashable {
     case history
     /// A read-only detail of one past mission's kit (the selected ``AppModel/selectedHistoryEntry``).
     case historyDetail
+    /// The roster of people you shop for (the gift feature), reached from the app header.
+    case people
 }
 
 /// One editable row of a generated plan: a human label plus the catalog query that finds it.
@@ -119,13 +121,70 @@ final class AppModel {
     /// own title is the faithful goal.
     private var currentMissionGoal: String?
 
-    /// The aggregate "since you started" stat line for the History header.
-    var historyStats: HistoryStats { HistoryStats(entries: historyEntries) }
+    /// The current per-recipient History filter (the chip row at the top of the timeline). `.all` by
+    /// default; `.yourself` / `.person(id)` narrow the timeline to one person's kits.
+    var historyRecipientFilter: HistoryRecipientFilter = .all
+
+    /// The history entries passing the active recipient filter — what the timeline actually renders.
+    var filteredHistoryEntries: [HistoryEntry] {
+        HistoryFacets.apply(historyRecipientFilter, to: historyEntries)
+    }
+
+    /// The filter chips a history warrants (All · You · each person with a saved gift kit), tinted.
+    var historyFacets: [HistoryRecipientFacet] {
+        HistoryFacets.facets(historyEntries, ownerAccentHex: Self.ownerAccentHex)
+    }
+
+    /// The aggregate "since you started" stat line for the History header — over the **filtered**
+    /// set, so "everything for Mom" gets its own honest totals.
+    var historyStats: HistoryStats { HistoryStats(entries: filteredHistoryEntries) }
 
     /// The user's taste — the single persisted piece of domain state. Read-only to views;
     /// all edits flow through ``updateTaste(_:)`` so every change is persisted *and* re-curates
     /// the live deck.
     private(set) var tasteProfile: TasteProfile
+
+    // MARK: Recipients (the people you shop *for* — the gift feature)
+
+    /// The saved roster of people you shop for, most-recently-added-first. Refreshed from the store
+    /// after every write. "Yourself" is **not** here — it's the owner ``tasteProfile`` (the absence
+    /// of a recipient).
+    private(set) var recipients: [Recipient] = []
+
+    /// The composer's "Who's this for?" selection — the person a *new* mission will be for, or `nil`
+    /// for Yourself. Opt-in per mission and reset to Yourself whenever the composer is returned to,
+    /// so a new mission always defaults to Yourself (zero regression to today's flow).
+    var composerRecipient: Recipient?
+
+    /// The **active** mission's recipient (`nil` = Yourself). Set when a mission is started for
+    /// someone and carried through plan → curate → refine → recap; reset on the next `enterPlan`.
+    /// This is the switch behind ``activeTaste``: the whole curation pipeline reads *their* taste.
+    private(set) var activeRecipient: Recipient?
+
+    /// The taste the *current mission* curates through: the active recipient's when shopping for
+    /// someone, else the owner's. **Every** seam call that used to pass `tasteProfile` now passes
+    /// this, so "become their shopper" is a single source of truth.
+    var activeTaste: TasteProfile { activeRecipient?.taste ?? tasteProfile }
+
+    /// The lean recipient snapshot threaded into the curator + recap as gift context (and stamped
+    /// onto the saved history entry). `nil` for an owner mission.
+    var activeRecipientRef: RecipientRef? { activeRecipient.map(RecipientRef.init) }
+
+    /// The owner's accent for the History "You" facet chip (the app's default pine).
+    static let ownerAccentHex: UInt32 = 0x1C4B43
+
+    /// A small, on-brand earthy palette assigned to new people by add-order, so each person gets a
+    /// distinct tint for their cards/chips (like a mission's accent).
+    static let recipientAccents: [UInt32] = [
+        0x9A6A4F, 0x4F6D7A, 0x7A5C7E, 0x5E7A52, 0xB07D48, 0x55708A, 0x8A6D3B, 0x6E5774,
+    ]
+
+    /// The opt-in "make this part of <whose> taste" copy on the refinement bar — addressed to the
+    /// active recipient during a gift mission, else to the owner.
+    var saveToTasteLabel: String {
+        if let name = activeRecipient?.name { return "Make this part of \(name)'s taste" }
+        return "Make this part of your taste"
+    }
 
     /// `true` while a profile edit is re-ranking and re-voicing the on-screen deck. Drives the
     /// Curate screen's "re-reading your taste" shimmer so the personalization is *felt*.
@@ -218,6 +277,7 @@ final class AppModel {
     private let tasteStore: any TasteStore
     private let recentsStore: any RecentMissionsStore
     private let historyStore: any HistoryStore
+    private let recipientStore: any RecipientStore
     /// Injected wall-clock — used only at save time for an entry's `createdAt` (and the session
     /// entry id). A closure so tests can pin time and keep timeline grouping deterministic; pure
     /// logic never calls `Date()` directly (see [[ios-sim-available-xcode27]] build notes).
@@ -240,6 +300,7 @@ final class AppModel {
         recapWriter: any RecapWriter = RuleBasedRecapWriter(),
         recentsStore: any RecentMissionsStore = InMemoryRecentMissionsStore(),
         historyStore: any HistoryStore = InMemoryHistoryStore(),
+        recipientStore: any RecipientStore = InMemoryRecipientStore(),
         clock: @escaping () -> Date = { Date() }
     ) {
         self.ucp = ucp
@@ -251,6 +312,7 @@ final class AppModel {
         self.recapWriter = recapWriter
         self.recentsStore = recentsStore
         self.historyStore = historyStore
+        self.recipientStore = recipientStore
         self.clock = clock
 
         let stored = tasteStore.loadProfile()
@@ -258,6 +320,7 @@ final class AppModel {
         self.route = stored == nil ? .onboarding : .missions
         self.recentGoals = recentsStore.loadRecents()
         self.historyEntries = historyStore.loadEntries()
+        self.recipients = recipientStore.loadRecipients()
     }
 
     // MARK: Derived
@@ -296,27 +359,30 @@ final class AppModel {
     /// Plans a typed goal in the background (the composer's "Plan it"). Fire-and-forget wrapper
     /// over ``runPlan(goal:)`` so the button stays synchronous; the async core is what tests
     /// drive deterministically.
-    func planMission(goal: String) {
-        Task { await runPlan(goal: goal) }
+    func planMission(goal: String, for recipient: Recipient? = nil) {
+        Task { await runPlan(goal: goal, for: recipient) }
     }
 
     /// Decomposes `goal` via the injected ``MissionPlanner`` and either routes into an editable
     /// Plan (shoppable) or surfaces a friendly decline under the composer (not shoppable). A
     /// shoppable goal is also recorded in recents. Internal (not private) so tests can await it
     /// rather than racing the fire-and-forget `Task`.
-    func runPlan(goal: String) async {
+    func runPlan(goal: String, for recipient: Recipient? = nil) async {
         let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         isPlanning = true
         planDecline = nil
         defer { isPlanning = false }
 
-        let planned = await planner.plan(goal: trimmed, profile: tasteProfile)
+        // The plan itself is curated to the recipient's taste when this is a gift mission, so the
+        // parts the user edits already read as theirs.
+        let profile = recipient?.taste ?? tasteProfile
+        let planned = await planner.plan(goal: trimmed, profile: profile)
         if let task = planned.task {
             recentsStore.addRecent(trimmed)
             recentGoals = recentsStore.loadRecents()
             plannerTier = planned.tier
-            enterPlan(with: task)
+            enterPlan(with: task, recipient: recipient)
             currentMissionGoal = trimmed   // the real goal, for a faithful record + re-plan
         } else {
             planDecline = planned.decline
@@ -326,8 +392,12 @@ final class AppModel {
 
     /// Sets up the Plan screen for `task`: seeds the editable parts, resets the deck, and routes
     /// to Plan **without** searching yet (the search runs on "Curate my kit", after edits).
-    func enterPlan(with task: ShoppingTask) {
+    func enterPlan(with task: ShoppingTask, recipient: Recipient? = nil) {
         selectedTask = task
+        // Who this mission is for — `nil` = Yourself. Set here (not in the composer) so every entry
+        // point (live composer, seed `select`, screenshot, planAgain) resolves the recipient the
+        // same way and the curation pipeline reads `activeTaste` from this single switch.
+        activeRecipient = recipient
         draftParts = Self.draftParts(from: task)
         kit.removeAll()
         candidates = []
@@ -469,6 +539,37 @@ final class AppModel {
             route = .history
         }
     }
+
+    /// Screenshot hook: land on the People roster (the store is seeded with deterministic people —
+    /// or left empty for the "no people yet" state — in `CrumbApp`).
+    func presentPeopleForScreenshot() {
+        route = .people
+    }
+
+    /// Screenshot hook: land on Missions with a seeded recipient chosen in the composer, so the
+    /// "Who's this for?" picker renders with someone selected (`simctl` can't tap a chip).
+    func presentComposerGiftForScreenshot() {
+        composerRecipient = recipients.first
+        route = .missions
+    }
+
+    /// Screenshot hook: deal a **gift** curate deck — seeds `activeRecipient` (so curation reads the
+    /// recipient's taste and the rule-based floor renders gift-framed voice) then deals the deck via
+    /// the same proven path as ``presentCurateForScreenshot(missionID:)`` (which lands directly on
+    /// Curate, never routing through the Plan step).
+    func presentGiftCurateForScreenshot(missionID: String) async {
+        activeRecipient = recipients.first
+        await presentCurateForScreenshot(missionID: missionID)
+    }
+
+    /// Screenshot hook: land on History filtered to the first seeded person, so the "for <name>"
+    /// tags + the per-person filter chip row render headlessly.
+    func presentGiftHistoryForScreenshot() {
+        if let id = historyEntries.compactMap({ $0.recipient?.id }).first {
+            historyRecipientFilter = .person(id)
+        }
+        route = .history
+    }
     #endif
 
     func openCart() {
@@ -479,6 +580,8 @@ final class AppModel {
     }
 
     func goToMissions() {
+        // Returning to the composer resets the picker to Yourself — gifting is opt-in per mission.
+        composerRecipient = nil
         route = .missions
     }
 
@@ -531,12 +634,16 @@ final class AppModel {
         let facts = items.map(RecapFact.init)
         let keptChanged = existing.map { Set($0.items.map(\.productID)) != Set(items.map(\.productID)) } ?? true
 
+        // Snapshot who this kit was for (a gift) — `nil` for an owner kit. Captured at save time so
+        // the entry stays a faithful receipt even if the person is later edited or deleted.
+        let recipientRef = activeRecipientRef
+
         func makeEntry(tag: String, line: String, handedOff: Bool) -> HistoryEntry {
             HistoryEntry(
                 id: id, goal: goal, title: task.title, subtitle: task.subtitle,
                 plan: task.plan, searchQueries: task.searchQueries, curatorNote: task.curatorNote,
                 accentHex: task.accentHex, recapTag: tag, recapLine: line, items: items,
-                handedOff: handedOff, createdAt: createdAt
+                recipient: recipientRef, handedOff: handedOff, createdAt: createdAt
             )
         }
 
@@ -550,7 +657,8 @@ final class AppModel {
             seedLine = existing.recapLine
         } else {
             let floor = RuleBasedRecapWriter.recap(
-                goal: goal, plan: task.plan, items: facts, profile: tasteProfile, reason: nil
+                goal: goal, plan: task.plan, items: facts, profile: activeTaste,
+                recipient: recipientRef, reason: nil
             )
             seedTag = floor.tag
             seedLine = floor.line
@@ -563,7 +671,7 @@ final class AppModel {
         // bail if the session moved on.
         guard keptChanged else { return }
         let written = await recapWriter.writeRecap(
-            goal: goal, plan: task.plan, items: facts, profile: tasteProfile
+            goal: goal, plan: task.plan, items: facts, profile: activeTaste, recipient: recipientRef
         )
         guard currentHistoryEntryID == id, let latest = historyEntries.first(where: { $0.id == id }) else { return }
         historyStore.save(makeEntry(tag: written.tag, line: written.line, handedOff: latest.handedOff))
@@ -607,6 +715,7 @@ final class AppModel {
     func clearHistory() {
         historyStore.clear()
         historyEntries = []
+        historyRecipientFilter = .all
         selectedHistoryEntry = nil
         if route == .historyDetail { route = .history }
     }
@@ -621,7 +730,10 @@ final class AppModel {
     func planAgain(_ entry: HistoryEntry) {
         reshopEntry = nil
         selectedHistoryEntry = nil
-        planMission(goal: entry.goal)
+        // Re-plan for the same person when the kit was a gift and they're still in the roster;
+        // otherwise (owner kit, or a since-deleted person) re-plan for Yourself.
+        let recipient = entry.recipient.flatMap { ref in recipients.first { $0.id == ref.id } }
+        planMission(goal: entry.goal, for: recipient)
     }
 
     /// Steps one level back in the flow.
@@ -633,6 +745,7 @@ final class AppModel {
         case .cart: route = .curate
         case .history: route = .missions
         case .historyDetail: route = .history
+        case .people: route = .missions
         }
     }
 
@@ -673,7 +786,7 @@ final class AppModel {
         isRecurating = true
         defer { isRecurating = false }
 
-        let curated = await curator.curate(candidates, for: tasteProfile, mission: task)
+        let curated = await curator.curate(candidates, for: activeTaste, mission: task, refinement: nil, recipient: activeRecipientRef)
         // The user may have navigated to another mission while we were re-curating.
         guard selectedTask?.id == task.id else { return }
         candidates = curated.products
@@ -704,7 +817,7 @@ final class AppModel {
         defer { isReworking = false }
 
         let interpreted = await refiner.interpret(
-            trimmed, conversation: refinementTurns, mission: task, profile: tasteProfile
+            trimmed, conversation: refinementTurns, mission: task, profile: activeTaste
         )
         refinementTier = interpreted.tier
         refinementDirectives.append(interpreted.directive)
@@ -719,7 +832,7 @@ final class AppModel {
         }
 
         let context = RefinementContext(directive: interpreted.directive, conversation: refinementTurns)
-        let curated = await curator.curate(working, for: tasteProfile, mission: task, refinement: context)
+        let curated = await curator.curate(working, for: activeTaste, mission: task, refinement: context, recipient: activeRecipientRef)
         // The user may have navigated to another mission while we were reworking.
         guard selectedTask?.id == task.id else { return }
         candidates = curated.products
@@ -746,11 +859,19 @@ final class AppModel {
     func saveRefinementToTaste() async {
         guard canSaveRefinementToTaste, !refinementTurns.isEmpty else { return }
         let combined = refinementTurns.joined(separator: ". ")
-        let extracted = await tasteExtractor.extract(from: combined, base: tasteProfile)
-        let updated = extracted ?? Self.fold(refinementDirectives, into: tasteProfile)
-        let normalized = updated.normalized
-        tasteProfile = normalized
-        tasteStore.saveProfile(normalized)
+        // Fold into whichever taste this mission is curating through: the recipient's during a gift
+        // mission (so it sticks next time you shop for them — the owner's profile is untouched), or
+        // the owner's otherwise (exactly today's behavior).
+        let base = activeTaste
+        let extracted = await tasteExtractor.extract(from: combined, base: base)
+        let updated = (extracted ?? Self.fold(refinementDirectives, into: base)).normalized
+
+        if let recipient = activeRecipient {
+            updateRecipientTaste(recipient, updated)
+        } else {
+            tasteProfile = updated
+            tasteStore.saveProfile(updated)
+        }
         canSaveRefinementToTaste = false
     }
 
@@ -793,6 +914,74 @@ final class AppModel {
         await ucp.warmUp()
     }
 
+    // MARK: People — the roster you shop for
+
+    /// Opens the "People you shop for" screen (the header affordance).
+    func openPeople() {
+        route = .people
+    }
+
+    /// Adds a new person to the roster and returns them, so a caller (the composer's "Add someone")
+    /// can immediately select them. A fresh `id`, the next palette accent by add-order, and a
+    /// `createdAt` from the injected clock (deterministic in tests). The taste comes pre-built from
+    /// the editor (free-text parse + hand-tuning), normalized before it's stored.
+    @discardableResult
+    func addRecipient(name: String, relationship: String?, taste: TasteProfile) -> Recipient {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedRel = relationship?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let accent = Self.recipientAccents[recipients.count % Self.recipientAccents.count]
+        let recipient = Recipient(
+            id: UUID().uuidString,
+            name: trimmedName,
+            relationship: (trimmedRel?.isEmpty ?? true) ? nil : trimmedRel,
+            taste: taste.normalized,
+            accentHex: accent,
+            createdAt: clock()
+        )
+        recipientStore.save(recipient)
+        recipients = recipientStore.loadRecipients()
+        return recipient
+    }
+
+    /// Replaces an existing person (the editor's Save), keeping their identity/accent/createdAt.
+    /// Normalizes taste, re-persists, refreshes the roster, and — if they're the active mission's
+    /// recipient — updates the live `activeRecipient` so `activeTaste` reflects the edit at once.
+    func updateRecipient(_ recipient: Recipient) {
+        var updated = recipient
+        updated.taste = recipient.taste.normalized
+        recipientStore.save(updated)
+        recipients = recipientStore.loadRecipients()
+        if activeRecipient?.id == updated.id { activeRecipient = updated }
+        if composerRecipient?.id == updated.id { composerRecipient = updated }
+    }
+
+    /// Folds a new taste into a person's saved profile — the gift-mission "save to taste" target.
+    /// Re-persists and keeps the live `activeRecipient` in sync so the on-screen deck's lens updates.
+    func updateRecipientTaste(_ recipient: Recipient, _ taste: TasteProfile) {
+        var updated = recipient
+        updated.taste = taste.normalized
+        updateRecipient(updated)
+    }
+
+    /// Removes a person from the roster. Clears them from the composer selection and resets a
+    /// History filter that was narrowed to them (so the timeline never dangles on an empty filter).
+    /// The active mission keeps its snapshot recipient — a mid-mission delete shouldn't change the
+    /// deck you're looking at.
+    func deleteRecipient(id: String) {
+        recipientStore.delete(id: id)
+        recipients = recipientStore.loadRecipients()
+        if composerRecipient?.id == id { composerRecipient = nil }
+        if historyRecipientFilter == .person(id) { historyRecipientFilter = .all }
+    }
+
+    /// Parses a free-text description of a person into a ``TasteProfile`` via the injected
+    /// ``TasteExtractor`` (the same seam the owner editor uses). Pure delegation — it never touches
+    /// the owner profile — so the person editor can reuse `DescribeYourselfCard` unchanged. `nil`
+    /// means "no parse" (no model available); the caller keeps the hand-set values.
+    func extractRecipientTaste(from text: String, base: TasteProfile) async -> TasteProfile? {
+        await tasteExtractor.extract(from: text, base: base)
+    }
+
     // MARK: Curation
 
     /// Fans the mission's `searchQueries` out to the catalog **in parallel**, dedupes the
@@ -823,8 +1012,9 @@ final class AppModel {
         }
 
         // `curate` both ranks and rewrites each rationale into Crumb's voice, and reports the
-        // tier it used so the UI can be honest when it fell back from the AI curator.
-        let curated = await curator.curate(union, for: tasteProfile, mission: task)
+        // tier it used so the UI can be honest when it fell back from the AI curator. For a gift
+        // mission this curates to the recipient's taste, with gift-framed voice.
+        let curated = await curator.curate(union, for: activeTaste, mission: task, refinement: nil, recipient: activeRecipientRef)
         guard selectedTask?.id == task.id else { return }
         candidates = curated.products
         deck = curated.products
