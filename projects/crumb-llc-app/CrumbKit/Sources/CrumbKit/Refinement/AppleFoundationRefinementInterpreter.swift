@@ -43,19 +43,15 @@ public struct AppleFoundationRefinementInterpreter: RefinementInterpreter {
             return RuleBasedRefinementInterpreter.interpret(text: trimmed, reason: nil)
         }
 
-        // Tier 1 — Private Cloud Compute (OS 27+), gated for the same entitlement-trap reason as
-        // the curator. `try?` cannot rescue the trap, so the only safe gate is "don't reference
-        // the type unless provisioned."
+        // Tier 1 — Private Cloud Compute, gated behind `CRUMB_PCC_ENABLED` for the entitlement-trap
+        // reason (see the curator): constructing/querying the type without the entitlement traps.
         #if CRUMB_PCC_ENABLED
-        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) {
-            let pcc = PrivateCloudComputeLanguageModel()
-            if case .available = pcc.availability, !pcc.quotaUsage.isLimitReached {
-                let session: MakeSession = { LanguageModelSession(model: pcc, instructions: $0) }
-                if let read = try? await read(trimmed, conversation, mission, profile, session: session, tier: .privateCloud) {
-                    return read
-                }
-                // Interpretation probe failed (offline / transient) — fall through to on-device.
+        let pcc = PrivateCloudComputeLanguageModel()
+        if case .available = pcc.availability, !pcc.quotaUsage.isLimitReached {
+            if let read = try? await read(trimmed, conversation, mission, profile, model: pcc, deepReasoning: true, tier: .privateCloud) {
+                return read
             }
+            // Interpretation probe failed (offline / transient) — fall through to on-device.
         }
         #endif
 
@@ -63,8 +59,7 @@ public struct AppleFoundationRefinementInterpreter: RefinementInterpreter {
         let device = SystemLanguageModel.default
         switch device.availability {
         case .available:
-            let session: MakeSession = { LanguageModelSession(model: device, instructions: $0) }
-            if let read = try? await read(trimmed, conversation, mission, profile, session: session, tier: .onDevice) {
+            if let read = try? await read(trimmed, conversation, mission, profile, model: device, deepReasoning: false, tier: .onDevice) {
                 return read
             }
             return RuleBasedRefinementInterpreter.interpret(text: trimmed, reason: .offlineOrError)
@@ -75,26 +70,48 @@ public struct AppleFoundationRefinementInterpreter: RefinementInterpreter {
 
     // MARK: Read
 
-    private typealias MakeSession = @Sendable (_ instructions: String) -> LanguageModelSession
+    /// Reading a refinement is a structured parse, not a creative task — run it cool.
+    static let temperature = 0.3
 
     /// One guided generation reads the refinement into a ``RefinementDraft``, which the pure
     /// ``directive(from:tier:)`` folds into a clean directive. Throws when the call fails, so the
     /// tier cascade / rule-based fallback in ``interpret(_:conversation:mission:profile:)`` takes
     /// over.
-    private func read(
+    private func read<M: LanguageModel>(
         _ refinement: String,
         _ conversation: [String],
         _ mission: ShoppingTask,
         _ profile: TasteProfile,
-        session makeSession: @escaping MakeSession,
+        model: M,
+        deepReasoning: Bool,
         tier: RefinementTier
     ) async throws -> InterpretedRefinement {
-        let session = makeSession(Self.instructions(profile: profile, mission: mission))
+        let session = Self.refineSession(profile: profile, mission: mission, model: model, deepReasoning: deepReasoning)
         let response = try await session.respond(
             to: Self.prompt(for: refinement, conversation: conversation),
             generating: RefinementDraft.self
         )
         return Self.directive(from: response.content, tier: tier)
+    }
+
+    /// Builds the interpretation session: ``RefinerInstructions`` in a profile that declares the
+    /// parse tuning + context policy. Reasoning is applied only on the deep-reasoning (PCC) tier —
+    /// the on-device model rejects `.reasoningLevel`.
+    static func refineSession<M: LanguageModel>(
+        profile: TasteProfile,
+        mission: ShoppingTask,
+        model: M,
+        deepReasoning: Bool
+    ) -> LanguageModelSession {
+        let base = LanguageModelSession.Profile { RefinerInstructions(profile: profile, mission: mission) }
+            .model(model)
+            .temperature(temperature)
+            .historyTransform { CrumbContext.trimmed($0) }
+            .transcriptErrorHandlingPolicy(.revertTranscript)
+        if deepReasoning {
+            return LanguageModelSession(profile: base.reasoningLevel(.deep))
+        }
+        return LanguageModelSession(profile: base)
     }
 
     // MARK: Reconcile (pure — the unit-tested guarantee behind the model call)
@@ -122,36 +139,6 @@ public struct AppleFoundationRefinementInterpreter: RefinementInterpreter {
     }
 
     // MARK: Prompt construction
-
-    /// The interpreter persona + this user's taste + the mission, so the read leans toward what
-    /// they'd actually want. Stable across the single call, so it lives in the instructions.
-    static func instructions(profile: TasteProfile, mission: ShoppingTask) -> String {
-        """
-        You are Crumb, a personal shopping curator with a warm, plainspoken, slightly literary \
-        voice. The user is looking at a curated deck of products for a mission and is telling you \
-        how to change it. Read their request into a structured refinement.
-
-        The user's taste:
-        - Vibe: \(profile.vibe.joined(separator: ", "))
-        - Leanings: \(profile.leanings.joined(separator: "; "))
-        - In their words: "\(profile.signatureLine)"
-
-        Their mission: "\(mission.title)" — \(mission.subtitle)
-
-        Fill the refinement like this:
-        - emphasis: a short note for how to re-rank and re-voice the EXISTING products (tone, \
-        material, style, "fewer/stronger"). Empty if they only asked about price or to add/remove \
-        a specific thing.
-        - priceDirection: "cheaper", "pricier", or "none".
-        - addQueries: ONLY when they ask for something that likely isn't in the deck yet (e.g. \
-        "add rain pants" → ["rain pants"]). A few plain keywords each, no punctuation. Empty \
-        otherwise — most refinements re-shape the existing deck and need no new search.
-        - removeHints: keywords for things they want gone or de-emphasized (e.g. "no synthetic" \
-        → ["synthetic"]). Empty otherwise.
-
-        Never invent constraints they didn't ask for. Keep everything short.
-        """
-    }
 
     /// The prompt carries the running conversation so stacked refinements compose ("cheaper" then
     /// "but keep the kettle" reads as both), with the latest line called out as the active ask.
@@ -181,6 +168,38 @@ public struct AppleFoundationRefinementInterpreter: RefinementInterpreter {
         @unknown default: return .offlineOrError
         }
     }
+}
+
+/// The refinement-interpreter instructions: the shared Crumb persona + the read-a-refinement role +
+/// this user's taste + the mission + how to fill the structured directive. The dynamic-session
+/// replacement for the interpreter's old hand-built instruction string.
+struct RefinerInstructions: DynamicInstructions {
+    let profile: TasteProfile
+    let mission: ShoppingTask
+
+    var body: some DynamicInstructions {
+        CrumbPersona(recipient: nil)
+        Instructions("The user is looking at a curated deck of products for a mission and is telling you how to change it. Read their request into a structured refinement.")
+        TasteBlock(profile: profile, recipient: nil, includeBudget: false)
+        MissionBlock(mission: mission)
+        Instructions(Self.guide)
+    }
+
+    /// How to fill the structured refinement. Pure — unit-tested.
+    static let guide = """
+        Fill the refinement like this:
+        - emphasis: a short note for how to re-rank and re-voice the EXISTING products (tone, \
+        material, style, "fewer/stronger"). Empty if they only asked about price or to add/remove \
+        a specific thing.
+        - priceDirection: "cheaper", "pricier", or "none".
+        - addQueries: ONLY when they ask for something that likely isn't in the deck yet (e.g. \
+        "add rain pants" → ["rain pants"]). A few plain keywords each, no punctuation. Empty \
+        otherwise — most refinements re-shape the existing deck and need no new search.
+        - removeHints: keywords for things they want gone or de-emphasized (e.g. "no synthetic" \
+        → ["synthetic"]). Empty otherwise.
+
+        Never invent constraints they didn't ask for. Keep everything short.
+        """
 }
 
 /// The structured output of a refinement call. Guided generation keeps the model returning a

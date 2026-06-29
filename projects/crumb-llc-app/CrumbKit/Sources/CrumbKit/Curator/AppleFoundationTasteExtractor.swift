@@ -27,47 +27,64 @@ public struct AppleFoundationTasteExtractor: TasteExtractor {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        // Tier 1 — Private Cloud Compute (OS 27+), gated for the same entitlement-trap reason
-        // as the curator. `try?` cannot rescue the trap, so the only safe gate is "don't
-        // reference the type unless provisioned."
+        // Tier 1 — Private Cloud Compute, gated behind `CRUMB_PCC_ENABLED` for the entitlement-trap
+        // reason (see the curator): constructing/querying the type without the entitlement traps.
         #if CRUMB_PCC_ENABLED
-        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) {
-            let pcc = PrivateCloudComputeLanguageModel()
-            if case .available = pcc.availability, !pcc.quotaUsage.isLimitReached {
-                let session: MakeSession = { LanguageModelSession(model: pcc, instructions: $0) }
-                if let parsed = try? await parse(trimmed, base: base, session: session) {
-                    return parsed
-                }
-                // Parse failed (offline / transient) — fall through to on-device.
+        let pcc = PrivateCloudComputeLanguageModel()
+        if case .available = pcc.availability, !pcc.quotaUsage.isLimitReached {
+            if let parsed = try? await parse(trimmed, base: base, model: pcc, deepReasoning: true) {
+                return parsed
             }
+            // Parse failed (offline / transient) — fall through to on-device.
         }
         #endif
 
         // Tier 2 — on-device.
         let device = SystemLanguageModel.default
         guard case .available = device.availability else { return nil }
-        let session: MakeSession = { LanguageModelSession(model: device, instructions: $0) }
-        return try? await parse(trimmed, base: base, session: session)
+        return try? await parse(trimmed, base: base, model: device, deepReasoning: false)
     }
 
     // MARK: Parse
 
-    private typealias MakeSession = @Sendable (_ instructions: String) -> LanguageModelSession
+    /// Distilling a description into a structured profile is a faithful extraction, not a creative
+    /// task — run it cool.
+    static let temperature = 0.3
+    /// A comfortable response bound (the parsed profile is a handful of chips + a number + a line),
+    /// declared on the session's `Profile` for context safety.
+    static let maxResponseTokens = 512
 
     /// One guided generation reads the description into ``ExtractedTaste``, which we then
     /// reconcile against `base`. Throws when the call fails, so the tier cascade / `nil`
     /// fallback in ``extract(from:base:)`` takes over.
-    private func parse(
+    private func parse<M: LanguageModel>(
         _ text: String,
         base: TasteProfile,
-        session makeSession: @escaping MakeSession
+        model: M,
+        deepReasoning: Bool
     ) async throws -> TasteProfile {
-        let session = makeSession(Self.instructions)
+        let session = Self.extractSession(model: model, deepReasoning: deepReasoning)
         let response = try await session.respond(
             to: Self.prompt(for: text),
             generating: ExtractedTaste.self
         )
         return Self.merge(response.content, into: base)
+    }
+
+    /// Builds the extraction session: ``ExtractorInstructions`` in a profile that declares the
+    /// parse tuning + context policy. Reasoning is applied only on the deep-reasoning (PCC) tier —
+    /// the on-device model rejects `.reasoningLevel`.
+    static func extractSession<M: LanguageModel>(model: M, deepReasoning: Bool) -> LanguageModelSession {
+        let base = LanguageModelSession.Profile { ExtractorInstructions() }
+            .model(model)
+            .temperature(temperature)
+            .maximumResponseTokens(maxResponseTokens)
+            .historyTransform { CrumbContext.trimmed($0) }
+            .transcriptErrorHandlingPolicy(.revertTranscript)
+        if deepReasoning {
+            return LanguageModelSession(profile: base.reasoningLevel(.deep))
+        }
+        return LanguageModelSession(profile: base)
     }
 
     /// Folds the model's reading onto `base`: empty fields keep the base value, budget is
@@ -104,15 +121,6 @@ public struct AppleFoundationTasteExtractor: TasteExtractor {
 
     // MARK: Prompt construction
 
-    static let instructions = """
-        You read a person's short description of their shopping taste and distill it into a \
-        structured profile. Be faithful — extract only what they actually say or clearly \
-        imply; do not invent preferences they didn't express. Keep each vibe and leaning to \
-        a few words. For budget comfort, map their words to 0.0 (very thrifty) through 1.0 \
-        (happy to splurge), defaulting near 0.5 when they don't say. Write the signature line \
-        in their own spirit, one short sentence, no quotes.
-        """
-
     static func prompt(for text: String) -> String {
         """
         Here is how the user describes their taste:
@@ -122,6 +130,26 @@ public struct AppleFoundationTasteExtractor: TasteExtractor {
         comfort from 0 to 1, and a one-line signature that captures their philosophy.
         """
     }
+}
+
+/// The taste-extractor instructions. Unlike the other seams these carry no runtime state — the
+/// description being parsed lives in the *prompt*, not the instructions — so the block is a single
+/// fixed leaf. The dynamic-session win here is the `Profile` (tuning + context policy); the value of
+/// the block form is consistency with the other five seams.
+struct ExtractorInstructions: DynamicInstructions {
+    var body: some DynamicInstructions {
+        Instructions(Self.text)
+    }
+
+    /// The extraction guidance. Pure — unit-tested.
+    static let text = """
+        You read a person's short description of their shopping taste and distill it into a \
+        structured profile. Be faithful — extract only what they actually say or clearly \
+        imply; do not invent preferences they didn't express. Keep each vibe and leaning to \
+        a few words. For budget comfort, map their words to 0.0 (very thrifty) through 1.0 \
+        (happy to splurge), defaulting near 0.5 when they don't say. Write the signature line \
+        in their own spirit, one short sentence, no quotes.
+        """
 }
 
 /// The structured output of a taste parse. Guided generation keeps the model returning clean

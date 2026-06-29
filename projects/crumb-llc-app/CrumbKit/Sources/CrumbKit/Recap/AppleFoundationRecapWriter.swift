@@ -39,19 +39,15 @@ public struct AppleFoundationRecapWriter: RecapWriter {
             return RuleBasedRecapWriter.recap(goal: goal, plan: plan, items: items, profile: profile, recipient: recipient, reason: nil)
         }
 
-        // Tier 1 — Private Cloud Compute (OS 27+), gated for the same entitlement-trap reason as the
-        // curator. `try?` cannot rescue the trap, so the only safe gate is "don't reference the type
-        // unless provisioned."
+        // Tier 1 — Private Cloud Compute, gated behind `CRUMB_PCC_ENABLED` for the entitlement-trap
+        // reason (see the curator): constructing/querying the type without the entitlement traps.
         #if CRUMB_PCC_ENABLED
-        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) {
-            let pcc = PrivateCloudComputeLanguageModel()
-            if case .available = pcc.availability, !pcc.quotaUsage.isLimitReached {
-                let session: MakeSession = { LanguageModelSession(model: pcc, instructions: $0) }
-                if let written = try? await compose(goal, plan, items, profile, recipient, session: session, tier: .privateCloud) {
-                    return written
-                }
-                // Writing probe failed (offline / transient) — fall through to on-device.
+        let pcc = PrivateCloudComputeLanguageModel()
+        if case .available = pcc.availability, !pcc.quotaUsage.isLimitReached {
+            if let written = try? await compose(goal, plan, items, profile, recipient, model: pcc, deepReasoning: true, tier: .privateCloud) {
+                return written
             }
+            // Writing probe failed (offline / transient) — fall through to on-device.
         }
         #endif
 
@@ -59,8 +55,7 @@ public struct AppleFoundationRecapWriter: RecapWriter {
         let device = SystemLanguageModel.default
         switch device.availability {
         case .available:
-            let session: MakeSession = { LanguageModelSession(model: device, instructions: $0) }
-            if let written = try? await compose(goal, plan, items, profile, recipient, session: session, tier: .onDevice) {
+            if let written = try? await compose(goal, plan, items, profile, recipient, model: device, deepReasoning: false, tier: .onDevice) {
                 return written
             }
             return RuleBasedRecapWriter.recap(goal: goal, plan: plan, items: items, profile: profile, recipient: recipient, reason: .offlineOrError)
@@ -71,26 +66,51 @@ public struct AppleFoundationRecapWriter: RecapWriter {
 
     // MARK: Compose
 
-    private typealias MakeSession = @Sendable (_ instructions: String) -> LanguageModelSession
+    /// A warm, creative one-liner wants a touch more temperature than the structured seams.
+    static let temperature = 0.7
+    /// The recap is a short tag + line; a comfortable bound declared on the session's `Profile`.
+    static let maxResponseTokens = 256
 
     /// One guided generation reads the kit into a ``RecapDraft``, which the pure
     /// ``recap(from:goal:items:profile:tier:)`` folds into a clean ``WrittenRecap``. Throws when the
     /// call fails, so the tier cascade / rule-based fallback in ``writeRecap`` takes over.
-    private func compose(
+    private func compose<M: LanguageModel>(
         _ goal: String,
         _ plan: [String],
         _ items: [RecapFact],
         _ profile: TasteProfile,
         _ recipient: RecipientRef?,
-        session makeSession: @escaping MakeSession,
+        model: M,
+        deepReasoning: Bool,
         tier: RecapTier
     ) async throws -> WrittenRecap {
-        let session = makeSession(Self.instructions(profile: profile, recipient: recipient))
+        let session = Self.recapSession(profile: profile, recipient: recipient, model: model, deepReasoning: deepReasoning)
         let response = try await session.respond(
             to: Self.prompt(goal: goal, plan: plan, items: items, recipient: recipient),
             generating: RecapDraft.self
         )
         return Self.recap(from: response.content, goal: goal, plan: plan, items: items, profile: profile, recipient: recipient, tier: tier)
+    }
+
+    /// Builds the recap session: ``RecapInstructions`` in a profile that declares the recap tuning +
+    /// context policy. Reasoning is applied only on the deep-reasoning (PCC) tier — the on-device
+    /// model rejects `.reasoningLevel`.
+    static func recapSession<M: LanguageModel>(
+        profile: TasteProfile,
+        recipient: RecipientRef?,
+        model: M,
+        deepReasoning: Bool
+    ) -> LanguageModelSession {
+        let base = LanguageModelSession.Profile { RecapInstructions(profile: profile, recipient: recipient) }
+            .model(model)
+            .temperature(temperature)
+            .maximumResponseTokens(maxResponseTokens)
+            .historyTransform { CrumbContext.trimmed($0) }
+            .transcriptErrorHandlingPolicy(.revertTranscript)
+        if deepReasoning {
+            return LanguageModelSession(profile: base.reasoningLevel(.deep))
+        }
+        return LanguageModelSession(profile: base)
     }
 
     // MARK: Reconcile (pure — the unit-tested guarantee behind the model call)
@@ -136,39 +156,6 @@ public struct AppleFoundationRecapWriter: RecapWriter {
 
     // MARK: Prompt construction
 
-    /// The writer persona + this user's taste, so the recap sounds like Crumb addressing them. Used
-    /// as the session's instructions (stable across the single call).
-    static func instructions(profile: TasteProfile, recipient: RecipientRef? = nil) -> String {
-        let context: String
-        let lineGuide: String
-        if let recipient {
-            let who = recipient.trimmedRelationship.map { "\(recipient.name), \($0)" } ?? recipient.name
-            context = """
-            You are writing a one-line memory of a gift kit someone just assembled for \(who), \
-            curated to \(recipient.name)'s taste:
-            """
-            lineGuide = "one short line in your voice that captures the gift — acknowledge it's for \(recipient.name), grounded in what was actually kept, never inventing specifics"
-        } else {
-            context = """
-            You are writing a one-line memory of a kit a person just put together, for their \
-            history — something they'll enjoy seeing again later.
-
-            The user's taste:
-            """
-            lineGuide = "one short line in your voice that captures the feeling of the kit — grounded in what they actually kept, never inventing specifics"
-        }
-        return """
-        You are Crumb, a personal shopping curator with a warm, plainspoken, slightly literary \
-        voice. \(context)
-        - Vibe: \(profile.vibe.joined(separator: ", "))
-        - Leanings: \(profile.leanings.joined(separator: "; "))
-        - In their words: "\(profile.signatureLine)"
-
-        Write a short 2 to 4 word tag naming the kit (like "Rainy-hike kit" or "Pour-over corner") \
-        and \(lineGuide). No emoji, no exclamation marks, no quotes.
-        """
-    }
-
     static func prompt(goal: String, plan: [String], items: [RecapFact], recipient: RecipientRef? = nil) -> String {
         let kept = items
             .map { "- \($0.name) (\($0.shop))" }
@@ -200,6 +187,40 @@ public struct AppleFoundationRecapWriter: RecapWriter {
         case .modelNotReady: return .modelNotReady
         @unknown default: return .offlineOrError
         }
+    }
+}
+
+/// The recap-writer instructions: the shared Crumb persona + a gift-aware "writing a memory" context
+/// + this user's (or the recipient's) taste + how to write the tag + line. The dynamic-session
+/// replacement for the writer's old hand-built instruction string.
+struct RecapInstructions: DynamicInstructions {
+    let profile: TasteProfile
+    let recipient: RecipientRef?
+
+    var body: some DynamicInstructions {
+        CrumbPersona(recipient: nil)
+        Instructions(Self.context(recipient: recipient))
+        TasteBlock(profile: profile, recipient: recipient, includeBudget: false)
+        Instructions(Self.writeGuide(recipient: recipient))
+    }
+
+    /// The "what you're writing" framing, gift-aware. Pure — unit-tested.
+    static func context(recipient: RecipientRef?) -> String {
+        guard let recipient else {
+            return "You are writing a one-line memory of a kit a person just put together, for "
+                + "their history — something they'll enjoy seeing again later."
+        }
+        let who = recipient.trimmedRelationship.map { "\(recipient.name), \($0)" } ?? recipient.name
+        return "You are writing a one-line memory of a gift kit someone just assembled for \(who)."
+    }
+
+    /// The tag + line guidance, gift-aware. Pure — unit-tested.
+    static func writeGuide(recipient: RecipientRef?) -> String {
+        let lineGuide = recipient.map { rec in
+            "one short line in your voice that captures the gift — acknowledge it's for \(rec.name), grounded in what was actually kept, never inventing specifics"
+        } ?? "one short line in your voice that captures the feeling of the kit — grounded in what they actually kept, never inventing specifics"
+        return "Write a short 2 to 4 word tag naming the kit (like \"Rainy-hike kit\" or "
+            + "\"Pour-over corner\") and \(lineGuide). No emoji, no exclamation marks, no quotes."
     }
 }
 
