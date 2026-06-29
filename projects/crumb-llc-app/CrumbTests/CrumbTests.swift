@@ -407,6 +407,214 @@ struct CrumbTests {
         vibe: [], leanings: [], budgetComfort: 0.9, signatureLine: ""
     )
 
+    // MARK: - History
+
+    @Test("Reaching the cart with a kit writes a snapshotted history entry (recap on the floor)")
+    @MainActor
+    func reachingCartWritesHistory() async throws {
+        let store = InMemoryHistoryStore()
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            historyStore: store
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        model.accept(try #require(model.deck.first))
+
+        await model.recordCurrentKit()                 // the openCart write path
+
+        #expect(model.historyEntries.count == 1)
+        let entry = try #require(model.historyEntries.first)
+        #expect(entry.items.count == 1)
+        #expect(entry.title == SeedData.hike.title)
+        #expect(!entry.recapTag.isEmpty)               // recap written (rule-based on CI)
+        #expect(!entry.recapLine.isEmpty)
+        #expect(!entry.handedOff)                       // not yet handed off
+        #expect(store.loadEntries().count == 1)         // persisted to the store
+    }
+
+    @Test("An abandoned plan with nothing kept records no history")
+    @MainActor
+    func emptyKitWritesNothing() async {
+        let store = InMemoryHistoryStore()
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            historyStore: store
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+
+        await model.recordCurrentKit()                 // no items kept
+
+        #expect(model.historyEntries.isEmpty)
+        #expect(store.loadEntries().isEmpty)
+    }
+
+    @Test("Re-reaching the cart in one session updates the same entry, not a duplicate")
+    @MainActor
+    func reReachingCartUpdatesSameEntry() async throws {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        model.accept(try #require(model.deck.first))
+        await model.recordCurrentKit()
+        let firstID = try #require(model.historyEntries.first).id
+
+        model.accept(try #require(model.deck.first))   // keep one more, same session
+        await model.recordCurrentKit()
+
+        #expect(model.historyEntries.count == 1)       // upsert, not a new entry
+        #expect(model.historyEntries.first?.id == firstID)
+        #expect(model.historyEntries.first?.items.count == 2)
+    }
+
+    @Test("Building a kit for the same goal in a new session makes a second, distinct entry")
+    @MainActor
+    func newSessionMakesNewEntry() async throws {
+        var clockValue = Date(timeIntervalSinceReferenceDate: 1_000)
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            clock: { clockValue }
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        model.accept(try #require(model.deck.first))
+        await model.recordCurrentKit()
+
+        clockValue = clockValue.addingTimeInterval(60)  // a later, distinct session
+        model.enterPlan(with: SeedData.hike)            // same goal, new session
+        await model.loadCandidates(for: SeedData.hike)
+        model.accept(try #require(model.deck.first))
+        await model.recordCurrentKit()
+
+        #expect(model.historyEntries.count == 2)        // two distinct shopping sessions
+    }
+
+    @Test("Following a real checkout link flips this session's outcome flag (and persists it)")
+    @MainActor
+    func handoffFollowedFlipsOutcome() async throws {
+        let store = InMemoryHistoryStore()
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            historyStore: store
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        model.accept(try #require(model.deck.first))
+        await model.recordCurrentKit()
+        #expect(model.historyEntries.first?.handedOff == false)
+
+        model.recordHandoffFollowed()
+
+        #expect(model.historyEntries.first?.handedOff == true)
+        #expect(store.loadEntries().first?.handedOff == true)
+    }
+
+    @Test("Delete removes one entry; clear empties the whole history")
+    @MainActor
+    func deleteAndClearHistory() async throws {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
+        )
+        for mission in [SeedData.hike, SeedData.coffee] {
+            model.enterPlan(with: mission)
+            await model.loadCandidates(for: mission)
+            model.accept(try #require(model.deck.first))
+            await model.recordCurrentKit()
+        }
+        #expect(model.historyEntries.count == 2)
+
+        model.deleteHistoryEntry(try #require(model.historyEntries.first))
+        #expect(model.historyEntries.count == 1)
+
+        model.clearHistory()
+        #expect(model.historyEntries.isEmpty)
+    }
+
+    @Test("Plan-this-again re-plans the goal into an editable plan and clears the detail state")
+    @MainActor
+    func planAgainReplansGoal() async {
+        let seeded = SeedData.historyEntries(now: Date())
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            historyStore: InMemoryHistoryStore(seeded)
+        )
+        let entry = model.historyEntries.first!
+        model.openHistoryDetail(entry)
+        model.beginReshop(entry)
+        model.planAgain(entry)                          // clears overlay state synchronously
+
+        #expect(model.reshopEntry == nil)
+        #expect(model.selectedHistoryEntry == nil)
+
+        // The substance of "plan again": routing the goal back through the planner yields a plan.
+        await model.runPlan(goal: entry.goal)
+        #expect(model.route == .plan)
+        #expect(model.selectedTask != nil)
+    }
+
+    @Test("Aggregate history stats are exposed for the timeline header")
+    @MainActor
+    func historyStatsExposed() {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            historyStore: InMemoryHistoryStore(SeedData.historyEntries(now: Date()))
+        )
+        #expect(model.historyStats.kitCount == 5)       // the five seeded missions
+        #expect(model.historyStats.isMilestone)         // 5 is a milestone
+        #expect(model.historyStats.itemCount > 0)
+        #expect(model.historyStats.shopCount > 0)
+    }
+
+    @Test("Re-reaching the cart with an unchanged kit does not regenerate the recap (no jitter)")
+    @MainActor
+    func recapStableOnUnchangedReReach() async throws {
+        let writer = CountingRecapWriter()                // a fresh tag/line every call
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            recapWriter: writer
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        model.accept(try #require(model.deck.first))
+        await model.recordCurrentKit()
+        let firstLine = try #require(model.historyEntries.first).recapLine
+        let callsAfterFirst = writer.calls
+
+        await model.recordCurrentKit()                    // same kit, re-reach
+
+        #expect(model.historyEntries.first?.recapLine == firstLine) // recap unchanged
+        #expect(writer.calls == callsAfterFirst)                    // writer not called again
+    }
+
+    @Test("A saved entry keeps the user's original goal text, not the title-cased task title")
+    @MainActor
+    func savedGoalIsTheOriginalText() async throws {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
+        )
+        await model.runPlan(goal: "pack me for a rainy weekend hike")  // composer path
+        await model.beginCuration()
+        model.accept(try #require(model.deck.first))
+        await model.recordCurrentKit()
+
+        let entry = try #require(model.historyEntries.first)
+        #expect(entry.goal == "pack me for a rainy weekend hike")      // verbatim, for plan-again
+        #expect(entry.title != entry.goal)                             // title is the cased derivation
+    }
+
     // MARK: - Fixtures
 
     private static func fakeProduct(_ id: String) -> Product {
@@ -463,6 +671,21 @@ private struct ScriptedRefiner: RefinementInterpreter {
         profile: TasteProfile
     ) async -> InterpretedRefinement {
         InterpretedRefinement(directive: directive, tier: .onDevice)
+    }
+}
+
+/// A ``RecapWriter`` that returns a *distinct* tag/line on every call, so a test can prove the
+/// app reuses a stored recap (rather than regenerating it) when a kit is unchanged on cart re-reach.
+@MainActor
+private final class CountingRecapWriter: RecapWriter {
+    private(set) var calls = 0
+    nonisolated func writeRecap(
+        goal: String, plan: [String], items: [RecapFact], profile: TasteProfile
+    ) async -> WrittenRecap {
+        await MainActor.run {
+            calls += 1
+            return WrittenRecap(tag: "Tag \(calls)", line: "Line \(calls)", tier: .onDevice)
+        }
     }
 }
 

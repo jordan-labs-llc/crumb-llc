@@ -50,6 +50,9 @@ struct CheckoutHandoffView: View {
 
                 if let url = handoff.url {
                     Button {
+                        // Opening a real checkout link is the honest "handed off" signal — flip
+                        // this session's history entry's outcome flag (a no-link handoff doesn't).
+                        model.recordHandoffFollowed()
                         openURL(url)
                     } label: {
                         HStack {

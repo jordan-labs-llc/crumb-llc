@@ -44,6 +44,9 @@ struct RootView: View {
                 // Deal a deck then run a canned refinement so the reworked deck + bar render.
                 let refinement = env["CRUMB_REFINE"] ?? "make it cheaper"
                 await model.presentRefinedDeckForScreenshot(missionID: mission, refinement: refinement)
+            // History: the store is seeded (or left empty for `history-empty`) in `CrumbApp`.
+            case "history", "history-empty": model.presentHistoryForScreenshot()
+            case "history-detail": model.presentHistoryDetailForScreenshot()
             // "composer" (and anything else) lands on Missions; the composer pre-fills its
             // field from `CRUMB_GOAL` since `simctl` can't inject keystrokes.
             default: break
@@ -58,6 +61,10 @@ struct RootView: View {
             CheckoutHandoffView(handoff: handoff)
                 .crumbCompactSheet()
         }
+        .sheet(item: $model.reshopEntry) { entry in
+            HistoryReshopView(entry: entry)
+                .crumbCompactSheet()
+        }
     }
 
     @ViewBuilder
@@ -68,6 +75,8 @@ struct RootView: View {
         case .plan: PlanView()
         case .curate: CurateView()
         case .cart: CartView()
+        case .history: HistoryView()
+        case .historyDetail: HistoryDetailView()
         }
     }
 
@@ -109,6 +118,21 @@ struct AppHeader: View {
             }
 
             Spacer()
+
+            // History — the record of past missions. Hidden while already in History (you're there).
+            if model.route != .history && model.route != .historyDetail {
+                Button {
+                    model.openHistory()
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.title3)
+                        .foregroundStyle(CrumbColor.ink2)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Your mission history")
+                .accessibilityIdentifier("historyButton")
+                .transition(.opacity)
+            }
 
             Button {
                 model.isShowingTasteProfile = true
