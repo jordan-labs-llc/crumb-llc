@@ -40,6 +40,7 @@ struct CrumbApp: App {
             tasteStore: Self.makeTasteStore(),
             tasteExtractor: AppleFoundationTasteExtractor(),
             planner: AppleFoundationMissionPlanner(),
+            refiner: AppleFoundationRefinementInterpreter(),
             recentsStore: Self.makeRecentsStore()
         )
         // Make the app model available to App Intents (`@Dependency`).

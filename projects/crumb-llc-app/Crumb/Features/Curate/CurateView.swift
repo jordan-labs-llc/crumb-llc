@@ -17,10 +17,12 @@ struct CurateView: View {
 
     var body: some View {
         VStack(spacing: CrumbMetrics.Space.l) {
-            if model.isRecurating {
-                recuratingBanner
+            if model.isReworking {
+                activityBanner("Reworking the deck…", id: "reworkingBanner")
+            } else if model.isRecurating {
+                activityBanner("Re-reading your taste…", id: "recuratingBanner")
             }
-            if let note = model.curatorFallbackNote {
+            if let note = model.refinementFallbackNote ?? model.curatorFallbackNote {
                 fallbackNote(note)
             }
             if model.deck.isEmpty {
@@ -33,6 +35,12 @@ struct CurateView: View {
         .padding(.horizontal, CrumbMetrics.Space.xl)
         .padding(.top, CrumbMetrics.Space.m)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The refinement bar sits ABOVE the KitTray: it's the inner bottom inset (applied first),
+        // so the later KitTray inset reserves the very bottom and the bar stacks just above it.
+        .safeAreaInset(edge: .bottom) {
+            RefinementBar()
+                .padding(.bottom, CrumbMetrics.Space.s)
+        }
         .safeAreaInset(edge: .bottom) {
             KitTray(items: model.kit) { model.openCart() }
                 .padding(.horizontal, CrumbMetrics.Space.l)
@@ -184,12 +192,13 @@ struct CurateView: View {
         .accessibilityIdentifier(accept ? "addButton" : "skipButton")
     }
 
-    /// A quiet banner shown while a taste edit re-ranks and re-voices the on-screen deck, so
-    /// the personalization reads as a live response to the change the user just made.
-    private var recuratingBanner: some View {
+    /// A quiet shimmer banner shown while the deck is being re-worked live — by a taste edit
+    /// ("Re-reading your taste…") or a conversational refinement ("Reworking the deck…") — so the
+    /// change reads as a response to what the user just did. Shared by both states.
+    private func activityBanner(_ message: String, id: String) -> some View {
         HStack(spacing: CrumbMetrics.Space.s) {
             ProgressView().controlSize(.small)
-            Text("Re-reading your taste…")
+            Text(message)
                 .font(CrumbType.caption)
                 .foregroundStyle(CrumbColor.ink2)
             Spacer(minLength: 0)
@@ -197,8 +206,8 @@ struct CurateView: View {
         .padding(CrumbMetrics.Space.m)
         .background(CrumbColor.pineSoft, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Re-reading your taste")
-        .accessibilityIdentifier("recuratingBanner")
+        .accessibilityLabel(message)
+        .accessibilityIdentifier(id)
     }
 
     // MARK: Curator fallback note

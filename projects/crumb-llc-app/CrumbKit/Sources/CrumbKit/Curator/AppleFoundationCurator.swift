@@ -60,7 +60,8 @@ public struct AppleFoundationCurator: CuratorEngine {
     public func curate(
         _ products: [Product],
         for profile: TasteProfile,
-        mission: ShoppingTask
+        mission: ShoppingTask,
+        refinement: RefinementContext?
     ) async -> CuratedDeck {
         // The deterministic order: the input we hand the model, the order of the
         // reconciliation tail, and the whole-deck fallback when no tier ranks.
@@ -78,7 +79,7 @@ public struct AppleFoundationCurator: CuratorEngine {
             let pcc = PrivateCloudComputeLanguageModel()
             if case .available = pcc.availability, !pcc.quotaUsage.isLimitReached {
                 let session: MakeSession = { LanguageModelSession(model: pcc, instructions: $0) }
-                if let voiced = try? await rankAndVoice(baseline, profile, mission, session: session) {
+                if let voiced = try? await rankAndVoice(baseline, profile, mission, refinement, session: session) {
                     return CuratedDeck(products: voiced, tier: .privateCloud)
                 }
                 // Ranking probe failed (offline / transient) — fall through to on-device.
@@ -92,12 +93,12 @@ public struct AppleFoundationCurator: CuratorEngine {
         switch device.availability {
         case .available:
             let session: MakeSession = { LanguageModelSession(model: device, instructions: $0) }
-            if let voiced = try? await rankAndVoice(baseline, profile, mission, session: session) {
+            if let voiced = try? await rankAndVoice(baseline, profile, mission, refinement, session: session) {
                 return CuratedDeck(products: voiced, tier: .onDevice)
             }
-            return fallback(baseline, profile, reason: .offlineOrError)
+            return fallback(baseline, profile, refinement, reason: .offlineOrError)
         case let .unavailable(reason):
-            return fallback(baseline, profile, reason: Self.map(reason))
+            return fallback(baseline, profile, refinement, reason: Self.map(reason))
         }
     }
 
@@ -109,14 +110,18 @@ public struct AppleFoundationCurator: CuratorEngine {
 
     /// The tier's whole job: model-rank the deck (the **probe** — throws if the tier is
     /// unusable, so the caller cascades), then voice every card best-effort over that order.
+    /// `refinement`, when present, threads the user's "make it cheaper / warmer / …" ask plus the
+    /// running conversation into both the ranking and the voice instructions, so the model honors
+    /// it holistically rather than us post-processing its order.
     private func rankAndVoice(
         _ baseline: [Product],
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
+        _ refinement: RefinementContext?,
         session makeSession: @escaping MakeSession
     ) async throws -> [Product] {
-        let ordered = try await modelRankedOrder(baseline, profile, mission, session: makeSession)
-        return await voiceAll(ordered, profile, mission, session: makeSession)
+        let ordered = try await modelRankedOrder(baseline, profile, mission, refinement, session: makeSession)
+        return await voiceAll(ordered, profile, mission, refinement, session: makeSession)
     }
 
     /// One guided call asks the model to order the deck best-fit-first; the returned IDs are
@@ -128,12 +133,13 @@ public struct AppleFoundationCurator: CuratorEngine {
         _ baseline: [Product],
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
+        _ refinement: RefinementContext?,
         session makeSession: @escaping MakeSession
     ) async throws -> [Product] {
         // Cap what we send so a big live deck doesn't blow context/latency on the 3B model;
         // products past the cap keep their deterministic order via the reconciliation tail.
         let head = Array(baseline.prefix(Self.rankDeckCap))
-        let session = makeSession(Self.rankingInstructions(profile: profile, mission: mission))
+        let session = makeSession(Self.rankingInstructions(profile: profile, mission: mission, refinement: refinement))
         let response = try await session.respond(
             to: Self.rankPrompt(for: head),
             generating: RankedOrder.self
@@ -170,9 +176,10 @@ public struct AppleFoundationCurator: CuratorEngine {
         _ products: [Product],
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
+        _ refinement: RefinementContext?,
         session makeSession: @escaping MakeSession
     ) async -> [Product] {
-        let instructions = Self.instructions(profile: profile, mission: mission)
+        let instructions = Self.instructions(profile: profile, mission: mission, refinement: refinement)
         var out = products
         await withTaskGroup(of: (Int, String?).self) { group in
             for index in products.indices {
@@ -204,12 +211,18 @@ public struct AppleFoundationCurator: CuratorEngine {
         return text
     }
 
+    /// The whole-deck fallback when no model tier ranks. Applies the refinement's *structured*
+    /// asks deterministically (``RefinementContext/apply(_:to:)`` — price lean, emphasis boost,
+    /// remove demote) so a degraded tier still visibly honors "make it cheaper" before voicing in
+    /// the seed voice.
     private func fallback(
         _ ranked: [Product],
         _ profile: TasteProfile,
+        _ refinement: RefinementContext?,
         reason: CuratorTier.Fallback
     ) -> CuratedDeck {
-        let voiced = ranked.map { $0.withRationale(rule.rationale(for: $0, profile: profile)) }
+        let shaped = RefinementContext.apply(refinement, to: ranked)
+        let voiced = shaped.map { $0.withRationale(rule.rationale(for: $0, profile: profile)) }
         return CuratedDeck(products: voiced, tier: .ruleBased(reason))
     }
 
@@ -240,9 +253,9 @@ public struct AppleFoundationCurator: CuratorEngine {
     /// The voice instructions: persona + how to write one card's "why this is you" note.
     /// Stable across the deck, so it lives in the session's instructions; only the product
     /// varies per call.
-    static func instructions(profile: TasteProfile, mission: ShoppingTask) -> String {
+    static func instructions(profile: TasteProfile, mission: ShoppingTask, refinement: RefinementContext? = nil) -> String {
         """
-        \(Self.persona(profile: profile, mission: mission))
+        \(Self.persona(profile: profile, mission: mission))\(Self.refinementClause(refinement))
 
         You write the one-line "why this is you" note shown under a product the user is \
         considering. Write the rationale so it:
@@ -250,6 +263,8 @@ public struct AppleFoundationCurator: CuratorEngine {
         - speaks to "you" and ties the product to this mission and at least one of their leanings;
         - is specific and honest about THIS product — never invent ratings, reviews, materials, \
         or facts you weren't given;
+        - reflects the refinement above when one is present (e.g. lead with value if they asked \
+        for cheaper, warmth if they asked for warmer);
         - sounds like a trusted friend with taste, not a marketing blurb. No emoji, no hashtags, \
         no exclamation marks.
         """
@@ -258,16 +273,42 @@ public struct AppleFoundationCurator: CuratorEngine {
     /// The ranking instructions: persona + how to order the deck for *this* user. Honesty
     /// matters more than novelty — on live products ratings/reviews are absent, so the model
     /// must judge fit from taste and mission, not invent quality signals.
-    static func rankingInstructions(profile: TasteProfile, mission: ShoppingTask) -> String {
+    static func rankingInstructions(profile: TasteProfile, mission: ShoppingTask, refinement: RefinementContext? = nil) -> String {
         """
-        \(Self.persona(profile: profile, mission: mission))
+        \(Self.persona(profile: profile, mission: mission))\(Self.refinementClause(refinement))
 
         You are ordering a deck of candidate products so the best fit for THIS user and \
-        mission comes first. Judge fit from their taste, leanings, budget comfort, and the \
-        mission — not from hype. Do not invent ratings, reviews, or facts you weren't given. \
+        mission comes first. Judge fit from their taste, leanings, budget comfort, the \
+        mission — and the refinement above when one is present (order cheaper products first if \
+        they asked for cheaper, warmer ones first if warmer, and push anything they asked to \
+        avoid toward the end). Do not invent ratings, reviews, or facts you weren't given. \
         Return the product IDs in your recommended order, best fit first, using only the IDs \
         provided and including each one exactly once.
         """
+    }
+
+    /// A short instructions block describing the user's live refinement (the latest ask plus the
+    /// running conversation), appended to both the ranking and voice personas. Empty when there's
+    /// no refinement, so plain curation reads exactly as before.
+    private static func refinementClause(_ refinement: RefinementContext?) -> String {
+        guard let refinement, refinement.directive.isActionable || !refinement.conversation.isEmpty
+        else { return "" }
+        var lines = ["", "The user is refining this deck. Honor what they asked:"]
+        let directive = refinement.directive
+        if !directive.emphasis.isEmpty { lines.append("- Emphasis: \(directive.emphasis)") }
+        switch directive.priceDirection {
+        case .cheaper: lines.append("- Price: prefer cheaper options.")
+        case .pricier: lines.append("- Price: they're happy to spend more for better.")
+        case .none: break
+        }
+        if !directive.removeHints.isEmpty {
+            lines.append("- Avoid / de-emphasize: \(directive.removeHints.joined(separator: ", ")).")
+        }
+        if refinement.conversation.count > 1 {
+            let earlier = refinement.conversation.dropLast().joined(separator: "; ")
+            lines.append("- Earlier refinements still apply: \(earlier).")
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// The deck the model orders: one terse line per candidate so the small model can hold the
