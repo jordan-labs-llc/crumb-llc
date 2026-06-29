@@ -158,6 +158,23 @@ struct MissionPlannerTests {
         #expect(b.task == nil)
         #expect(b.decline == RuleBasedMissionPlanner.declineMessage)
     }
+
+    // MARK: Goal cap (the fixed-prompt-cost guard that keeps the model call under context)
+
+    @Test("A short goal is passed to the model untouched (just trimmed)")
+    func cappedGoalShort() {
+        #expect(AppleFoundationMissionPlanner.cappedGoal("  set up my pour-over corner  ")
+            == "set up my pour-over corner")
+    }
+
+    @Test("An over-long goal is cut at a word boundary within the cap")
+    func cappedGoalLong() {
+        let long = String(repeating: "lacrosse gear and more ", count: 60)   // ~1380 chars
+        let capped = AppleFoundationMissionPlanner.cappedGoal(long)
+        #expect(capped.count <= AppleFoundationMissionPlanner.maxGoalChars)
+        #expect(!capped.hasSuffix(" "))            // trimmed
+        #expect(!capped.hasSuffix("lacros"))       // never split mid-word
+    }
 }
 
 /// Recents-merge guarantees: dedupe, most-recent-first, cap.

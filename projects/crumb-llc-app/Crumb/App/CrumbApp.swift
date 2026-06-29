@@ -42,6 +42,9 @@ struct CrumbApp: App {
             planner: AppleFoundationMissionPlanner(),
             refiner: AppleFoundationRefinementInterpreter(),
             recapWriter: AppleFoundationRecapWriter(),
+            // Drops clearly off-topic catalog results before curation; deterministic floor first,
+            // then a best-effort on-device model pass that self-degrades to that floor.
+            relevanceGate: AppleFoundationRelevanceGate(),
             recentsStore: Self.makeRecentsStore(),
             historyStore: Self.makeHistoryStore(),
             recipientStore: Self.makeRecipientStore()

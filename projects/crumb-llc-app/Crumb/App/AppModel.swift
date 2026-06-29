@@ -274,6 +274,10 @@ final class AppModel {
     let planner: any MissionPlanner
     let refiner: any RefinementInterpreter
     let recapWriter: any RecapWriter
+    /// Drops clearly off-topic catalog results *before* the curator ranks/voices them, so a stray
+    /// live result never reaches the deck with a confident rationale. Defaults to the deterministic
+    /// floor (no model, mock-safe) so existing tests and the scaffold need nothing.
+    let relevanceGate: any RelevanceGate
     private let tasteStore: any TasteStore
     private let recentsStore: any RecentMissionsStore
     private let historyStore: any HistoryStore
@@ -298,6 +302,7 @@ final class AppModel {
         planner: any MissionPlanner = RuleBasedMissionPlanner(),
         refiner: any RefinementInterpreter = RuleBasedRefinementInterpreter(),
         recapWriter: any RecapWriter = RuleBasedRecapWriter(),
+        relevanceGate: any RelevanceGate = RuleBasedRelevanceGate(),
         recentsStore: any RecentMissionsStore = InMemoryRecentMissionsStore(),
         historyStore: any HistoryStore = InMemoryHistoryStore(),
         recipientStore: any RecipientStore = InMemoryRecipientStore(),
@@ -310,6 +315,7 @@ final class AppModel {
         self.planner = planner
         self.refiner = refiner
         self.recapWriter = recapWriter
+        self.relevanceGate = relevanceGate
         self.recentsStore = recentsStore
         self.historyStore = historyStore
         self.recipientStore = recipientStore
@@ -984,6 +990,12 @@ final class AppModel {
 
     // MARK: Curation
 
+    /// The fewest candidates the relevance gate will ever leave on a non-empty result set, so an
+    /// over-eager gate can never produce "no matches". Chosen ≥ the largest mock/seed deck so the
+    /// scaffold's decks (all relevant to their mission) always pass through untouched; only larger
+    /// live decks, where off-topic noise actually appears, get trimmed.
+    static let relevanceFloor = 8
+
     /// Fans the mission's `searchQueries` out to the catalog **in parallel**, dedupes the
     /// union by product id, and hands it to the curator for one ranked deck.
     ///
@@ -1011,10 +1023,16 @@ final class AppModel {
             return
         }
 
+        // Drop clearly off-topic results (a rowing shirt in a lacrosse kit) *before* the curator
+        // ranks/voices them — the curator only orders, it never drops. The gate keeps at least
+        // `relevanceFloor` candidates, so it can never turn a real result set into "no matches".
+        let gated = await relevanceGate.filter(union, for: task, floor: Self.relevanceFloor)
+        guard selectedTask?.id == task.id else { return }
+
         // `curate` both ranks and rewrites each rationale into Crumb's voice, and reports the
         // tier it used so the UI can be honest when it fell back from the AI curator. For a gift
         // mission this curates to the recipient's taste, with gift-framed voice.
-        let curated = await curator.curate(union, for: activeTaste, mission: task, refinement: nil, recipient: activeRecipientRef)
+        let curated = await curator.curate(gated, for: activeTaste, mission: task, refinement: nil, recipient: activeRecipientRef)
         guard selectedTask?.id == task.id else { return }
         candidates = curated.products
         deck = curated.products
