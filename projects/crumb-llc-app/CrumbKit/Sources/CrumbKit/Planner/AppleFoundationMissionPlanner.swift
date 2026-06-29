@@ -1,5 +1,6 @@
 import Foundation
 import FoundationModels
+import os
 
 /// The "real" mission planner, built on Apple's Foundation Models — the agent that actually
 /// *decomposes* a free-text goal. It mirrors ``AppleFoundationCurator`` / ``AppleFoundationTasteExtractor``
@@ -28,6 +29,11 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
     /// The deterministic floor: the degrade target and the source of the shared pure helpers.
     private let rule = RuleBasedMissionPlanner()
 
+    /// Logs a *real* generation failure instead of swallowing it behind `try?` — the bug that
+    /// made the planner silently fall back to the single-query floor on the Mac. Inspect with
+    /// `log stream --predicate 'subsystem == "llc.crumb.CrumbKit"'`.
+    private static let log = Logger(subsystem: "llc.crumb.CrumbKit", category: "MissionPlanner")
+
     public init() {}
 
     public func plan(goal: String, profile: TasteProfile) async -> PlannedMission {
@@ -45,7 +51,7 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
             let pcc = PrivateCloudComputeLanguageModel()
             if case .available = pcc.availability, !pcc.quotaUsage.isLimitReached {
                 let session: MakeSession = { LanguageModelSession(model: pcc, instructions: $0) }
-                if let planned = try? await decompose(trimmed, profile, session: session, tier: .privateCloud) {
+                if let planned = await attemptDecompose(trimmed, profile, session: session, tier: .privateCloud) {
                     return planned
                 }
                 // Planning probe failed (offline / transient) — fall through to on-device.
@@ -58,7 +64,7 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
         switch device.availability {
         case .available:
             let session: MakeSession = { LanguageModelSession(model: device, instructions: $0) }
-            if let planned = try? await decompose(trimmed, profile, session: session, tier: .onDevice) {
+            if let planned = await attemptDecompose(trimmed, profile, session: session, tier: .onDevice) {
                 return planned
             }
             return RuleBasedMissionPlanner.plan(goal: trimmed, reason: .offlineOrError)
@@ -71,9 +77,44 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
 
     private typealias MakeSession = @Sendable (_ instructions: String) -> LanguageModelSession
 
+    /// The on-device model's context window is 4096 tokens; the transcript is *instructions +
+    /// prompt + the model's generated plan*. Left unbounded, an occasional runaway generation
+    /// pushes the transcript past 4096 and `respond(generating:)` throws
+    /// `LanguageModelError` ("…exceeds the maximum allowed context size of 4096") — the very
+    /// error `try?` used to swallow into a single-query fallback. A normal ``MissionDraft`` plan
+    /// is well under this cap, so bounding the response can't truncate a real plan; it only
+    /// fences off the runaway. The fixed prompt cost is kept small by ``cappedGoal(_:)``.
+    static let maxResponseTokens = 1024
+    static let generationOptions = GenerationOptions(maximumResponseTokens: maxResponseTokens)
+
+    /// Runs the planning probe with a single retry, **logging** (not silently swallowing) a
+    /// thrown error. With default sampling a second generation is usually shorter, so a transient
+    /// near-the-limit overflow recovers rather than degrading the user to the single-query floor.
+    /// Returns `nil` only when both attempts throw — the caller then cascades / degrades.
+    private func attemptDecompose(
+        _ goal: String,
+        _ profile: TasteProfile,
+        session makeSession: @escaping MakeSession,
+        tier: PlannerTier
+    ) async -> PlannedMission? {
+        do {
+            return try await decompose(goal, profile, session: makeSession, tier: tier)
+        } catch {
+            Self.log.error("Planner generation threw (attempt 1, retrying): \(error.localizedDescription, privacy: .public)")
+            do {
+                return try await decompose(goal, profile, session: makeSession, tier: tier)
+            } catch {
+                Self.log.error("Planner generation threw (attempt 2, degrading to rule-based): \(error.localizedDescription, privacy: .public)")
+                return nil
+            }
+        }
+    }
+
     /// One guided generation reads the goal into a ``MissionDraft``, which the pure
     /// ``mission(from:goal:tier:)`` folds into a searchable mission. Throws when the call fails,
-    /// so the tier cascade / rule-based fallback in ``plan(goal:profile:)`` takes over.
+    /// so the tier cascade / rule-based fallback in ``plan(goal:profile:)`` takes over. The
+    /// response is bounded (see ``generationOptions``) so a runaway generation can't overflow the
+    /// context window.
     private func decompose(
         _ goal: String,
         _ profile: TasteProfile,
@@ -83,7 +124,8 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
         let session = makeSession(Self.instructions(profile: profile))
         let response = try await session.respond(
             to: Self.prompt(for: goal),
-            generating: MissionDraft.self
+            generating: MissionDraft.self,
+            options: Self.generationOptions
         )
         return Self.mission(from: response.content, goal: goal, tier: tier)
     }
@@ -205,11 +247,29 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
     static func prompt(for goal: String) -> String {
         """
         The user's goal:
-        "\(goal)"
+        "\(cappedGoal(goal))"
 
         Plan this mission: a short title, a short subtitle of context, a one-sentence curator \
         note framing the plan, and the parts (label + search query) to shop for.
         """
+    }
+
+    /// How many characters of the goal we feed the model. A guard rail on the *fixed* prompt
+    /// cost so a pasted essay can't, by itself, eat the context window — the decomposition only
+    /// needs the gist. The full goal is still used by the deterministic reconcile / fallback
+    /// (title, id, single-query), so capping here never changes the rule-based plan.
+    static let maxGoalChars = 600
+
+    /// Trims the goal and, if it's longer than ``maxGoalChars``, cuts it at the last word
+    /// boundary within the cap (so we never split a word). Pure — unit-tested.
+    static func cappedGoal(_ goal: String) -> String {
+        let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maxGoalChars else { return trimmed }
+        let prefix = trimmed.prefix(maxGoalChars)
+        if let lastSpace = prefix.lastIndex(of: " ") {
+            return String(prefix[..<lastSpace]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return String(prefix)
     }
 
     private static func map(
