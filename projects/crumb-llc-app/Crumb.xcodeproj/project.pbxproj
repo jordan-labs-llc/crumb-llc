@@ -13,10 +13,15 @@
 		186DAFE618981282D949E448 /* CuratorNote.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2636664F2FF6491635448E6 /* CuratorNote.swift */; };
 		1B488B510C8896EAB8A206F3 /* TasteProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C032FB2C786FD91F4A2C0D /* TasteProfileView.swift */; };
 		20262747383980085049D2BE /* ApiTag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88E88478E6D27F43A1624825 /* ApiTag.swift */; };
+		218B938E1047EA5DAF0706C0 /* CrumbKitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E650966B1912922403F747B /* CrumbKitTests.swift */; };
 		238F1E27A199F57F5DA84CE9 /* CrumbMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25B0DC245999B2D241B52BD2 /* CrumbMetrics.swift */; };
+		28E4C38CF4DDA70945A2DBAD /* HistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F292C02F09F2C9287D9915B /* HistoryTests.swift */; };
 		2C26E20A09349A027858C2AC /* RefinementBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF5727CC8D39C14EA8882090 /* RefinementBar.swift */; };
 		2F67D6673EA5A566A3638E49 /* CurateKitIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = E138427809827F842B00492D /* CurateKitIntent.swift */; };
 		3F58D9CEB003994A68988948 /* CartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0F3D5A8552124AB50E0BF6D /* CartView.swift */; };
+		41A92EDCE9E0048D514EF3C0 /* RelevanceGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16038877BB32342393CD3E3D /* RelevanceGateTests.swift */; };
+		44D61C98F90CE573EB2CE4D3 /* TasteCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DB94BBFAEB5A18FF05695F3 /* TasteCaptureTests.swift */; };
+		594E533E13702E648E1AB8BD /* MissionPlannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AAA36FC0C29BF1240DF09A0 /* MissionPlannerTests.swift */; };
 		5A8CAE78CE348B88B7BFEDEA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 56FE2CF46CB3AC6F0554827A /* Assets.xcassets */; };
 		5DB82CFF4294738A4639E473 /* PeopleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CC065A9AB4BE69B19D606D3 /* PeopleView.swift */; };
 		6DD305E51B3BC5CE13DD3296 /* CrumbTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B45506CA6A95FBAB2B31241C /* CrumbTests.swift */; };
@@ -24,20 +29,26 @@
 		740E2507DD3C1F2A03C27203 /* BottomSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB3BD6BA969C6AD04D7BBCDC /* BottomSheet.swift */; };
 		77CB08A82302A2B725A76544 /* PlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02E208AB6AE4BD44B00EE2E0 /* PlanView.swift */; };
 		7E0F32D23984C28C3CC632CE /* CurateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57C7249333139EE164B9BDE8 /* CurateView.swift */; };
+		8574FF0300BC2641FCF0CDFF /* RecipientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D5891C9EC66DD23B0FDA8A0 /* RecipientTests.swift */; };
 		86AAF236CC8DB3B5FDDDF192 /* CrumbKit in Frameworks */ = {isa = PBXBuildFile; productRef = D936D5DF956C9B5DC6AF69F5 /* CrumbKit */; };
 		89EAE1A11546F89C1ABB1B30 /* Secrets.plist in Resources */ = {isa = PBXBuildFile; fileRef = 51452F38ECE9387FD5B7DBD7 /* Secrets.plist */; };
 		8A22D99E08AD2E8D980D1D34 /* CrumbUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F614DD6F8A672D44B5BAF770 /* CrumbUITests.swift */; };
+		8D1E6F3FE239B2DEE2CA7044 /* CrumbInstructionBlocksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AD913494857ACA50D92D695 /* CrumbInstructionBlocksTests.swift */; };
 		95068A1AB77BB4410ACECD29 /* CrumbArt in Frameworks */ = {isa = PBXBuildFile; productRef = 3EF3B1AC6F8837B41B7C259A /* CrumbArt */; };
 		A31B66102BAD5A5FDEBC7600 /* CrumbShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70EC9E0E97E33310BA1EF53F /* CrumbShortcuts.swift */; };
+		A764242E31D2B0D8313CC7EA /* CrumbContextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 601587D7FBEE571D713E6680 /* CrumbContextTests.swift */; };
 		A8D652EF801A782561E69C19 /* CrumbApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B2BEB51F0585270E292671 /* CrumbApp.swift */; };
 		ADDA43C3C97D0933F32F31B7 /* Secrets.example.plist in Resources */ = {isa = PBXBuildFile; fileRef = E5EFDFEC4C56A1BDC5A24787 /* Secrets.example.plist */; };
 		B40D7919A125D611ACE585F3 /* CheckoutHandoffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5634C3D5A9161C070E889854 /* CheckoutHandoffView.swift */; };
+		B6DBA63785EFF1ECBE32D28F /* RefinementInterpreterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94CD80BCDEE53873337BD04A /* RefinementInterpreterTests.swift */; };
 		B9D795A2F906443965EB59E2 /* CrumbColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B39838CC41131244B136FB45 /* CrumbColor.swift */; };
 		BE0B2799512B6F3CC7CF867C /* SheetSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67043AB0F0B4615612F05F08 /* SheetSupport.swift */; };
 		BFF32D8DC61A0B3A18C5BB7F /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F5499C641BDC9AEA7B42120 /* AppModel.swift */; };
 		C262F8AE2477C79182F33414 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65C7467C1CBA22D53CFE0F8F /* HistoryView.swift */; };
 		C72A95D78DE9E6663BC0E62E /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 852440CA683F418082909F40 /* OnboardingView.swift */; };
 		C73ACC304819971F35FA166E /* CrumbType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31A60DFD88D0193AE3DBC125 /* CrumbType.swift */; };
+		CA296C5901D22F2EDA0A98F4 /* CrumbKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5B27FEEA6954F68CEA3048D1 /* CrumbKit */; };
+		CF1F4947BCB58FF53179E71A /* LiveUCPClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4553F448163F30B2353AFBA /* LiveUCPClientTests.swift */; };
 		D94CF92CC4FA821A481A9062 /* CrumbKit in Frameworks */ = {isa = PBXBuildFile; productRef = ECEC8D61420FB33F67060AD5 /* CrumbKit */; };
 		D9829C2E08E5EF574A388F24 /* HistoryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7B4DECD197D4080D8485B61 /* HistoryDetailView.swift */; };
 		E2B1CD46E0D826E7F7BA05A1 /* PersonEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 403FAE94A34382917E7A91DA /* PersonEditorView.swift */; };
@@ -65,18 +76,26 @@
 
 /* Begin PBXFileReference section */
 		02E208AB6AE4BD44B00EE2E0 /* PlanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanView.swift; sourceTree = "<group>"; };
+		0AD913494857ACA50D92D695 /* CrumbInstructionBlocksTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbInstructionBlocksTests.swift; sourceTree = "<group>"; };
+		0DB94BBFAEB5A18FF05695F3 /* TasteCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasteCaptureTests.swift; sourceTree = "<group>"; };
 		11B2BEB51F0585270E292671 /* CrumbApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbApp.swift; sourceTree = "<group>"; };
 		11C9995BE9444031794FB7BF /* RecipientPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipientPicker.swift; sourceTree = "<group>"; };
+		16038877BB32342393CD3E3D /* RelevanceGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelevanceGateTests.swift; sourceTree = "<group>"; };
 		1CD60E78A98B93B9526DBD8D /* ProductCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductCard.swift; sourceTree = "<group>"; };
 		25B0DC245999B2D241B52BD2 /* CrumbMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbMetrics.swift; sourceTree = "<group>"; };
 		31A60DFD88D0193AE3DBC125 /* CrumbType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbType.swift; sourceTree = "<group>"; };
+		3496F279C10971ACB6F03BF7 /* CrumbKitSimTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CrumbKitSimTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		3AAA36FC0C29BF1240DF09A0 /* MissionPlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionPlannerTests.swift; sourceTree = "<group>"; };
 		3AC0237066E37113D0DEDED9 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		403FAE94A34382917E7A91DA /* PersonEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonEditorView.swift; sourceTree = "<group>"; };
+		4D5891C9EC66DD23B0FDA8A0 /* RecipientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipientTests.swift; sourceTree = "<group>"; };
 		51452F38ECE9387FD5B7DBD7 /* Secrets.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Secrets.plist; sourceTree = "<group>"; };
 		5634C3D5A9161C070E889854 /* CheckoutHandoffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckoutHandoffView.swift; sourceTree = "<group>"; };
 		56FE2CF46CB3AC6F0554827A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		57C7249333139EE164B9BDE8 /* CurateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurateView.swift; sourceTree = "<group>"; };
+		5F292C02F09F2C9287D9915B /* HistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryTests.swift; sourceTree = "<group>"; };
 		5F5499C641BDC9AEA7B42120 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		601587D7FBEE571D713E6680 /* CrumbContextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbContextTests.swift; sourceTree = "<group>"; };
 		61C52B2400B3457774228546 /* TasteEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasteEditor.swift; sourceTree = "<group>"; };
 		65C7467C1CBA22D53CFE0F8F /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
 		67043AB0F0B4615612F05F08 /* SheetSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SheetSupport.swift; sourceTree = "<group>"; };
@@ -85,7 +104,9 @@
 		7CA275868FCE4041982E84B9 /* CrumbArt */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CrumbArt; path = CrumbArt; sourceTree = SOURCE_ROOT; };
 		852440CA683F418082909F40 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		88E88478E6D27F43A1624825 /* ApiTag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApiTag.swift; sourceTree = "<group>"; };
+		8E650966B1912922403F747B /* CrumbKitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbKitTests.swift; sourceTree = "<group>"; };
 		9166722AFAFB67FB518791DC /* KitTray.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KitTray.swift; sourceTree = "<group>"; };
+		94CD80BCDEE53873337BD04A /* RefinementInterpreterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefinementInterpreterTests.swift; sourceTree = "<group>"; };
 		9CC065A9AB4BE69B19D606D3 /* PeopleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeopleView.swift; sourceTree = "<group>"; };
 		A6C032FB2C786FD91F4A2C0D /* TasteProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasteProfileView.swift; sourceTree = "<group>"; };
 		AD871FFFFBA9508EBC8C6AA0 /* CrumbKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CrumbKit; path = CrumbKit; sourceTree = SOURCE_ROOT; };
@@ -97,6 +118,7 @@
 		D0F3D5A8552124AB50E0BF6D /* CartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartView.swift; sourceTree = "<group>"; };
 		E138427809827F842B00492D /* CurateKitIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurateKitIntent.swift; sourceTree = "<group>"; };
 		E2636664F2FF6491635448E6 /* CuratorNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CuratorNote.swift; sourceTree = "<group>"; };
+		E4553F448163F30B2353AFBA /* LiveUCPClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveUCPClientTests.swift; sourceTree = "<group>"; };
 		E5EFDFEC4C56A1BDC5A24787 /* Secrets.example.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Secrets.example.plist; sourceTree = "<group>"; };
 		F5A3B9520F2253A5F03A94A0 /* CrumbUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CrumbUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F614DD6F8A672D44B5BAF770 /* CrumbUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbUITests.swift; sourceTree = "<group>"; };
@@ -123,9 +145,42 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FA329CC45512C60756DF524F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CA296C5901D22F2EDA0A98F4 /* CrumbKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		14E69BC78CAD3786F298B7B5 /* CrumbKit */ = {
+			isa = PBXGroup;
+			children = (
+				C1B690D5ABBD627774A7361D /* Tests */,
+			);
+			path = CrumbKit;
+			sourceTree = "<group>";
+		};
+		23E32AB7E91E30F638DC0AD0 /* CrumbKitTests */ = {
+			isa = PBXGroup;
+			children = (
+				601587D7FBEE571D713E6680 /* CrumbContextTests.swift */,
+				0AD913494857ACA50D92D695 /* CrumbInstructionBlocksTests.swift */,
+				8E650966B1912922403F747B /* CrumbKitTests.swift */,
+				5F292C02F09F2C9287D9915B /* HistoryTests.swift */,
+				E4553F448163F30B2353AFBA /* LiveUCPClientTests.swift */,
+				3AAA36FC0C29BF1240DF09A0 /* MissionPlannerTests.swift */,
+				4D5891C9EC66DD23B0FDA8A0 /* RecipientTests.swift */,
+				94CD80BCDEE53873337BD04A /* RefinementInterpreterTests.swift */,
+				16038877BB32342393CD3E3D /* RelevanceGateTests.swift */,
+				0DB94BBFAEB5A18FF05695F3 /* TasteCaptureTests.swift */,
+			);
+			path = CrumbKitTests;
+			sourceTree = "<group>";
+		};
 		24D764DBB646598C34AE6B88 /* TasteProfile */ = {
 			isa = PBXGroup;
 			children = (
@@ -183,6 +238,7 @@
 			isa = PBXGroup;
 			children = (
 				F65639EFF2FF1E75D8FAB265 /* Crumb.app */,
+				3496F279C10971ACB6F03BF7 /* CrumbKitSimTests.xctest */,
 				CC7ECC2C0E9B4003FBB011A0 /* CrumbTests.xctest */,
 				F5A3B9520F2253A5F03A94A0 /* CrumbUITests.xctest */,
 			);
@@ -217,6 +273,14 @@
 			path = Crumb;
 			sourceTree = "<group>";
 		};
+		C1B690D5ABBD627774A7361D /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				23E32AB7E91E30F638DC0AD0 /* CrumbKitTests */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
 		C23BFCA1E2D7A5E571734E32 /* Missions */ = {
 			isa = PBXGroup;
 			children = (
@@ -245,6 +309,7 @@
 			isa = PBXGroup;
 			children = (
 				A6B8BBB1000751E87E8545E7 /* Crumb */,
+				14E69BC78CAD3786F298B7B5 /* CrumbKit */,
 				D25701FFEC8B33816A344106 /* CrumbTests */,
 				E2DB2B3EE540953B1E097E5D /* CrumbUITests */,
 				F5A4F61DD59C54D9BB97C2EC /* Packages */,
@@ -393,6 +458,25 @@
 			productReference = CC7ECC2C0E9B4003FBB011A0 /* CrumbTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		C48E1C49FE5E67E7FF0D8100 /* CrumbKitSimTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BA43191EC9C59315EBE7A830 /* Build configuration list for PBXNativeTarget "CrumbKitSimTests" */;
+			buildPhases = (
+				23DA402A47501FB1CF016935 /* Sources */,
+				FA329CC45512C60756DF524F /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CrumbKitSimTests;
+			packageProductDependencies = (
+				5B27FEEA6954F68CEA3048D1 /* CrumbKit */,
+			);
+			productName = CrumbKitSimTests;
+			productReference = 3496F279C10971ACB6F03BF7 /* CrumbKitSimTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -412,6 +496,10 @@
 						TestTargetID = 022CE997B0BA053B8F208A8F;
 					};
 					372EF22D98FB1DA720EC5ABC = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					C48E1C49FE5E67E7FF0D8100 = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
@@ -436,6 +524,7 @@
 			projectRoot = "";
 			targets = (
 				022CE997B0BA053B8F208A8F /* Crumb */,
+				C48E1C49FE5E67E7FF0D8100 /* CrumbKitSimTests */,
 				372EF22D98FB1DA720EC5ABC /* CrumbTests */,
 				3022AFB08A9473353F183CD2 /* CrumbUITests */,
 			);
@@ -461,6 +550,23 @@
 			buildActionMask = 2147483647;
 			files = (
 				6DD305E51B3BC5CE13DD3296 /* CrumbTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		23DA402A47501FB1CF016935 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A764242E31D2B0D8313CC7EA /* CrumbContextTests.swift in Sources */,
+				8D1E6F3FE239B2DEE2CA7044 /* CrumbInstructionBlocksTests.swift in Sources */,
+				218B938E1047EA5DAF0706C0 /* CrumbKitTests.swift in Sources */,
+				28E4C38CF4DDA70945A2DBAD /* HistoryTests.swift in Sources */,
+				CF1F4947BCB58FF53179E71A /* LiveUCPClientTests.swift in Sources */,
+				594E533E13702E648E1AB8BD /* MissionPlannerTests.swift in Sources */,
+				8574FF0300BC2641FCF0CDFF /* RecipientTests.swift in Sources */,
+				B6DBA63785EFF1ECBE32D28F /* RefinementInterpreterTests.swift in Sources */,
+				41A92EDCE9E0048D514EF3C0 /* RelevanceGateTests.swift in Sources */,
+				44D61C98F90CE573EB2CE4D3 /* TasteCaptureTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -553,6 +659,48 @@
 				TARGETED_DEVICE_FAMILY = "1,2,7";
 			};
 			name = Debug;
+		};
+		4D36D47DFEF111689E48C8FC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.crumbllc.CrumbKitSimTests;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+			};
+			name = Debug;
+		};
+		4E85C30831BD8F5AFA1DB5B4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.crumbllc.CrumbKitSimTests;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+			};
+			name = Release;
 		};
 		5065DA59D8F3124E42AD6BA5 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -694,8 +842,8 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MARKETING_VERSION = 0.1.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -707,7 +855,7 @@
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 6.0;
-				XROS_DEPLOYMENT_TARGET = 26.0;
+				XROS_DEPLOYMENT_TARGET = 27.0;
 			};
 			name = Debug;
 		};
@@ -792,8 +940,8 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MARKETING_VERSION = 0.1.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -804,7 +952,7 @@
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 6.0;
-				XROS_DEPLOYMENT_TARGET = 26.0;
+				XROS_DEPLOYMENT_TARGET = 27.0;
 			};
 			name = Release;
 		};
@@ -868,6 +1016,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
+		BA43191EC9C59315EBE7A830 /* Build configuration list for PBXNativeTarget "CrumbKitSimTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4D36D47DFEF111689E48C8FC /* Debug */,
+				4E85C30831BD8F5AFA1DB5B4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -885,6 +1042,10 @@
 		3EF3B1AC6F8837B41B7C259A /* CrumbArt */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = CrumbArt;
+		};
+		5B27FEEA6954F68CEA3048D1 /* CrumbKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrumbKit;
 		};
 		D936D5DF956C9B5DC6AF69F5 /* CrumbKit */ = {
 			isa = XCSwiftPackageProductDependency;

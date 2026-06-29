@@ -55,6 +55,17 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "C48E1C49FE5E67E7FF0D8100"
+               BuildableName = "CrumbKitSimTests.xctest"
+               BlueprintName = "CrumbKitSimTests"
+               ReferencedContainer = "container:Crumb.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "3022AFB08A9473353F183CD2"
                BuildableName = "CrumbUITests.xctest"
                BlueprintName = "CrumbUITests"

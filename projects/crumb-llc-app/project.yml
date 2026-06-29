@@ -7,9 +7,9 @@ options:
   bundleIdPrefix: com.crumbllc
   createIntermediateGroups: true
   deploymentTarget:
-    iOS: "26.0"
-    macOS: "26.0"
-    visionOS: "26.0"
+    iOS: "27.0"
+    macOS: "27.0"
+    visionOS: "27.0"
   groupSortPosition: top
   generateEmptyDirectories: true
 
@@ -97,6 +97,25 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.crumbllc.CrumbUITests
         GENERATE_INFOPLIST_FILE: "YES"
 
+  # Runs the CrumbKit package's own unit tests (its 8 @testable suites) on a real
+  # destination. `swift test` runs on the macOS host, whose FoundationModels runtime
+  # does NOT yet ship the dynamic-session API — so once CrumbKit links that API the host
+  # test bundle fails to dlopen. The iOS 27 simulator runtime DOES ship it, so we re-host
+  # the same package test sources in this logic-test bundle and run them on the sim. No
+  # duplication: it points at the existing CrumbKit/Tests/CrumbKitTests files.
+  CrumbKitSimTests:
+    type: bundle.unit-test
+    supportedDestinations: [iOS, visionOS]
+    sources:
+      - path: CrumbKit/Tests/CrumbKitTests
+    dependencies:
+      - package: CrumbKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.crumbllc.CrumbKitSimTests
+        GENERATE_INFOPLIST_FILE: "YES"
+        ENABLE_TESTABILITY: "YES"
+
 schemes:
   Crumb:
     build:
@@ -108,4 +127,5 @@ schemes:
       config: Debug
       targets:
         - CrumbTests
+        - CrumbKitSimTests
         - CrumbUITests
