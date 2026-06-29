@@ -12,6 +12,10 @@ enum Route: Hashable {
     case plan
     case curate
     case cart
+    /// The timeline of past missions, reached from the app header.
+    case history
+    /// A read-only detail of one past mission's kit (the selected ``AppModel/selectedHistoryEntry``).
+    case historyDetail
 }
 
 /// One editable row of a generated plan: a human label plus the catalog query that finds it.
@@ -90,6 +94,34 @@ final class AppModel {
     // MARK: Domain state
 
     private(set) var kit: [KitItem] = []
+
+    // MARK: History (the persisted record of past missions)
+
+    /// All saved missions, most-recent-first — the timeline's data. Refreshed from the store after
+    /// every write so the History screen reflects the latest kit, outcome, or deletion.
+    private(set) var historyEntries: [HistoryEntry] = []
+
+    /// The entry the read-only History detail is showing (set by ``openHistoryDetail(_:)``).
+    private(set) var selectedHistoryEntry: HistoryEntry?
+
+    /// When set, the re-shop sheet for a past entry is presented (the snapshot's per-item buy links,
+    /// honest about gone links — the History twin of ``handoff``).
+    var reshopEntry: HistoryEntry?
+
+    /// The id of the entry for the *current* shopping session, or `nil` before the kit first reaches
+    /// the cart this session. Stable per `enterPlan`, so re-reaching the cart updates the same entry
+    /// (and a real checkout handoff flips that entry's outcome). A new mission starts a fresh id.
+    private var currentHistoryEntryID: String?
+
+    /// The user's *original* free-text goal for this session, so a saved entry stores the real goal
+    /// (not `ShoppingTask.title`, which the planner title-cases and length-caps) and "Plan this
+    /// again" re-plans exactly what they typed. `nil` for the seed-mission path, where the task's
+    /// own title is the faithful goal.
+    private var currentMissionGoal: String?
+
+    /// The aggregate "since you started" stat line for the History header.
+    var historyStats: HistoryStats { HistoryStats(entries: historyEntries) }
+
     /// The user's taste — the single persisted piece of domain state. Read-only to views;
     /// all edits flow through ``updateTaste(_:)`` so every change is persisted *and* re-curates
     /// the live deck.
@@ -182,8 +214,14 @@ final class AppModel {
     let tasteExtractor: any TasteExtractor
     let planner: any MissionPlanner
     let refiner: any RefinementInterpreter
+    let recapWriter: any RecapWriter
     private let tasteStore: any TasteStore
     private let recentsStore: any RecentMissionsStore
+    private let historyStore: any HistoryStore
+    /// Injected wall-clock — used only at save time for an entry's `createdAt` (and the session
+    /// entry id). A closure so tests can pin time and keep timeline grouping deterministic; pure
+    /// logic never calls `Date()` directly (see [[ios-sim-available-xcode27]] build notes).
+    private let clock: () -> Date
 
     /// Builds the app model, restoring the persisted ``TasteProfile`` if one exists.
     ///
@@ -199,7 +237,10 @@ final class AppModel {
         tasteExtractor: any TasteExtractor = ManualTasteExtractor(),
         planner: any MissionPlanner = RuleBasedMissionPlanner(),
         refiner: any RefinementInterpreter = RuleBasedRefinementInterpreter(),
-        recentsStore: any RecentMissionsStore = InMemoryRecentMissionsStore()
+        recapWriter: any RecapWriter = RuleBasedRecapWriter(),
+        recentsStore: any RecentMissionsStore = InMemoryRecentMissionsStore(),
+        historyStore: any HistoryStore = InMemoryHistoryStore(),
+        clock: @escaping () -> Date = { Date() }
     ) {
         self.ucp = ucp
         self.curator = curator
@@ -207,12 +248,16 @@ final class AppModel {
         self.tasteExtractor = tasteExtractor
         self.planner = planner
         self.refiner = refiner
+        self.recapWriter = recapWriter
         self.recentsStore = recentsStore
+        self.historyStore = historyStore
+        self.clock = clock
 
         let stored = tasteStore.loadProfile()
         self.tasteProfile = stored ?? SeedData.defaultTasteProfile
         self.route = stored == nil ? .onboarding : .missions
         self.recentGoals = recentsStore.loadRecents()
+        self.historyEntries = historyStore.loadEntries()
     }
 
     // MARK: Derived
@@ -272,6 +317,7 @@ final class AppModel {
             recentGoals = recentsStore.loadRecents()
             plannerTier = planned.tier
             enterPlan(with: task)
+            currentMissionGoal = trimmed   // the real goal, for a faithful record + re-plan
         } else {
             planDecline = planned.decline
                 ?? "I'm a shopping curator — hand me something to shop for."
@@ -288,6 +334,11 @@ final class AppModel {
         deck = []
         curatorTier = nil
         clearRefinement()
+        // A new shopping session — the next cart-reach starts a fresh history entry, not an update
+        // to the previous mission's one. The seed-mission path leaves `currentMissionGoal` nil so
+        // the task's own title stands in as the goal; `runPlan` sets the real typed goal after.
+        currentHistoryEntryID = nil
+        currentMissionGoal = nil
         loadState = .idle
         planDirty = true
         route = .plan
@@ -402,14 +453,175 @@ final class AppModel {
         await presentCurateForScreenshot(missionID: missionID)
         await applyRefinement(text: refinement)
     }
+
+    /// Screenshot hook: land on the History timeline (the store is seeded with deterministic
+    /// entries — or left empty for the first-run state — in `CrumbApp`).
+    func presentHistoryForScreenshot() {
+        route = .history
+    }
+
+    /// Screenshot hook: open the read-only detail of the most recent seeded entry, so the kit,
+    /// recap, and re-shop / plan-again actions render headlessly.
+    func presentHistoryDetailForScreenshot() {
+        if let first = historyEntries.first {
+            openHistoryDetail(first)
+        } else {
+            route = .history
+        }
+    }
     #endif
 
     func openCart() {
         route = .cart
+        // Reaching the cart with a kit is the save trigger: record (or update) this session's
+        // history entry. Fire-and-forget so navigation stays instant; the recap is written async.
+        recordKitToHistory()
     }
 
     func goToMissions() {
         route = .missions
+    }
+
+    // MARK: History — writing the record
+
+    /// Fire-and-forget wrapper over ``recordCurrentKit()`` (the recap write is async). Internal so
+    /// tests can await the async core deterministically rather than racing the `Task`.
+    func recordKitToHistory() {
+        Task { await recordCurrentKit() }
+    }
+
+    /// Snapshots the current kit into a ``HistoryEntry`` and saves it — the heart of the History
+    /// feature. Writes only when there's a mission and at least one kept item (an abandoned plan
+    /// with nothing kept is never recorded). Within one session it **upserts** the same entry
+    /// (preserving its `createdAt` and any `handedOff` already earned), so back→edit→cart
+    /// round-trips don't litter history with near-duplicates; a new mission (`enterPlan`) starts a
+    /// fresh entry.
+    ///
+    /// Two correctness rules shape the order of work here:
+    /// - **The row is saved synchronously *before* the slow on-device recap call**, seeded with the
+    ///   deterministic floor recap and its id assigned, so the entry is complete and findable the
+    ///   instant the user can act on it. Otherwise ``recordHandoffFollowed()`` could race the
+    ///   awaited recap and silently no-op (the id wouldn't be set yet) on a real device.
+    /// - **The recap is only (re)generated when the kept set actually changes.** A plain cart
+    ///   re-reach reuses the stored recap, so a non-deterministic model can't make a kit's saved
+    ///   title/line wobble between visits.
+    func recordCurrentKit() async {
+        guard let task = selectedTask, !kit.isEmpty else { return }
+
+        let items = kit.map(HistoryItem.init)
+        let goal = currentMissionGoal ?? task.title
+
+        // Reuse this session's id/createdAt/outcome on a re-reach; otherwise mint a new entry.
+        let existing = currentHistoryEntryID.flatMap { id in historyEntries.first { $0.id == id } }
+        let id: String
+        let createdAt: Date
+        let handedOff: Bool
+        if let existing {
+            id = existing.id
+            createdAt = existing.createdAt
+            handedOff = existing.handedOff
+        } else {
+            let now = clock()
+            id = "\(task.id)-\(Int(now.timeIntervalSinceReferenceDate))"
+            createdAt = now
+            handedOff = false
+            currentHistoryEntryID = id
+        }
+
+        let facts = items.map(RecapFact.init)
+        let keptChanged = existing.map { Set($0.items.map(\.productID)) != Set(items.map(\.productID)) } ?? true
+
+        func makeEntry(tag: String, line: String, handedOff: Bool) -> HistoryEntry {
+            HistoryEntry(
+                id: id, goal: goal, title: task.title, subtitle: task.subtitle,
+                plan: task.plan, searchQueries: task.searchQueries, curatorNote: task.curatorNote,
+                accentHex: task.accentHex, recapTag: tag, recapLine: line, items: items,
+                handedOff: handedOff, createdAt: createdAt
+            )
+        }
+
+        // Seed the recap: reuse the existing one when the kept set is unchanged (no jitter on a
+        // plain re-reach); otherwise compute the deterministic floor *synchronously* so the saved
+        // row is already complete before we await the on-device upgrade below.
+        let seedTag: String
+        let seedLine: String
+        if let existing, !keptChanged {
+            seedTag = existing.recapTag
+            seedLine = existing.recapLine
+        } else {
+            let floor = RuleBasedRecapWriter.recap(
+                goal: goal, plan: task.plan, items: facts, profile: tasteProfile, reason: nil
+            )
+            seedTag = floor.tag
+            seedLine = floor.line
+        }
+        historyStore.save(makeEntry(tag: seedTag, line: seedLine, handedOff: handedOff))
+        historyEntries = historyStore.loadEntries()
+
+        // Upgrade with the on-device writer only when we (re)generated a recap. Best-effort and
+        // race-safe: re-read the latest outcome (a handoff may have landed during the await) and
+        // bail if the session moved on.
+        guard keptChanged else { return }
+        let written = await recapWriter.writeRecap(
+            goal: goal, plan: task.plan, items: facts, profile: tasteProfile
+        )
+        guard currentHistoryEntryID == id, let latest = historyEntries.first(where: { $0.id == id }) else { return }
+        historyStore.save(makeEntry(tag: written.tag, line: written.line, handedOff: latest.handedOff))
+        historyEntries = historyStore.loadEntries()
+    }
+
+    /// Flips this session's entry to "handed off" — called when the user actually opens a real
+    /// checkout link from the handoff sheet (the honest outcome signal; a no-link handoff doesn't
+    /// count). No-op if the kit never reached the cart this session.
+    func recordHandoffFollowed() {
+        guard let id = currentHistoryEntryID else { return }
+        historyStore.setHandedOff(id, true)
+        historyEntries = historyStore.loadEntries()
+    }
+
+    // MARK: History — reading & managing
+
+    /// Opens the History timeline (the header affordance).
+    func openHistory() {
+        route = .history
+    }
+
+    /// Opens the read-only detail for a past entry.
+    func openHistoryDetail(_ entry: HistoryEntry) {
+        selectedHistoryEntry = entry
+        route = .historyDetail
+    }
+
+    /// Deletes a single entry (swipe / menu), refreshing the timeline and stepping back out of a
+    /// detail that was showing it.
+    func deleteHistoryEntry(_ entry: HistoryEntry) {
+        historyStore.delete(id: entry.id)
+        historyEntries = historyStore.loadEntries()
+        if selectedHistoryEntry?.id == entry.id {
+            selectedHistoryEntry = nil
+            if route == .historyDetail { route = .history }
+        }
+    }
+
+    /// Clears the entire history ("Clear history"), returning to the now-empty timeline.
+    func clearHistory() {
+        historyStore.clear()
+        historyEntries = []
+        selectedHistoryEntry = nil
+        if route == .historyDetail { route = .history }
+    }
+
+    /// Presents the re-shop sheet for a past entry (its snapshot's per-item buy links).
+    func beginReshop(_ entry: HistoryEntry) {
+        reshopEntry = entry
+    }
+
+    /// Routes a past entry's goal back through the planner into a fresh, editable plan — "Plan this
+    /// again". A new session, so building a kit from it becomes a new history entry.
+    func planAgain(_ entry: HistoryEntry) {
+        reshopEntry = nil
+        selectedHistoryEntry = nil
+        planMission(goal: entry.goal)
     }
 
     /// Steps one level back in the flow.
@@ -419,6 +631,8 @@ final class AppModel {
         case .plan: route = .missions
         case .curate: route = .plan
         case .cart: route = .curate
+        case .history: route = .missions
+        case .historyDetail: route = .history
         }
     }
 

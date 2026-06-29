@@ -34,9 +34,11 @@
 		B9D795A2F906443965EB59E2 /* CrumbColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B39838CC41131244B136FB45 /* CrumbColor.swift */; };
 		BE0B2799512B6F3CC7CF867C /* SheetSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67043AB0F0B4615612F05F08 /* SheetSupport.swift */; };
 		BFF32D8DC61A0B3A18C5BB7F /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F5499C641BDC9AEA7B42120 /* AppModel.swift */; };
+		C262F8AE2477C79182F33414 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65C7467C1CBA22D53CFE0F8F /* HistoryView.swift */; };
 		C72A95D78DE9E6663BC0E62E /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 852440CA683F418082909F40 /* OnboardingView.swift */; };
 		C73ACC304819971F35FA166E /* CrumbType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31A60DFD88D0193AE3DBC125 /* CrumbType.swift */; };
 		D94CF92CC4FA821A481A9062 /* CrumbKit in Frameworks */ = {isa = PBXBuildFile; productRef = ECEC8D61420FB33F67060AD5 /* CrumbKit */; };
+		D9829C2E08E5EF574A388F24 /* HistoryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7B4DECD197D4080D8485B61 /* HistoryDetailView.swift */; };
 		E5B50E8435E6962D09AF2504 /* KitTray.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9166722AFAFB67FB518791DC /* KitTray.swift */; };
 		F75F3A9439503E440572EF6A /* MissionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 769625F3ADB578C3FFED06E4 /* MissionsView.swift */; };
 /* End PBXBuildFile section */
@@ -71,6 +73,7 @@
 		57C7249333139EE164B9BDE8 /* CurateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurateView.swift; sourceTree = "<group>"; };
 		5F5499C641BDC9AEA7B42120 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		61C52B2400B3457774228546 /* TasteEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasteEditor.swift; sourceTree = "<group>"; };
+		65C7467C1CBA22D53CFE0F8F /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
 		67043AB0F0B4615612F05F08 /* SheetSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SheetSupport.swift; sourceTree = "<group>"; };
 		70EC9E0E97E33310BA1EF53F /* CrumbShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbShortcuts.swift; sourceTree = "<group>"; };
 		769625F3ADB578C3FFED06E4 /* MissionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionsView.swift; sourceTree = "<group>"; };
@@ -92,6 +95,7 @@
 		F5A3B9520F2253A5F03A94A0 /* CrumbUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CrumbUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F614DD6F8A672D44B5BAF770 /* CrumbUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbUITests.swift; sourceTree = "<group>"; };
 		F65639EFF2FF1E75D8FAB265 /* Crumb.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Crumb.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F7B4DECD197D4080D8485B61 /* HistoryDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryDetailView.swift; sourceTree = "<group>"; };
 		FF5727CC8D39C14EA8882090 /* RefinementBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefinementBar.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -184,6 +188,7 @@
 			children = (
 				F82C5D8A0C651B005EC1C222 /* Cart */,
 				52446DDA969F46F06E92C917 /* Curate */,
+				E244AB61EA010BA8ED18CF92 /* History */,
 				C23BFCA1E2D7A5E571734E32 /* Missions */,
 				273113C56D404EEB6C839FFA /* Onboarding */,
 				D865229523A2DAA2C763958B /* Plan */,
@@ -238,6 +243,15 @@
 				F5A4F61DD59C54D9BB97C2EC /* Packages */,
 				9AAFA777E4D2D192B90F6DB9 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		E244AB61EA010BA8ED18CF92 /* History */ = {
+			isa = PBXGroup;
+			children = (
+				F7B4DECD197D4080D8485B61 /* HistoryDetailView.swift */,
+				65C7467C1CBA22D53CFE0F8F /* HistoryView.swift */,
+			);
+			path = History;
 			sourceTree = "<group>";
 		};
 		E2DB2B3EE540953B1E097E5D /* CrumbUITests */ = {
@@ -450,6 +464,8 @@
 				2F67D6673EA5A566A3638E49 /* CurateKitIntent.swift in Sources */,
 				7E0F32D23984C28C3CC632CE /* CurateView.swift in Sources */,
 				186DAFE618981282D949E448 /* CuratorNote.swift in Sources */,
+				D9829C2E08E5EF574A388F24 /* HistoryDetailView.swift in Sources */,
+				C262F8AE2477C79182F33414 /* HistoryView.swift in Sources */,
 				E5B50E8435E6962D09AF2504 /* KitTray.swift in Sources */,
 				F75F3A9439503E440572EF6A /* MissionsView.swift in Sources */,
 				C72A95D78DE9E6663BC0E62E /* OnboardingView.swift in Sources */,

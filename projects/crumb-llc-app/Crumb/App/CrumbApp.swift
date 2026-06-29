@@ -41,7 +41,9 @@ struct CrumbApp: App {
             tasteExtractor: AppleFoundationTasteExtractor(),
             planner: AppleFoundationMissionPlanner(),
             refiner: AppleFoundationRefinementInterpreter(),
-            recentsStore: Self.makeRecentsStore()
+            recapWriter: AppleFoundationRecapWriter(),
+            recentsStore: Self.makeRecentsStore(),
+            historyStore: Self.makeHistoryStore()
         )
         // Make the app model available to App Intents (`@Dependency`).
         AppDependencyManager.shared.add(dependency: model)
@@ -75,6 +77,23 @@ struct CrumbApp: App {
         }
         #endif
         return (try? SwiftDataRecentMissionsStore()) ?? InMemoryRecentMissionsStore()
+    }
+
+    /// The SwiftData-backed history store, degrading to in-memory if the container can't be built
+    /// (a storage failure never blocks launch — the user just won't have history this session).
+    /// Under a `CRUMB_SCREENSHOT` launch env it's an in-memory store, seeded with deterministic
+    /// entries for the `history` / `history-detail` modes and left empty otherwise (incl.
+    /// `history-empty`, which captures the first-run timeline).
+    private static func makeHistoryStore() -> any HistoryStore {
+        #if DEBUG
+        if let mode = ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] {
+            let seed = (mode == "history" || mode == "history-detail")
+                ? SeedData.historyEntries(now: Date())
+                : []
+            return InMemoryHistoryStore(seed)
+        }
+        #endif
+        return (try? SwiftDataHistoryStore()) ?? InMemoryHistoryStore()
     }
 
     var body: some Scene {

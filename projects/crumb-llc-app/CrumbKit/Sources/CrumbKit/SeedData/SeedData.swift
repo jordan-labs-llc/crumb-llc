@@ -190,6 +190,79 @@ public enum SeedData {
         signatureLine: "You'd rather own three things you love than ten you tolerate."
     )
 
+    // MARK: - History (deterministic entries for screenshots & fixtures)
+
+    /// A handful of deterministic ``HistoryEntry`` rows for the History timeline — varied missions,
+    /// dates, and outcomes — built relative to `now` so the screenshot path lands a populated
+    /// timeline (Today / This week / Earlier), a milestone stats header (5 kits), and an entry
+    /// detail with no-link items (seed products carry no buy URL — the honest re-shop state). Tests
+    /// pass a fixed `now` for deterministic grouping; the screenshot scaffold passes `Date()`.
+    public static func historyEntries(now: Date) -> [HistoryEntry] {
+        func daysAgo(_ days: Int) -> Date {
+            now.addingTimeInterval(TimeInterval(-days) * 86_400)
+        }
+        return [
+            historyEntry(
+                id: "hist.hike.today", mission: hike, products: Array(hikeProducts.prefix(4)),
+                createdAt: daysAgo(0), handedOff: true,
+                tag: "Rainy-hike kit",
+                line: "Four quiet pieces, built to keep you warm when it's soaked."
+            ),
+            historyEntry(
+                id: "hist.coffee.recent", mission: coffee, products: Array(coffeeProducts.prefix(3)),
+                createdAt: daysAgo(3), handedOff: false,
+                tag: "Pour-over corner",
+                line: "The three things that actually change the cup."
+            ),
+            historyEntry(
+                id: "hist.desk.recent", mission: desk, products: Array(deskProducts.prefix(3)),
+                createdAt: daysAgo(5), handedOff: true,
+                tag: "Calm-desk kit",
+                line: "Warm light and soft texture — nothing shiny."
+            ),
+            historyEntry(
+                id: "hist.coffee.earlier", mission: coffee, products: Array(coffeeProducts.prefix(2)),
+                createdAt: daysAgo(9), handedOff: false,
+                tag: "A better morning",
+                line: "Started small — a kettle and a bag worth waking up for."
+            ),
+            historyEntry(
+                id: "hist.hike.earlier", mission: hike, products: Array(hikeProducts.suffix(2)),
+                createdAt: daysAgo(16), handedOff: true,
+                tag: "Day-pack basics",
+                line: "Right-sized and close to the back, the way you move."
+            ),
+        ]
+    }
+
+    /// Builds a deterministic history entry from a seed mission and a slice of its products (kept
+    /// at their default variant, so they snapshot with no buy URL — the honest re-shop case).
+    private static func historyEntry(
+        id: String,
+        mission: ShoppingTask,
+        products: [Product],
+        createdAt: Date,
+        handedOff: Bool,
+        tag: String,
+        line: String
+    ) -> HistoryEntry {
+        HistoryEntry(
+            id: id,
+            goal: mission.title,
+            title: mission.title,
+            subtitle: mission.subtitle,
+            plan: mission.plan,
+            searchQueries: mission.searchQueries,
+            curatorNote: mission.curatorNote,
+            accentHex: mission.accentHex,
+            recapTag: tag,
+            recapLine: line,
+            items: products.map { HistoryItem(KitItem(product: $0)) },
+            handedOff: handedOff,
+            createdAt: createdAt
+        )
+    }
+
     // MARK: - Builder
 
     /// Builds a seed product with a single standard variant (no real checkout URL).
