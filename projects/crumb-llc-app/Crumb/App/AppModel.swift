@@ -190,6 +190,29 @@ final class AppModel {
         route = .curate
     }
 
+    #if DEBUG
+    /// Screenshot/UITest hook: deterministically deal a mission's curated deck and land on
+    /// Curate, bypassing onboarding and the Plan step. `simctl` can't tap, so headless deep
+    /// screens are reached this way (driven by `CRUMB_SCREENSHOT` in `CrumbApp`/`RootView`).
+    func presentCurateForScreenshot(missionID: String) async {
+        let task = missions.first { $0.id == missionID } ?? SeedData.hike
+        selectedTask = task
+        kit.removeAll()
+        candidates = []
+        deck = []
+        curatorTier = nil
+        await loadCandidates(for: task)
+        route = .curate
+    }
+
+    /// Screenshot hook: deal a deck then accept every card, landing on Curate's "that's a
+    /// kit" empty state so its art can be captured headlessly.
+    func presentFullKitForScreenshot(missionID: String) async {
+        await presentCurateForScreenshot(missionID: missionID)
+        for product in deck { accept(product) }
+    }
+    #endif
+
     func openCart() {
         route = .cart
     }

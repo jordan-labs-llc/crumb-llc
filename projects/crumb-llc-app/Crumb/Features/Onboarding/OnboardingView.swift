@@ -1,5 +1,6 @@
 import SwiftUI
 import CrumbKit
+import CrumbArt
 
 /// First-run taste capture. A short, **skippable** flow that builds the user's
 /// ``TasteProfile`` before they reach Missions — the personalization Crumb's curator ranks
@@ -66,10 +67,7 @@ struct OnboardingView: View {
     private var topBar: some View {
         HStack {
             HStack(spacing: CrumbMetrics.Space.xs) {
-                Image(systemName: "leaf.circle.fill")
-                    .foregroundStyle(CrumbColor.pine)
-                    .font(.title3)
-                    .accessibilityHidden(true)
+                CrumbBadge(size: 26)
                 Text("Crumb")
                     .font(CrumbType.title2)
                     .foregroundStyle(CrumbColor.ink)
@@ -114,6 +112,9 @@ struct OnboardingView: View {
     private var stepContent: some View {
         switch current {
         case .intro:
+            CrumbHeroArt()
+                .frame(height: 140)
+                .padding(.bottom, CrumbMetrics.Space.s)
             DescribeYourselfCard(draft: $draft)
         case .vibe:
             EditableChipSection(

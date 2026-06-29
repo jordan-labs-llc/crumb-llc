@@ -17,7 +17,15 @@ struct CrumbApp: App {
 
     init() {
         let config = UCPConfig.load()
-        let ucp: any UCPClient = LiveUCPClient(config: config) ?? MockUCPClient()
+        var ucp: any UCPClient = LiveUCPClient(config: config) ?? MockUCPClient()
+        #if DEBUG
+        // Screenshots run on the mock catalog so the deck is the deterministic seed set
+        // (no network, no live-curator variance) — which also exercises the synthesized
+        // `ProductArt`, since seed products carry no real photo.
+        if ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] != nil {
+            ucp = MockUCPClient()
+        }
+        #endif
         // The Apple Foundation Models curator is the "real" voice; it self-degrades to the
         // rule-based engine (and reports why) when no model tier is usable, so it's safe to
         // always inject — mirroring LiveUCPClient ?? MockUCPClient for the catalog.
@@ -34,11 +42,22 @@ struct CrumbApp: App {
         _model = State(initialValue: model)
     }
 
+    /// The persistent SwiftData store, or — under a `CRUMB_SCREENSHOT` launch environment
+    /// (DEBUG only) — an in-memory store pre-seeded so the app skips onboarding and lands on
+    /// a populated screen. `simctl` can't inject taps, so this is how deep screens are reached
+    /// for headless screenshots; `RootView` reads the same env to deal a curate deck.
+
     /// The persistent SwiftData store for the taste profile, degrading to an in-memory store
     /// if the container can't be built (so a storage failure never blocks launch — the user
     /// just won't have their taste remembered across relaunches this session).
     private static func makeTasteStore() -> any TasteStore {
-        (try? SwiftDataTasteStore()) ?? InMemoryTasteStore()
+        #if DEBUG
+        // A returning-user store for screenshots: a saved profile means no onboarding.
+        if let mode = ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"], mode != "onboarding" {
+            return InMemoryTasteStore(SeedData.defaultTasteProfile)
+        }
+        #endif
+        return (try? SwiftDataTasteStore()) ?? InMemoryTasteStore()
     }
 
     var body: some Scene {
