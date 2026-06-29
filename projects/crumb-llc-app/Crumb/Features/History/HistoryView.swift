@@ -17,7 +17,24 @@ struct HistoryView: View {
     /// Grouped into time buckets relative to *now* (the view layer is where wall-clock is allowed —
     /// the grouping itself is pure and tested with an injected date).
     private var sections: [HistorySection] {
-        HistoryTimeline.sections(model.historyEntries, now: Date())
+        HistoryTimeline.sections(model.filteredHistoryEntries, now: Date())
+    }
+
+    /// The per-recipient filter chips, shown only once there's at least one gift kit (so a user
+    /// who never shops for anyone else never sees the control).
+    private var facets: [HistoryRecipientFacet] { model.historyFacets }
+    private var showsFilter: Bool {
+        facets.contains { if case .person = $0.filter { return true } else { return false } }
+    }
+
+    /// The name to title the stats header with when a person/you filter is active ("For Mom"); `nil`
+    /// for the unfiltered "All" view.
+    private var activeFilterName: String? {
+        switch model.historyRecipientFilter {
+        case .all: return nil
+        case .yourself: return "You"
+        case let .person(id): return facets.first { $0.filter == .person(id) }?.label
+        }
     }
 
     var body: some View {
@@ -46,9 +63,20 @@ struct HistoryView: View {
     private var timeline: some View {
         List {
             Section {
-                HistoryStatsHeader(stats: model.historyStats)
+                HistoryStatsHeader(stats: model.historyStats, filterName: activeFilterName)
                     .plainHistoryRow()
                     .padding(.bottom, CrumbMetrics.Space.xs)
+            }
+
+            if showsFilter {
+                Section {
+                    HistoryFilterRow(
+                        facets: facets,
+                        selected: model.historyRecipientFilter,
+                        onSelect: { model.historyRecipientFilter = $0 }
+                    )
+                    .plainHistoryRow()
+                }
             }
 
             ForEach(sections) { section in
@@ -147,10 +175,12 @@ struct HistoryView: View {
 /// tasteful ochre milestone moment on round kit counts (5 / 10 / 25 / 50) — a quiet nod, never gamey.
 struct HistoryStatsHeader: View {
     let stats: HistoryStats
+    /// When a per-recipient filter is active, the header names whose record this is ("For Mom").
+    var filterName: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: CrumbMetrics.Space.m) {
-            Text("Your missions")
+            Text(filterName.map { "For \($0)" } ?? "Your missions")
                 .font(CrumbType.title)
                 .foregroundStyle(CrumbColor.ink)
 
@@ -230,6 +260,10 @@ struct HistoryCard: View {
                     .foregroundStyle(CrumbColor.ink)
                     .lineLimit(1)
 
+                if let recipient = entry.recipient {
+                    RecipientTag(name: recipient.name, accentHex: recipient.accentHex)
+                }
+
                 Text(entry.recapLine)
                     .font(CrumbType.curator)
                     .foregroundStyle(CrumbColor.ink2)
@@ -307,8 +341,77 @@ struct HistoryCard: View {
 
     private var accessibilityText: String {
         let handed = entry.handedOff ? ", handed off to checkout" : ""
-        return "\(entry.recapTag). \(entry.recapLine). "
+        let forWhom = entry.recipient.map { ", a gift for \($0.name)" } ?? ""
+        return "\(entry.recapTag)\(forWhom). \(entry.recapLine). "
             + "\(entry.itemCount) items, \(entry.shopCount) shops\(handed)."
+    }
+}
+
+// MARK: - Recipient tag + filter row
+
+/// A small "for <name>" chip tinted by the recipient's accent — the gift attribution on a History
+/// card and in the detail header.
+struct RecipientTag: View {
+    let name: String
+    let accentHex: UInt32
+
+    private var accent: Color { Color(hex: accentHex) }
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "gift.fill")
+                .font(.system(size: 9, weight: .bold))
+            Text("for \(name)")
+                .font(CrumbType.captionStrong)
+        }
+        .foregroundStyle(accent)
+        .padding(.horizontal, CrumbMetrics.Space.s)
+        .padding(.vertical, 3)
+        .background(accent.opacity(0.12), in: Capsule())
+        .accessibilityHidden(true)
+    }
+}
+
+/// The horizontal per-recipient filter chips at the top of the timeline (All · You · each person
+/// with a gift kit), tinted by accent; tapping narrows the timeline + stats to that person.
+struct HistoryFilterRow: View {
+    let facets: [HistoryRecipientFacet]
+    let selected: HistoryRecipientFilter
+    let onSelect: (HistoryRecipientFilter) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: CrumbMetrics.Space.s) {
+                ForEach(facets) { facet in
+                    let isSelected = facet.filter == selected
+                    let accent = facet.accentHex.map { Color(hex: $0) } ?? CrumbColor.ink
+                    Button {
+                        onSelect(facet.filter)
+                    } label: {
+                        Text(facet.label)
+                            .font(CrumbType.pill)
+                            .foregroundStyle(isSelected ? .white : CrumbColor.ink)
+                            .padding(.horizontal, CrumbMetrics.Space.m)
+                            .padding(.vertical, CrumbMetrics.Space.s)
+                            .background(
+                                Group {
+                                    if isSelected {
+                                        Capsule().fill(accent)
+                                    } else {
+                                        Capsule().fill(CrumbColor.raised)
+                                            .overlay(Capsule().strokeBorder(CrumbColor.line, lineWidth: 1))
+                                    }
+                                }
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Show \(facet.label)")
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .accessibilityIdentifier("historyFilterRow")
     }
 }
 

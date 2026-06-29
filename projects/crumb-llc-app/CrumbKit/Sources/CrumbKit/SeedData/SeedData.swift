@@ -190,6 +190,42 @@ public enum SeedData {
         signatureLine: "You'd rather own three things you love than ten you tolerate."
     )
 
+    // MARK: - Recipients (deterministic people you shop for, for screenshots & fixtures)
+
+    /// Two deterministic people for the People roster + gift screenshots — distinct tastes and
+    /// accents so the gift deck, the "for <name>" voice, and the per-person cards all read clearly.
+    /// `now` is injected so `createdAt` (and the roster ordering) stay deterministic in tests.
+    public static func recipients(now: Date) -> [Recipient] {
+        [
+            Recipient(
+                id: "seed.recipient.mom",
+                name: "Mom",
+                relationship: "my mom",
+                taste: TasteProfile(
+                    vibe: ["Quiet", "Warm", "Refined"],
+                    leanings: ["Muted tones", "Ceramic and stoneware", "Built to last"],
+                    budgetComfort: 0.55,
+                    signatureLine: "Loves a calm morning ritual and things that feel handmade."
+                ),
+                accentHex: 0x9A6A4F,
+                createdAt: now.addingTimeInterval(-2 * 86_400)
+            ),
+            Recipient(
+                id: "seed.recipient.dad",
+                name: "Dad",
+                relationship: "my dad",
+                taste: TasteProfile(
+                    vibe: ["Rugged", "Earthy", "Built to last"],
+                    leanings: ["Natural materials", "Repairable", "Fewer better things"],
+                    budgetComfort: 0.5,
+                    signatureLine: "Would rather fix it than replace it. Hates clutter, loves the outdoors."
+                ),
+                accentHex: 0x4F6D7A,
+                createdAt: now.addingTimeInterval(-6 * 86_400)
+            ),
+        ]
+    }
+
     // MARK: - History (deterministic entries for screenshots & fixtures)
 
     /// A handful of deterministic ``HistoryEntry`` rows for the History timeline — varied missions,
@@ -235,6 +271,20 @@ public enum SeedData {
         ]
     }
 
+    /// The seed history **plus** a gift kit "for Mom" — used by the `history-gift` screenshot so the
+    /// "for <name>" tags + the per-person filter render. Kept separate from ``historyEntries(now:)``
+    /// so that set stays exactly 5 (the milestone-header fixture + the stats test).
+    public static func giftHistoryEntries(now: Date) -> [HistoryEntry] {
+        let gift = historyEntry(
+            id: "hist.coffee.gift.mom", mission: coffee, products: Array(coffeeProducts.prefix(3)),
+            createdAt: now.addingTimeInterval(-4 * 86_400), handedOff: false,
+            tag: "Pour-over corner",
+            line: "Three quiet pieces, leaning ceramic — a gift for Mom.",
+            recipient: recipients(now: now).first { $0.id == "seed.recipient.mom" }?.ref
+        )
+        return historyEntries(now: now) + [gift]
+    }
+
     /// Builds a deterministic history entry from a seed mission and a slice of its products (kept
     /// at their default variant, so they snapshot with no buy URL — the honest re-shop case).
     private static func historyEntry(
@@ -244,7 +294,8 @@ public enum SeedData {
         createdAt: Date,
         handedOff: Bool,
         tag: String,
-        line: String
+        line: String,
+        recipient: RecipientRef? = nil
     ) -> HistoryEntry {
         HistoryEntry(
             id: id,
@@ -258,6 +309,7 @@ public enum SeedData {
             recapTag: tag,
             recapLine: line,
             items: products.map { HistoryItem(KitItem(product: $0)) },
+            recipient: recipient,
             handedOff: handedOff,
             createdAt: createdAt
         )

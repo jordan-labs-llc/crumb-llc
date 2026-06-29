@@ -18,6 +18,7 @@
 		2F67D6673EA5A566A3638E49 /* CurateKitIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = E138427809827F842B00492D /* CurateKitIntent.swift */; };
 		3F58D9CEB003994A68988948 /* CartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0F3D5A8552124AB50E0BF6D /* CartView.swift */; };
 		5A8CAE78CE348B88B7BFEDEA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 56FE2CF46CB3AC6F0554827A /* Assets.xcassets */; };
+		5DB82CFF4294738A4639E473 /* PeopleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CC065A9AB4BE69B19D606D3 /* PeopleView.swift */; };
 		6DD305E51B3BC5CE13DD3296 /* CrumbTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B45506CA6A95FBAB2B31241C /* CrumbTests.swift */; };
 		71D1D43E4F3A01C8E758E78B /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AC0237066E37113D0DEDED9 /* RootView.swift */; };
 		740E2507DD3C1F2A03C27203 /* BottomSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB3BD6BA969C6AD04D7BBCDC /* BottomSheet.swift */; };
@@ -39,7 +40,9 @@
 		C73ACC304819971F35FA166E /* CrumbType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31A60DFD88D0193AE3DBC125 /* CrumbType.swift */; };
 		D94CF92CC4FA821A481A9062 /* CrumbKit in Frameworks */ = {isa = PBXBuildFile; productRef = ECEC8D61420FB33F67060AD5 /* CrumbKit */; };
 		D9829C2E08E5EF574A388F24 /* HistoryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7B4DECD197D4080D8485B61 /* HistoryDetailView.swift */; };
+		E2B1CD46E0D826E7F7BA05A1 /* PersonEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 403FAE94A34382917E7A91DA /* PersonEditorView.swift */; };
 		E5B50E8435E6962D09AF2504 /* KitTray.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9166722AFAFB67FB518791DC /* KitTray.swift */; };
+		F725BCC7D129907D03B064A9 /* RecipientPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11C9995BE9444031794FB7BF /* RecipientPicker.swift */; };
 		F75F3A9439503E440572EF6A /* MissionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 769625F3ADB578C3FFED06E4 /* MissionsView.swift */; };
 /* End PBXBuildFile section */
 
@@ -63,10 +66,12 @@
 /* Begin PBXFileReference section */
 		02E208AB6AE4BD44B00EE2E0 /* PlanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanView.swift; sourceTree = "<group>"; };
 		11B2BEB51F0585270E292671 /* CrumbApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbApp.swift; sourceTree = "<group>"; };
+		11C9995BE9444031794FB7BF /* RecipientPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipientPicker.swift; sourceTree = "<group>"; };
 		1CD60E78A98B93B9526DBD8D /* ProductCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductCard.swift; sourceTree = "<group>"; };
 		25B0DC245999B2D241B52BD2 /* CrumbMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbMetrics.swift; sourceTree = "<group>"; };
 		31A60DFD88D0193AE3DBC125 /* CrumbType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbType.swift; sourceTree = "<group>"; };
 		3AC0237066E37113D0DEDED9 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		403FAE94A34382917E7A91DA /* PersonEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonEditorView.swift; sourceTree = "<group>"; };
 		51452F38ECE9387FD5B7DBD7 /* Secrets.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Secrets.plist; sourceTree = "<group>"; };
 		5634C3D5A9161C070E889854 /* CheckoutHandoffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckoutHandoffView.swift; sourceTree = "<group>"; };
 		56FE2CF46CB3AC6F0554827A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -81,6 +86,7 @@
 		852440CA683F418082909F40 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		88E88478E6D27F43A1624825 /* ApiTag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApiTag.swift; sourceTree = "<group>"; };
 		9166722AFAFB67FB518791DC /* KitTray.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KitTray.swift; sourceTree = "<group>"; };
+		9CC065A9AB4BE69B19D606D3 /* PeopleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeopleView.swift; sourceTree = "<group>"; };
 		A6C032FB2C786FD91F4A2C0D /* TasteProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasteProfileView.swift; sourceTree = "<group>"; };
 		AD871FFFFBA9508EBC8C6AA0 /* CrumbKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CrumbKit; path = CrumbKit; sourceTree = SOURCE_ROOT; };
 		B39838CC41131244B136FB45 /* CrumbColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbColor.swift; sourceTree = "<group>"; };
@@ -191,6 +197,7 @@
 				E244AB61EA010BA8ED18CF92 /* History */,
 				C23BFCA1E2D7A5E571734E32 /* Missions */,
 				273113C56D404EEB6C839FFA /* Onboarding */,
+				FCE6D5D3B48B2C288D14D11A /* People */,
 				D865229523A2DAA2C763958B /* Plan */,
 				47FD6E5C080043C7DE1B937A /* Siri */,
 				24D764DBB646598C34AE6B88 /* TasteProfile */,
@@ -312,6 +319,16 @@
 				5634C3D5A9161C070E889854 /* CheckoutHandoffView.swift */,
 			);
 			path = Cart;
+			sourceTree = "<group>";
+		};
+		FCE6D5D3B48B2C288D14D11A /* People */ = {
+			isa = PBXGroup;
+			children = (
+				9CC065A9AB4BE69B19D606D3 /* PeopleView.swift */,
+				403FAE94A34382917E7A91DA /* PersonEditorView.swift */,
+				11C9995BE9444031794FB7BF /* RecipientPicker.swift */,
+			);
+			path = People;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -469,8 +486,11 @@
 				E5B50E8435E6962D09AF2504 /* KitTray.swift in Sources */,
 				F75F3A9439503E440572EF6A /* MissionsView.swift in Sources */,
 				C72A95D78DE9E6663BC0E62E /* OnboardingView.swift in Sources */,
+				5DB82CFF4294738A4639E473 /* PeopleView.swift in Sources */,
+				E2B1CD46E0D826E7F7BA05A1 /* PersonEditorView.swift in Sources */,
 				77CB08A82302A2B725A76544 /* PlanView.swift in Sources */,
 				0020306BCE0325C7B4DAB2AD /* ProductCard.swift in Sources */,
+				F725BCC7D129907D03B064A9 /* RecipientPicker.swift in Sources */,
 				2C26E20A09349A027858C2AC /* RefinementBar.swift in Sources */,
 				71D1D43E4F3A01C8E758E78B /* RootView.swift in Sources */,
 				BE0B2799512B6F3CC7CF867C /* SheetSupport.swift in Sources */,

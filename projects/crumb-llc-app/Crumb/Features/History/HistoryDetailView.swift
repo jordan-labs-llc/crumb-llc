@@ -77,6 +77,10 @@ struct HistoryDetailView: View {
                 }
             }
 
+            if let recipient = entry.recipient {
+                RecipientTag(name: recipient.name, accentHex: recipient.accentHex)
+            }
+
             Text(entry.recapLine)
                 .font(CrumbType.curatorTitle)
                 .foregroundStyle(CrumbColor.ink)

@@ -47,6 +47,11 @@ struct RootView: View {
             // History: the store is seeded (or left empty for `history-empty`) in `CrumbApp`.
             case "history", "history-empty": model.presentHistoryForScreenshot()
             case "history-detail": model.presentHistoryDetailForScreenshot()
+            // People & gift flows: the recipient store is seeded (or empty for `people-empty`).
+            case "people", "people-empty": model.presentPeopleForScreenshot()
+            case "composer-gift": model.presentComposerGiftForScreenshot()
+            case "gift": await model.presentGiftCurateForScreenshot(missionID: mission)
+            case "history-gift": model.presentGiftHistoryForScreenshot()
             // "composer" (and anything else) lands on Missions; the composer pre-fills its
             // field from `CRUMB_GOAL` since `simctl` can't inject keystrokes.
             default: break
@@ -77,6 +82,7 @@ struct RootView: View {
         case .cart: CartView()
         case .history: HistoryView()
         case .historyDetail: HistoryDetailView()
+        case .people: PeopleView()
         }
     }
 
@@ -118,6 +124,21 @@ struct AppHeader: View {
             }
 
             Spacer()
+
+            // People you shop for — the gift roster. Hidden while already on the People screen.
+            if model.route != .people {
+                Button {
+                    model.openPeople()
+                } label: {
+                    Image(systemName: "person.2")
+                        .font(.title3)
+                        .foregroundStyle(CrumbColor.ink2)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("People you shop for")
+                .accessibilityIdentifier("peopleButton")
+                .transition(.opacity)
+            }
 
             // History — the record of past missions. Hidden while already in History (you're there).
             if model.route != .history && model.route != .historyDetail {

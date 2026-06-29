@@ -108,7 +108,7 @@ struct RefinementBar: View {
                 Button {
                     Task { await model.saveRefinementToTaste() }
                 } label: {
-                    Label("Make this part of your taste", systemImage: "checkmark.circle")
+                    Label(model.saveToTasteLabel, systemImage: "checkmark.circle")
                         .font(CrumbType.captionStrong)
                         .foregroundStyle(CrumbColor.ochre)
                 }

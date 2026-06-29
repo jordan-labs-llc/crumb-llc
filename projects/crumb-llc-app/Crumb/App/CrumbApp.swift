@@ -43,7 +43,8 @@ struct CrumbApp: App {
             refiner: AppleFoundationRefinementInterpreter(),
             recapWriter: AppleFoundationRecapWriter(),
             recentsStore: Self.makeRecentsStore(),
-            historyStore: Self.makeHistoryStore()
+            historyStore: Self.makeHistoryStore(),
+            recipientStore: Self.makeRecipientStore()
         )
         // Make the app model available to App Intents (`@Dependency`).
         AppDependencyManager.shared.add(dependency: model)
@@ -87,13 +88,31 @@ struct CrumbApp: App {
     private static func makeHistoryStore() -> any HistoryStore {
         #if DEBUG
         if let mode = ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] {
-            let seed = (mode == "history" || mode == "history-detail")
-                ? SeedData.historyEntries(now: Date())
-                : []
+            // `history-gift` seeds the gift-augmented set (a kit "for Mom") so the per-person filter
+            // + "for <name>" tags render; the plain history modes keep the milestone-clean set of 5.
+            let seed: [HistoryEntry]
+            switch mode {
+            case "history", "history-detail": seed = SeedData.historyEntries(now: Date())
+            case "history-gift": seed = SeedData.giftHistoryEntries(now: Date())
+            default: seed = []
+            }
             return InMemoryHistoryStore(seed)
         }
         #endif
         return (try? SwiftDataHistoryStore()) ?? InMemoryHistoryStore()
+    }
+
+    /// The SwiftData-backed recipient roster, degrading to in-memory if the container can't be
+    /// built. Under the gift screenshot envs it's seeded with deterministic people (empty for
+    /// `people-empty`, which captures the "no people yet" first-run state).
+    private static func makeRecipientStore() -> any RecipientStore {
+        #if DEBUG
+        if let mode = ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] {
+            let needsPeople: Set<String> = ["people", "gift", "composer-gift", "history-gift"]
+            return InMemoryRecipientStore(needsPeople.contains(mode) ? SeedData.recipients(now: Date()) : [])
+        }
+        #endif
+        return (try? SwiftDataRecipientStore()) ?? InMemoryRecipientStore()
     }
 
     var body: some Scene {

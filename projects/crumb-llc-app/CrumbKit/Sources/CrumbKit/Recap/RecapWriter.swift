@@ -14,12 +14,28 @@ import Foundation
 public protocol RecapWriter: Sendable {
     /// Writes a recap for a kept kit. Never throws: an unusable model tier degrades to the
     /// deterministic floor, which always returns a clean tag + line.
+    ///
+    /// When `recipient` is set the kit is a **gift** for that person, and the recap acknowledges it
+    /// by name ("a gift for Mom"). `recipient == nil` is a kit for the owner — today's behavior.
+    func writeRecap(
+        goal: String,
+        plan: [String],
+        items: [RecapFact],
+        profile: TasteProfile,
+        recipient: RecipientRef?
+    ) async -> WrittenRecap
+}
+
+public extension RecapWriter {
+    /// Back-compat / owner-kit entry point — a recap with no gift recipient.
     func writeRecap(
         goal: String,
         plan: [String],
         items: [RecapFact],
         profile: TasteProfile
-    ) async -> WrittenRecap
+    ) async -> WrittenRecap {
+        await writeRecap(goal: goal, plan: plan, items: items, profile: profile, recipient: nil)
+    }
 }
 
 /// The minimal fact about one kept item the recap leans on — name, shop, price. A lean projection
