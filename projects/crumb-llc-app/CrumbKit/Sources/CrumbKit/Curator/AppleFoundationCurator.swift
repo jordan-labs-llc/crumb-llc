@@ -6,16 +6,26 @@ import FoundationModels
 /// default, and this engine is the on-device/server-backed voice that replaces a live
 /// product's raw merchant description with Crumb's own "why this is you" copy.
 ///
+/// ## Dynamic sessions (Xcode 27)
+/// This seam is the **reference adoption** of Apple's composable dynamic-session API. Its old
+/// hand-built instruction *strings* are gone: ranking and voicing each compose
+/// ``CrumbPersona`` / ``TasteBlock`` / ``MissionBlock`` / ``RefinementClause`` into a
+/// ``DynamicInstructions`` value, wrapped in a `LanguageModelSession.Profile` that also declares
+/// the seam's tuning and context policy (`.temperature`, `.reasoningLevel`, `.maximumResponseTokens`,
+/// `.historyTransform`, `.transcriptErrorHandlingPolicy` — see ``CrumbContext``). The model is
+/// selected on the *profile* (`.model(_:)`), so the tier cascade just swaps which model the same
+/// profile builders receive.
+///
 /// ## Tiers & degrade order
 /// The model both **ranks** the deck (best-fit-for-you first) and **voices** each card. The
 /// model is chosen best-first:
 ///
 /// 1. **Private Cloud Compute** (`PrivateCloudComputeLanguageModel`, OS 27+) — best voice,
-///    metered against the user's iCloud quota at no token cost to us. Needs an
-///    Apple-Intelligence device, network, and remaining quota. **Compiled in only when the
+///    metered against the user's iCloud quota at no token cost to us. **Compiled in only when the
 ///    `CRUMB_PCC_ENABLED` flag is set, because touching this type without the
 ///    `com.apple.developer.private-cloud-compute` entitlement traps the process** (see the
-///    gate in `curate`). On-device is the working primary until that entitlement is granted.
+///    gate in `curate`). When enabled it gets `.reasoningLevel(.deep)`; on-device is the working
+///    primary until that entitlement is granted.
 /// 2. **On-device** (`SystemLanguageModel.default`) — offline, lower quality, no entitlement.
 /// 3. **Rule-based** — the deterministic ``RuleBasedCurator`` order + seed voice, used when
 ///    neither model is usable.
@@ -73,32 +83,27 @@ public struct AppleFoundationCurator: CuratorEngine {
         let baseline = await rule.rank(products, for: profile)
         guard !baseline.isEmpty else { return CuratedDeck(products: [], tier: .onDevice) }
 
-        // Tier 1 — Private Cloud Compute (OS 27+). Gated behind `CRUMB_PCC_ENABLED` because
-        // *merely constructing or querying* `PrivateCloudComputeLanguageModel` traps the
-        // process (an uncatchable fatal error, NOT a throw) unless the app carries the
-        // `com.apple.developer.private-cloud-compute` entitlement. `try?` cannot rescue a
-        // trap, so the only safe gate is "don't reference the type unless provisioned."
-        // Define the flag *and* add the entitlement together to turn on the best voice tier.
+        // Tier 1 — Private Cloud Compute. Gated behind `CRUMB_PCC_ENABLED` because *merely
+        // constructing or querying* `PrivateCloudComputeLanguageModel` traps the process (an
+        // uncatchable fatal error, NOT a throw) unless the app carries the
+        // `com.apple.developer.private-cloud-compute` entitlement. `try?` cannot rescue a trap, so
+        // the only safe gate is "don't reference the type unless provisioned." Define the flag
+        // *and* add the entitlement together to turn on the best voice tier.
         #if CRUMB_PCC_ENABLED
-        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) {
-            let pcc = PrivateCloudComputeLanguageModel()
-            if case .available = pcc.availability, !pcc.quotaUsage.isLimitReached {
-                let session: MakeSession = { LanguageModelSession(model: pcc, instructions: $0) }
-                if let voiced = try? await rankAndVoice(baseline, profile, mission, refinement, recipient, session: session) {
-                    return CuratedDeck(products: voiced, tier: .privateCloud)
-                }
-                // Ranking probe failed (offline / transient) — fall through to on-device.
+        let pcc = PrivateCloudComputeLanguageModel()
+        if case .available = pcc.availability, !pcc.quotaUsage.isLimitReached {
+            if let voiced = try? await rankAndVoice(baseline, profile, mission, refinement, recipient, model: pcc, deepReasoning: true) {
+                return CuratedDeck(products: voiced, tier: .privateCloud)
             }
+            // Ranking probe failed (offline / transient) — fall through to on-device.
         }
         #endif
 
-        // Tier 2 — on-device. Uses the concrete `SystemLanguageModel` session initializer,
-        // which (unlike the generic `some LanguageModel` one) is available on macOS 26.
+        // Tier 2 — on-device.
         let device = SystemLanguageModel.default
         switch device.availability {
         case .available:
-            let session: MakeSession = { LanguageModelSession(model: device, instructions: $0) }
-            if let voiced = try? await rankAndVoice(baseline, profile, mission, refinement, recipient, session: session) {
+            if let voiced = try? await rankAndVoice(baseline, profile, mission, refinement, recipient, model: device, deepReasoning: false) {
                 return CuratedDeck(products: voiced, tier: .onDevice)
             }
             return fallback(baseline, profile, refinement, recipient, reason: .offlineOrError)
@@ -109,25 +114,24 @@ public struct AppleFoundationCurator: CuratorEngine {
 
     // MARK: Rank, then voice
 
-    /// Makes a session for a given instructions string. The only version-sensitive step —
-    /// the rank/voice loops are API-version agnostic.
-    private typealias MakeSession = @Sendable (_ instructions: String) -> LanguageModelSession
-
     /// The tier's whole job: model-rank the deck (the **probe** — throws if the tier is
     /// unusable, so the caller cascades), then voice every card best-effort over that order.
     /// `refinement`, when present, threads the user's "make it cheaper / warmer / …" ask plus the
-    /// running conversation into both the ranking and the voice instructions, so the model honors
-    /// it holistically rather than us post-processing its order.
-    private func rankAndVoice(
+    /// running conversation into both the ranking and the voice instructions (via
+    /// ``RefinementClause``), so the model honors it holistically rather than us post-processing its
+    /// order. `model` is whichever tier proved available; `deepReasoning` lifts both phases to
+    /// `.reasoningLevel(.deep)` for the server tier.
+    private func rankAndVoice<M: LanguageModel>(
         _ baseline: [Product],
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
         _ refinement: RefinementContext?,
         _ recipient: RecipientRef?,
-        session makeSession: @escaping MakeSession
+        model: M,
+        deepReasoning: Bool
     ) async throws -> [Product] {
-        let ordered = try await modelRankedOrder(baseline, profile, mission, refinement, recipient, session: makeSession)
-        return await voiceAll(ordered, profile, mission, refinement, recipient, session: makeSession)
+        let ordered = try await modelRankedOrder(baseline, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning)
+        return await voiceAll(ordered, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning)
     }
 
     /// One guided call asks the model to order the deck best-fit-first; the returned IDs are
@@ -135,18 +139,21 @@ public struct AppleFoundationCurator: CuratorEngine {
     /// deck) returns no usable IDs — either way the tier hasn't proven it can rank, so the
     /// caller cascades. A single-item deck can't be mis-ordered, so an empty reply still
     /// proves the tier (reconciliation backfills the one product).
-    private func modelRankedOrder(
+    private func modelRankedOrder<M: LanguageModel>(
         _ baseline: [Product],
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
         _ refinement: RefinementContext?,
         _ recipient: RecipientRef?,
-        session makeSession: @escaping MakeSession
+        model: M,
+        deepReasoning: Bool
     ) async throws -> [Product] {
         // Cap what we send so a big live deck doesn't blow context/latency on the 3B model;
         // products past the cap keep their deterministic order via the reconciliation tail.
         let head = Array(baseline.prefix(Self.rankDeckCap))
-        let session = makeSession(Self.rankingInstructions(profile: profile, mission: mission, refinement: refinement, recipient: recipient))
+        let session = Self.rankSession(profile: profile, mission: mission, refinement: refinement, recipient: recipient, model: model, deepReasoning: deepReasoning)
+        // The response bound + context policy live on the profile (see `rankSession`), not as an
+        // inline `GenerationOptions` band-aid.
         let response = try await session.respond(
             to: Self.rankPrompt(for: head),
             generating: RankedOrder.self
@@ -178,21 +185,24 @@ public struct AppleFoundationCurator: CuratorEngine {
     }
 
     /// Voices every card best-effort: the tier is already proven by ranking, so a per-product
-    /// failure just keeps that card's rule-based rationale. Never throws.
-    private func voiceAll(
+    /// failure just keeps that card's rule-based rationale. Each card gets its own fresh session
+    /// (no shared transcript — products must not bleed into one another's voice), built from the
+    /// same voice profile. Never throws.
+    private func voiceAll<M: LanguageModel>(
         _ products: [Product],
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
         _ refinement: RefinementContext?,
         _ recipient: RecipientRef?,
-        session makeSession: @escaping MakeSession
+        model: M,
+        deepReasoning: Bool
     ) async -> [Product] {
-        let instructions = Self.instructions(profile: profile, mission: mission, refinement: refinement, recipient: recipient)
         var out = products
         await withTaskGroup(of: (Int, String?).self) { group in
             for index in products.indices {
                 group.addTask {
-                    let text = try? await Self.voice(for: products[index], makeSession(instructions))
+                    let session = Self.voiceSession(profile: profile, mission: mission, refinement: refinement, recipient: recipient, model: model, deepReasoning: deepReasoning)
+                    let text = try? await Self.voice(for: products[index], session)
                     return (index, text)
                 }
             }
@@ -235,112 +245,75 @@ public struct AppleFoundationCurator: CuratorEngine {
         return CuratedDeck(products: voiced, tier: .ruleBased(reason))
     }
 
-    // MARK: Prompt construction
+    // MARK: Sessions (dynamic instructions + profile)
 
     /// How many candidates we actually send to the model to rank. A guard rail on context and
     /// latency for the on-device 3B model; products past the cap keep their deterministic
     /// order via the reconciliation tail (see ``reconcile(modelIDs:candidates:)``).
     static let rankDeckCap = 25
 
-    /// The shared lede — who Crumb is + this user's taste + the mission. Used verbatim by both
-    /// the voice and ranking instructions so the two phases speak to the same persona.
-    private static func persona(profile: TasteProfile, mission: ShoppingTask, recipient: RecipientRef? = nil) -> String {
-        // When shopping for someone else, the taste below is *theirs*, so the persona addresses the
-        // gift directly and the rest of the prompt's "the user" reads as "the person you're gifting".
-        let lede: String
-        let tasteOwner: String
-        if let recipient {
-            let who = recipient.trimmedRelationship.map { "\(recipient.name), \($0)" } ?? recipient.name
-            lede = """
-            You are Crumb, a personal shopping curator with a warm, plainspoken, slightly literary \
-            voice. You are helping someone shop for a gift for \(who). Curate to \(recipient.name)'s \
-            taste — become their shopper.
-            """
-            tasteOwner = "\(recipient.name)'s taste"
-        } else {
-            lede = """
-            You are Crumb, a personal shopping curator with a warm, plainspoken, slightly literary \
-            voice.
-            """
-            tasteOwner = "The user's taste"
+    /// Curator tuning — chosen per phase. Ranking is a judgment task that wants a stable order, so
+    /// it runs cooler; voicing is short creative copy, so it runs warmer. The response bounds keep
+    /// each generation well under the 4096-token window (see ``CrumbContext``) without truncating a
+    /// real ID list or a two-sentence rationale.
+    ///
+    /// `.reasoningLevel` is applied ONLY on the deep-reasoning (Private Cloud Compute) tier: the
+    /// on-device `SystemLanguageModel` does not support reasoning and *throws* if a level is set, so
+    /// the on-device profile omits it and leans on temperature alone (learned at runtime on the sim).
+    static let rankTemperature = 0.45
+    static let voiceTemperature = 0.7
+    static let rankMaxResponseTokens = 512
+    static let voiceMaxResponseTokens = 200
+
+    /// Builds the ranking session: ``CuratorRankInstructions`` in a profile that selects the tier's
+    /// model and declares the ranking tuning + context policy.
+    static func rankSession<M: LanguageModel>(
+        profile: TasteProfile,
+        mission: ShoppingTask,
+        refinement: RefinementContext?,
+        recipient: RecipientRef?,
+        model: M,
+        deepReasoning: Bool
+    ) -> LanguageModelSession {
+        let instructions = CuratorRankInstructions(profile: profile, mission: mission, refinement: refinement, recipient: recipient)
+        let base = LanguageModelSession.Profile { instructions }
+            .model(model)
+            .temperature(rankTemperature)
+            .maximumResponseTokens(rankMaxResponseTokens)
+            .historyTransform { CrumbContext.trimmed($0) }
+            .transcriptErrorHandlingPolicy(.revertTranscript)
+        // Reasoning is a server-tier capability only — adding it on-device throws.
+        if deepReasoning {
+            return LanguageModelSession(profile: base.reasoningLevel(.deep))
         }
-        return """
-        \(lede)
-
-        \(tasteOwner):
-        - Vibe: \(profile.vibe.joined(separator: ", "))
-        - Leanings: \(profile.leanings.joined(separator: "; "))
-        - Budget comfort: \(Self.budgetPhrase(profile.budgetComfort))
-        - In their words: "\(profile.signatureLine)"
-
-        The current mission: "\(mission.title)" — \(mission.subtitle)
-        """
+        return LanguageModelSession(profile: base)
     }
 
-    /// The voice instructions: persona + how to write one card's "why this is you" note.
-    /// Stable across the deck, so it lives in the session's instructions; only the product
-    /// varies per call.
-    static func instructions(profile: TasteProfile, mission: ShoppingTask, refinement: RefinementContext? = nil, recipient: RecipientRef? = nil) -> String {
-        let voiceGuide = recipient.map { rec in
-            "- frames the product as a gift for \(rec.name) and ties it to their taste (you may name \(rec.name) once);"
-        } ?? "- speaks to \"you\" and ties the product to this mission and at least one of their leanings;"
-        return """
-        \(Self.persona(profile: profile, mission: mission, recipient: recipient))\(Self.refinementClause(refinement))
-
-        You write the one-line "why this is you" note shown under a product being considered. \
-        Write the rationale so it:
-        - is ONE or at most TWO short sentences;
-        \(voiceGuide)
-        - is specific and honest about THIS product — never invent ratings, reviews, materials, \
-        or facts you weren't given;
-        - reflects the refinement above when one is present (e.g. lead with value if they asked \
-        for cheaper, warmth if they asked for warmer);
-        - sounds like a trusted friend with taste, not a marketing blurb. No emoji, no hashtags, \
-        no exclamation marks.
-        """
+    /// Builds a per-product voice session: ``CuratorVoiceInstructions`` in a profile that selects
+    /// the tier's model and declares the voice tuning + context policy.
+    static func voiceSession<M: LanguageModel>(
+        profile: TasteProfile,
+        mission: ShoppingTask,
+        refinement: RefinementContext?,
+        recipient: RecipientRef?,
+        model: M,
+        deepReasoning: Bool
+    ) -> LanguageModelSession {
+        let instructions = CuratorVoiceInstructions(profile: profile, mission: mission, refinement: refinement, recipient: recipient)
+        let base = LanguageModelSession.Profile { instructions }
+            .model(model)
+            .temperature(voiceTemperature)
+            .maximumResponseTokens(voiceMaxResponseTokens)
+            .historyTransform { CrumbContext.trimmed($0) }
+            .transcriptErrorHandlingPolicy(.revertTranscript)
+        // Reasoning is a server-tier capability only — adding it on-device throws.
+        if deepReasoning {
+            return LanguageModelSession(profile: base.reasoningLevel(.deep))
+        }
+        return LanguageModelSession(profile: base)
     }
 
-    /// The ranking instructions: persona + how to order the deck for *this* user. Honesty
-    /// matters more than novelty — on live products ratings/reviews are absent, so the model
-    /// must judge fit from taste and mission, not invent quality signals.
-    static func rankingInstructions(profile: TasteProfile, mission: ShoppingTask, refinement: RefinementContext? = nil, recipient: RecipientRef? = nil) -> String {
-        let subject = recipient.map { "\($0.name) (the gift's recipient)" } ?? "THIS user"
-        return """
-        \(Self.persona(profile: profile, mission: mission, recipient: recipient))\(Self.refinementClause(refinement))
-
-        You are ordering a deck of candidate products so the best fit for \(subject) and the \
-        mission comes first. Judge fit from their taste, leanings, budget comfort, the \
-        mission — and the refinement above when one is present (order cheaper products first if \
-        they asked for cheaper, warmer ones first if warmer, and push anything they asked to \
-        avoid toward the end). Do not invent ratings, reviews, or facts you weren't given. \
-        Return the product IDs in your recommended order, best fit first, using only the IDs \
-        provided and including each one exactly once.
-        """
-    }
-
-    /// A short instructions block describing the user's live refinement (the latest ask plus the
-    /// running conversation), appended to both the ranking and voice personas. Empty when there's
-    /// no refinement, so plain curation reads exactly as before.
-    private static func refinementClause(_ refinement: RefinementContext?) -> String {
-        guard let refinement, refinement.directive.isActionable || !refinement.conversation.isEmpty
-        else { return "" }
-        var lines = ["", "The user is refining this deck. Honor what they asked:"]
-        let directive = refinement.directive
-        if !directive.emphasis.isEmpty { lines.append("- Emphasis: \(directive.emphasis)") }
-        switch directive.priceDirection {
-        case .cheaper: lines.append("- Price: prefer cheaper options.")
-        case .pricier: lines.append("- Price: they're happy to spend more for better.")
-        case .none: break
-        }
-        if !directive.removeHints.isEmpty {
-            lines.append("- Avoid / de-emphasize: \(directive.removeHints.joined(separator: ", ")).")
-        }
-        if refinement.conversation.count > 1 {
-            let earlier = refinement.conversation.dropLast().joined(separator: "; ")
-            lines.append("- Earlier refinements still apply: \(earlier).")
-        }
-        return lines.joined(separator: "\n")
-    }
+    // MARK: Prompt construction
 
     /// The deck the model orders: one terse line per candidate so the small model can hold the
     /// whole set at once. IDs are echoed back as the ranking output.
@@ -372,14 +345,6 @@ public struct AppleFoundationCurator: CuratorEngine {
         return lines.joined(separator: "\n")
     }
 
-    private static func budgetPhrase(_ comfort: Double) -> String {
-        switch comfort {
-        case ..<0.34: return "thrifty — values getting it right for less"
-        case ..<0.67: return "balanced — will pay for quality that lasts"
-        default: return "splurge-happy — happy to invest in the best"
-        }
-    }
-
     private static func map(
         _ reason: SystemLanguageModel.Availability.UnavailableReason
     ) -> CuratorTier.Fallback {
@@ -389,6 +354,76 @@ public struct AppleFoundationCurator: CuratorEngine {
         case .modelNotReady: return .modelNotReady
         @unknown default: return .offlineOrError
         }
+    }
+}
+
+// MARK: - Dynamic instructions
+
+/// The ranking instructions: persona + taste + mission + (optional) refinement + how to order the
+/// deck for *this* user. Honesty matters more than novelty — on live products ratings/reviews are
+/// absent, so the model must judge fit from taste and mission, not invent quality signals.
+struct CuratorRankInstructions: DynamicInstructions {
+    let profile: TasteProfile
+    let mission: ShoppingTask
+    let refinement: RefinementContext?
+    let recipient: RecipientRef?
+
+    var body: some DynamicInstructions {
+        CrumbPersona(recipient: recipient)
+        TasteBlock(profile: profile, recipient: recipient, includeBudget: true)
+        MissionBlock(mission: mission)
+        RefinementClause(refinement: refinement)
+        Instructions(Self.rankGuide(recipient: recipient))
+    }
+
+    /// The "how to order the deck" guidance. Pure — unit-tested.
+    static func rankGuide(recipient: RecipientRef?) -> String {
+        let subject = recipient.map { "\($0.name) (the gift's recipient)" } ?? "THIS user"
+        return """
+        You are ordering a deck of candidate products so the best fit for \(subject) and the \
+        mission comes first. Judge fit from their taste, leanings, budget comfort, the \
+        mission — and the refinement above when one is present (order cheaper products first if \
+        they asked for cheaper, warmer ones first if warmer, and push anything they asked to \
+        avoid toward the end). Do not invent ratings, reviews, or facts you weren't given. \
+        Return the product IDs in your recommended order, best fit first, using only the IDs \
+        provided and including each one exactly once.
+        """
+    }
+}
+
+/// The voice instructions: persona + taste + mission + (optional) refinement + how to write one
+/// card's "why this is you" note.
+struct CuratorVoiceInstructions: DynamicInstructions {
+    let profile: TasteProfile
+    let mission: ShoppingTask
+    let refinement: RefinementContext?
+    let recipient: RecipientRef?
+
+    var body: some DynamicInstructions {
+        CrumbPersona(recipient: recipient)
+        TasteBlock(profile: profile, recipient: recipient, includeBudget: true)
+        MissionBlock(mission: mission)
+        RefinementClause(refinement: refinement)
+        Instructions(Self.voiceGuide(recipient: recipient))
+    }
+
+    /// The "how to write the rationale" guidance. Pure — unit-tested.
+    static func voiceGuide(recipient: RecipientRef?) -> String {
+        let voiceLine = recipient.map { rec in
+            "- frames the product as a gift for \(rec.name) and ties it to their taste (you may name \(rec.name) once);"
+        } ?? "- speaks to \"you\" and ties the product to this mission and at least one of their leanings;"
+        return """
+        You write the one-line "why this is you" note shown under a product being considered. \
+        Write the rationale so it:
+        - is ONE or at most TWO short sentences;
+        \(voiceLine)
+        - is specific and honest about THIS product — never invent ratings, reviews, materials, \
+        or facts you weren't given;
+        - reflects the refinement above when one is present (e.g. lead with value if they asked \
+        for cheaper, warmth if they asked for warmer);
+        - sounds like a trusted friend with taste, not a marketing blurb. No emoji, no hashtags, \
+        no exclamation marks.
+        """
     }
 }
 
