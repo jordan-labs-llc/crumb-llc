@@ -1,5 +1,6 @@
 import SwiftUI
 import CrumbKit
+import CrumbArt
 
 /// A product proposal card: gradient art with an SF Symbol, the name + shop + price, a
 /// star rating, and the curator's serif rationale. The signature card on the deck.
@@ -64,16 +65,11 @@ struct ProductCard: View {
         .clipped()
     }
 
-    /// The synthesized gradient + SF Symbol art used for seed products and as the
-    /// loading/failure placeholder behind a real product photo.
+    /// The synthesized art used for seed products and as the loading/failure placeholder
+    /// behind a real product photo: a refined gradient ground with topographic texture, a
+    /// frosted focal glyph, and a quiet crumb watermark (see ``ProductArt``).
     private var placeholderArt: some View {
-        ZStack {
-            LinearGradient(crumbStops: product.gradient)
-            Image(systemName: product.symbol)
-                .font(.system(size: 64, weight: .regular))
-                .foregroundStyle(.white.opacity(0.92))
-                .accessibilityHidden(true)
-        }
+        ProductArt(stops: product.gradient, symbol: product.symbol, seed: product.id)
     }
 
     private var details: some View {

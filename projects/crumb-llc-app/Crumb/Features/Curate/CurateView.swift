@@ -1,5 +1,6 @@
 import SwiftUI
 import CrumbKit
+import CrumbArt
 
 /// **The signature screen.** A swipeable deck of product proposals over the pinned
 /// ``KitTray``. Swipe right (or tap "Add") to drop an item into the kit; swipe left
@@ -230,9 +231,7 @@ struct CurateView: View {
     private var emptyState: some View {
         VStack(spacing: CrumbMetrics.Space.l) {
             Spacer()
-            Image(systemName: "checkmark.seal.fill")
-                .font(.system(size: 56))
-                .foregroundStyle(CrumbColor.ochre)
+            CrumbEmptyArt(variant: model.kit.isEmpty ? .nothingYet : .kitReady)
             Text(model.kit.isEmpty ? "Nothing added yet" : "That's a kit.")
                 .font(CrumbType.title)
                 .foregroundStyle(CrumbColor.ink)

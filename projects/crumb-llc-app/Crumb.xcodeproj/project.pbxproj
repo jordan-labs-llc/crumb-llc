@@ -25,6 +25,7 @@
 		86AAF236CC8DB3B5FDDDF192 /* CrumbKit in Frameworks */ = {isa = PBXBuildFile; productRef = D936D5DF956C9B5DC6AF69F5 /* CrumbKit */; };
 		89EAE1A11546F89C1ABB1B30 /* Secrets.plist in Resources */ = {isa = PBXBuildFile; fileRef = 51452F38ECE9387FD5B7DBD7 /* Secrets.plist */; };
 		8A22D99E08AD2E8D980D1D34 /* CrumbUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F614DD6F8A672D44B5BAF770 /* CrumbUITests.swift */; };
+		95068A1AB77BB4410ACECD29 /* CrumbArt in Frameworks */ = {isa = PBXBuildFile; productRef = 3EF3B1AC6F8837B41B7C259A /* CrumbArt */; };
 		A31B66102BAD5A5FDEBC7600 /* CrumbShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70EC9E0E97E33310BA1EF53F /* CrumbShortcuts.swift */; };
 		A8C6056943126209BC9C6E94 /* ShoppingTaskEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AE5545DEEC0BE6D2198334F /* ShoppingTaskEntity.swift */; };
 		A8D652EF801A782561E69C19 /* CrumbApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B2BEB51F0585270E292671 /* CrumbApp.swift */; };
@@ -74,6 +75,7 @@
 		67043AB0F0B4615612F05F08 /* SheetSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SheetSupport.swift; sourceTree = "<group>"; };
 		70EC9E0E97E33310BA1EF53F /* CrumbShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbShortcuts.swift; sourceTree = "<group>"; };
 		769625F3ADB578C3FFED06E4 /* MissionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionsView.swift; sourceTree = "<group>"; };
+		7CA275868FCE4041982E84B9 /* CrumbArt */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CrumbArt; path = CrumbArt; sourceTree = SOURCE_ROOT; };
 		852440CA683F418082909F40 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		88E88478E6D27F43A1624825 /* ApiTag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApiTag.swift; sourceTree = "<group>"; };
 		9166722AFAFB67FB518791DC /* KitTray.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KitTray.swift; sourceTree = "<group>"; };
@@ -99,6 +101,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				D94CF92CC4FA821A481A9062 /* CrumbKit in Frameworks */,
+				95068A1AB77BB4410ACECD29 /* CrumbArt in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -270,6 +273,7 @@
 		F5A4F61DD59C54D9BB97C2EC /* Packages */ = {
 			isa = PBXGroup;
 			children = (
+				7CA275868FCE4041982E84B9 /* CrumbArt */,
 				AD871FFFFBA9508EBC8C6AA0 /* CrumbKit */,
 			);
 			name = Packages;
@@ -314,6 +318,7 @@
 			name = Crumb;
 			packageProductDependencies = (
 				ECEC8D61420FB33F67060AD5 /* CrumbKit */,
+				3EF3B1AC6F8837B41B7C259A /* CrumbArt */,
 			);
 			productName = Crumb;
 			productReference = F65639EFF2FF1E75D8FAB265 /* Crumb.app */;
@@ -391,6 +396,7 @@
 			mainGroup = D94993CF8607D980DA2C599A;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				42F1C4155205EAD39810FA86 /* XCLocalSwiftPackageReference "CrumbArt" */,
 				1DB3BEF2CF4318967A775295 /* XCLocalSwiftPackageReference "CrumbKit" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -833,9 +839,17 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = CrumbKit;
 		};
+		42F1C4155205EAD39810FA86 /* XCLocalSwiftPackageReference "CrumbArt" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = CrumbArt;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		3EF3B1AC6F8837B41B7C259A /* CrumbArt */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrumbArt;
+		};
 		D936D5DF956C9B5DC6AF69F5 /* CrumbKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = CrumbKit;

@@ -1,5 +1,6 @@
 import SwiftUI
 import CrumbKit
+import CrumbArt
 
 /// The app shell: a quiet paper board with a slim header, the routed screen, and the
 /// taste-profile / checkout-handoff overlays. Switches on `AppModel.route`.
@@ -30,6 +31,18 @@ struct RootView: View {
         // Wake the (scale-to-zero) broker while the user gets oriented, so the first live
         // mission usually lands warm. No-op on the mock.
         .task { await model.warmUpCatalog() }
+        #if DEBUG
+        // Headless screenshot routing: deal a curate deck without taps (see `CrumbApp`).
+        .task {
+            let env = ProcessInfo.processInfo.environment
+            let mission = env["CRUMB_MISSION"] ?? "coffee"
+            switch env["CRUMB_SCREENSHOT"] {
+            case "curate": await model.presentCurateForScreenshot(missionID: mission)
+            case "kit": await model.presentFullKitForScreenshot(missionID: mission)
+            default: break
+            }
+        }
+        #endif
         .sheet(isPresented: $model.isShowingTasteProfile) {
             TasteProfileView(initial: model.tasteProfile)
                 .crumbExpandableSheet()
@@ -82,10 +95,7 @@ struct AppHeader: View {
             }
 
             HStack(spacing: CrumbMetrics.Space.xs) {
-                Image(systemName: "leaf.circle.fill")
-                    .foregroundStyle(CrumbColor.pine)
-                    .font(.title3)
-                    .accessibilityHidden(true)
+                CrumbBadge(size: 26)
                 Text("Crumb")
                     .font(CrumbType.title2)
                     .foregroundStyle(CrumbColor.ink)
