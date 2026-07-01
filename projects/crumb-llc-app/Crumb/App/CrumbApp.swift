@@ -50,6 +50,9 @@ struct CrumbApp: App {
             tasteExtractor: AppleFoundationTasteExtractor(),
             planner: AppleFoundationMissionPlanner(),
             refiner: AppleFoundationRefinementInterpreter(),
+            // Fits the Curate refine chips to the mission (tea → Organic/Caffeine-free/Bolder);
+            // self-degrades to the deterministic category taxonomy when no model tier is usable.
+            chipSuggester: AppleFoundationRefineChipSuggester(),
             recapWriter: AppleFoundationRecapWriter(),
             // Drops clearly off-topic catalog results before curation; deterministic floor first,
             // then a best-effort on-device model pass that self-degrades to that floor.

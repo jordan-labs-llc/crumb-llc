@@ -4,13 +4,16 @@ import CrumbArt
 
 /// The conversational-refinement bar pinned above the ``KitTray`` on the Curate screen — where
 /// the user **talks back to the curator**. A free-text field ("tell Crumb what to change") for
-/// open-ended asks, a row of quick chips (Cheaper · Warmer · Fewer · More durable) for the common
+/// open-ended asks, a row of quick chips fit to the mission (tea → Cheaper · Organic ·
+/// Caffeine-free · Bolder; a hike → Cheaper · Warmer · Lighter · More durable) for the common
 /// ones, a quiet opt-in to fold a refinement into their saved taste, and a Reset that undoes the
 /// conversation.
 ///
 /// Both the field and the chips route through `AppModel.refine(_:)` → the on-device
-/// ``RefinementInterpreter``, so a chip tap and a typed line are read the same way. The chips are
-/// the discoverable, headless-screenshot-able affordance; the field is open-ended.
+/// ``RefinementInterpreter``, so a chip tap and a typed line are read the same way. The chips
+/// themselves come from `AppModel.refineChips` (the ``RefineChipSuggester`` seam), which fits them
+/// to the mission's category so "Warmer"/"More durable" never show for a tea run (issue #25). They
+/// are the discoverable, headless-screenshot-able affordance; the field is open-ended.
 struct RefinementBar: View {
     @Environment(AppModel.self) private var model
 
@@ -76,7 +79,7 @@ struct RefinementBar: View {
 
     private var chipRow: some View {
         FlexibleWrap(spacing: CrumbMetrics.Space.s) {
-            ForEach(RuleBasedRefinementInterpreter.Chip.allCases, id: \.self) { chip in
+            ForEach(model.refineChips) { chip in
                 Button { apply(chip.refinementText) } label: {
                     Text(chip.label)
                         .font(CrumbType.pill)
@@ -87,7 +90,7 @@ struct RefinementBar: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(model.isReworking)
-                .accessibilityIdentifier("refineChip.\(chip.rawValue)")
+                .accessibilityIdentifier("refineChip.\(chip.id)")
             }
         }
     }
