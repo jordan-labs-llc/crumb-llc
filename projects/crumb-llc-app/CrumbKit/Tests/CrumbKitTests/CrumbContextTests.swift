@@ -58,5 +58,47 @@ struct CrumbContextTests {
     func defaultBudget() {
         #expect(CrumbContext.defaultHistoryTurns == 8)
         #expect(CrumbContext.onDeviceContextTokens == 4096)
+        #expect(CrumbContext.defaultToolTurns == 4)
+    }
+
+    // MARK: Pair-safe tool-loop trim
+
+    typealias Kind = CrumbContext.EntryKind
+
+    /// A transcript with no tool turns (single-shot) is kept whole.
+    @Test("No tool turns keeps the whole transcript")
+    func toolTrimSingleShot() {
+        let kinds: [Kind] = [.instructions, .prompt, .response]
+        #expect(CrumbContext.keptIndices(kinds: kinds) == [0, 1, 2])
+    }
+
+    /// Few enough tool turns to keep whole → nothing trimmed.
+    @Test("Tool turns within budget are kept whole")
+    func toolTrimUnderBudget() {
+        // 2 tool turns, budget 4 → keep all.
+        let kinds: [Kind] = [.instructions, .prompt, .toolCalls, .toolOutput, .toolCalls, .toolOutput]
+        #expect(CrumbContext.keptIndices(kinds: kinds, recentToolTurns: 4) == [0, 1, 2, 3, 4, 5])
+    }
+
+    /// Over budget: keep the setup + the most recent whole tool turns, cutting at a `toolCalls`
+    /// boundary so no `toolOutput` is orphaned.
+    @Test("Over budget keeps setup + recent whole tool turns, never splitting a pair")
+    func toolTrimOverBudget() {
+        // setup [0,1]; 5 tool turns at 2,4,6,8,10 (+ outputs 3,5,7,9,11). Budget 4 → drop oldest turn.
+        let kinds: [Kind] = [
+            .instructions, .prompt,
+            .toolCalls, .toolOutput, .toolCalls, .toolOutput, .toolCalls, .toolOutput,
+            .toolCalls, .toolOutput, .toolCalls, .toolOutput,
+        ]
+        let kept = CrumbContext.keptIndices(kinds: kinds, recentToolTurns: 4)
+        #expect(kept == [0, 1, 4, 5, 6, 7, 8, 9, 10, 11])
+        // The first kept tool entry is a toolCalls (a turn start), never an orphaned toolOutput.
+        let firstTool = kept.first { kinds[$0] == .toolCalls || kinds[$0] == .toolOutput }
+        #expect(firstTool.map { kinds[$0] } == .toolCalls)
+    }
+
+    @Test("Empty transcript keeps nothing (tool trim)")
+    func toolTrimEmpty() {
+        #expect(CrumbContext.keptIndices(kinds: [], recentToolTurns: 4) == [])
     }
 }

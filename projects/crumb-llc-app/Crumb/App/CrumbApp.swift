@@ -45,6 +45,10 @@ struct CrumbApp: App {
             // Drops clearly off-topic catalog results before curation; deterministic floor first,
             // then a best-effort on-device model pass that self-degrades to that floor.
             relevanceGate: AppleFoundationRelevanceGate(),
+            // The model drives the search phase via Tools when a tier is up (searching each part,
+            // reaching past the plan, widening a strong fit), degrading to the deterministic
+            // fan-out + gate floor otherwise.
+            orchestrator: AppleFoundationMissionOrchestrator(),
             recentsStore: Self.makeRecentsStore(),
             historyStore: Self.makeHistoryStore(),
             recipientStore: Self.makeRecipientStore()
