@@ -390,7 +390,11 @@ final class AppModel {
         // The plan itself is curated to the recipient's taste when this is a gift mission, so the
         // parts the user edits already read as theirs.
         let profile = recipient?.taste ?? tasteProfile
-        let planned = await planner.plan(goal: trimmed, profile: profile)
+        let planned = await CrumbTrace.measure("plan", summarize: {
+            "goalChars=\(trimmed.count) shoppable=\($0.task != nil) parts=\($0.task?.plan.count ?? 0) tier=\($0.tier.traceLabel)"
+        }) {
+            await planner.plan(goal: trimmed, profile: profile)
+        }
         if let task = planned.task {
             recentsStore.addRecent(trimmed)
             recentGoals = recentsStore.loadRecents()
@@ -1024,7 +1028,11 @@ final class AppModel {
         // *before* the curator ranks/voices them, and the floor keeps at least `relevanceFloor`
         // candidates so a real result set never becomes "no matches". Returns nil only on a total
         // catalog outage.
-        let gathered = await orchestrator.gather(for: task, floor: Self.relevanceFloor, using: ucp, gate: relevanceGate)
+        let gathered = await CrumbTrace.measure("gather", summarize: {
+            "queries=\(task.searchQueries.count) candidates=\($0?.products.count ?? 0) agent=\($0?.usedAgent ?? false)"
+        }) {
+            await orchestrator.gather(for: task, floor: Self.relevanceFloor, using: ucp, gate: relevanceGate)
+        }
 
         // Only mutate if the user is still on this task.
         guard selectedTask?.id == task.id else { return }
@@ -1040,7 +1048,11 @@ final class AppModel {
         // `curate` both ranks and rewrites each rationale into Crumb's voice, and reports the
         // tier it used so the UI can be honest when it fell back from the AI curator. For a gift
         // mission this curates to the recipient's taste, with gift-framed voice.
-        let curated = await curator.curate(gathered.products, for: activeTaste, mission: task, refinement: nil, recipient: activeRecipientRef)
+        let curated = await CrumbTrace.measure("curate", summarize: {
+            "in=\(gathered.products.count) deck=\($0.products.count) tier=\($0.tier.traceLabel)"
+        }) {
+            await curator.curate(gathered.products, for: activeTaste, mission: task, refinement: nil, recipient: activeRecipientRef)
+        }
         guard selectedTask?.id == task.id else { return }
         candidates = curated.products
         deck = curated.products
