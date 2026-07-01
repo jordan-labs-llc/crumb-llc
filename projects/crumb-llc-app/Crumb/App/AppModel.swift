@@ -1021,18 +1021,39 @@ final class AppModel {
     func loadCandidates(for task: ShoppingTask) async {
         loadState = .loading
 
-        // Gather the candidate pool — the search + relevance phase. The agentic orchestrator lets
-        // the model *drive* the search via Tools (searching each part, reaching past the plan,
-        // widening a strong fit) with the relevance guard on every result; it degrades to the
-        // deterministic fan-out + gate when no model is up. Either way off-topic items are dropped
-        // *before* the curator ranks/voices them, and the floor keeps at least `relevanceFloor`
-        // candidates so a real result set never becomes "no matches". Returns nil only on a total
-        // catalog outage.
+        // Stream raw, then settle. The gather streams each newly-discovered batch through the
+        // collector; we append raw picks to the deck the moment they land and flip to Curate on the
+        // FIRST pick — so the user watches the deck fill instead of staring at "Scanning shops" until
+        // the whole pipeline settles. Once gather + curate finish we swap the raw deck for the ranked,
+        // voiced one (see `settledDeck`).
+        let collector = CandidateCollector()
+        let streamTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await batch in collector.picks {
+                // Stop feeding a deck the user has navigated away from.
+                guard self.selectedTask?.id == task.id else { break }
+                let fresh = batch.filter { product in !self.deck.contains { $0.id == product.id } }
+                guard !fresh.isEmpty else { continue }
+                let wasEmpty = self.deck.isEmpty
+                self.deck.append(contentsOf: fresh)
+                self.candidates = self.deck
+                if wasEmpty { self.route = .curate }   // navigate on the first pick
+            }
+        }
+
+        // The agentic orchestrator lets the model *drive* the search via Tools (searching each part,
+        // reaching past the plan, widening a strong fit) with the relevance guard on every result; it
+        // degrades to the deterministic parallel fan-out + gate when no model is up. Off-topic items
+        // are dropped before the curator ranks/voices them, and the floor keeps at least
+        // `relevanceFloor` candidates so a real result set never becomes "no matches". Returns nil
+        // only on a total catalog outage.
         let gathered = await CrumbTrace.measure("gather", summarize: {
             "queries=\(task.searchQueries.count) candidates=\($0?.products.count ?? 0) agent=\($0?.usedAgent ?? false)"
         }) {
-            await orchestrator.gather(for: task, floor: Self.relevanceFloor, using: ucp, gate: relevanceGate)
+            await orchestrator.gather(for: task, floor: Self.relevanceFloor, using: ucp, gate: relevanceGate, into: collector)
         }
+        await collector.finish()      // close the stream so the subscriber's loop ends…
+        _ = await streamTask.value    // …and drain any trailing picks before we settle the deck.
 
         // Only mutate if the user is still on this task.
         guard selectedTask?.id == task.id else { return }
@@ -1055,13 +1076,30 @@ final class AppModel {
         }
         guard selectedTask?.id == task.id else { return }
         candidates = curated.products
-        deck = curated.products
         baseCandidates = curated.products   // the snapshot Reset restores
         curatorTier = curated.tier
+        // Settle: swap the streamed raw deck for the curated (ranked, voiced) order, keeping only
+        // cards the user hasn't already swiped past.
+        deck = Self.settledDeck(curated.products, keepingUndecidedFrom: deck)
         loadState = .loaded
+        // If nothing streamed (a successful but empty gather), the stream never navigated us — land
+        // on Curate anyway so the empty state shows, matching the pre-streaming behavior.
+        if route != .curate { route = .curate }
         // Note: the refinement conversation is reset by `enterPlan` (a new mission) and the
         // screenshot hook, NOT here — clearing it on every (re)load would race a refinement that
         // arrived while an earlier load was still settling.
+    }
+
+    /// Swaps the streamed raw deck for the curated one at "settle" time: returns the curated (ranked,
+    /// voiced) products in their ranked order, dropping any the user already swiped past while the
+    /// deck was streaming. By settle time everything gathered has streamed, so a curated product
+    /// missing from `current` was decided, not merely unseen; a still-present one is undecided and
+    /// keeps its ranked position. When nothing has streamed yet (`current` empty — e.g. a fully
+    /// synchronous path), the full ranked deck is used as-is. Pure — unit-tested.
+    nonisolated static func settledDeck(_ settled: [Product], keepingUndecidedFrom current: [Product]) -> [Product] {
+        guard !current.isEmpty else { return settled }
+        let undecided = Set(current.map(\.id))
+        return settled.filter { undecided.contains($0.id) }
     }
 
     /// Fans `queries` out to the catalog **in parallel** and dedupes the union by product id.

@@ -21,6 +21,10 @@ struct CurateView: View {
                 activityBanner("Reworking the deck…", id: "reworkingBanner")
             } else if model.isRecurating {
                 activityBanner("Re-reading your taste…", id: "recuratingBanner")
+            } else if model.isScanning {
+                // Streaming: raw picks are on screen while the gather finishes and the curator ranks
+                // + voices them (they settle in place when done).
+                activityBanner("Curating your picks…", id: "gatheringBanner")
             }
             if let note = model.refinementFallbackNote ?? model.curatorFallbackNote {
                 fallbackNote(note)

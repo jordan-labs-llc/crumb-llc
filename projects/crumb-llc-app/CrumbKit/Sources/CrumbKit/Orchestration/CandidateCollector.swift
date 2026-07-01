@@ -11,20 +11,42 @@ public actor CandidateCollector {
     private var order: [Product] = []
     private var seen: Set<Product.ID> = []
     private let cap: Int
+    private var continuation: AsyncStream<[Product]>.Continuation?
+
+    /// A live stream of **newly-inserted** picks, one batch per ``add(_:)`` that discovered something
+    /// first-seen. A progressive UI subscribes to this to show picks the moment they land — the
+    /// "stream raw" half of stream-raw-then-settle — instead of waiting for the whole gather. It is
+    /// `nonisolated` (immutable, `Sendable`) so a consumer can `for await` it without hopping the
+    /// actor; the yields themselves are serialized by the actor against concurrent ``add(_:)``.
+    public nonisolated let picks: AsyncStream<[Product]>
 
     /// `cap` bounds the pool the same way the curator's `rankDeckCap` bounds ranking — a big live
     /// catalog shouldn't let the loop gather hundreds of items the curator then can't hold.
     public init(cap: Int = 60) {
         self.cap = cap
+        let (stream, continuation) = AsyncStream.makeStream(of: [Product].self)
+        self.picks = stream
+        self.continuation = continuation
     }
 
     /// Adds first-seen products in order until the cap is reached; ignores duplicates and overflow.
+    /// Emits the batch of *newly-inserted* products (if any) on ``picks``.
     public func add(_ products: [Product]) {
+        var inserted: [Product] = []
         for product in products where !seen.contains(product.id) {
             guard order.count < cap else { break }
             seen.insert(product.id)
             order.append(product)
+            inserted.append(product)
         }
+        if !inserted.isEmpty { continuation?.yield(inserted) }
+    }
+
+    /// Closes the ``picks`` stream — call once gathering is done so a subscriber's `for await` loop
+    /// ends. Idempotent: a second call is a no-op.
+    public func finish() {
+        continuation?.finish()
+        continuation = nil
     }
 
     /// The gathered pool, in discovery order.

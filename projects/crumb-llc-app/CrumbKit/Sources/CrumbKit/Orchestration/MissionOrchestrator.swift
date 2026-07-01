@@ -17,12 +17,31 @@ import Foundation
 /// voicing. `gather` returns `nil` ONLY on a total catalog outage (every search errored), so the
 /// caller can tell an outage from a genuinely empty result.
 public protocol MissionOrchestrator: Sendable {
+    /// Gathers into `collector`, which streams each newly-discovered batch on ``CandidateCollector/picks``
+    /// so a progressive UI can show raw picks as they land. Returns the terminal, relevance-settled
+    /// pool (the same value the non-streaming ``gather(for:floor:using:gate:)`` returns) once
+    /// gathering is complete, or `nil` on a total catalog outage.
+    func gather(
+        for mission: ShoppingTask,
+        floor: Int,
+        using ucp: any UCPClient,
+        gate: any RelevanceGate,
+        into collector: CandidateCollector
+    ) async -> GatheredCandidates?
+}
+
+public extension MissionOrchestrator {
+    /// Convenience for callers that don't observe the stream — gathers into a throwaway collector
+    /// and returns only the terminal pool. This is the shape the tests and any non-progressive
+    /// caller use; the streaming `into:` form is what ``AppModel`` drives for stream-raw-then-settle.
     func gather(
         for mission: ShoppingTask,
         floor: Int,
         using ucp: any UCPClient,
         gate: any RelevanceGate
-    ) async -> GatheredCandidates?
+    ) async -> GatheredCandidates? {
+        await gather(for: mission, floor: floor, using: ucp, gate: gate, into: CandidateCollector())
+    }
 }
 
 /// The result of a gather: the relevance-filtered candidate pool plus whether the agentic tier
@@ -70,14 +89,34 @@ public struct DeterministicMissionOrchestrator: MissionOrchestrator {
         for mission: ShoppingTask,
         floor: Int,
         using ucp: any UCPClient,
-        gate: any RelevanceGate
+        gate: any RelevanceGate,
+        into collector: CandidateCollector
     ) async -> GatheredCandidates? {
         // A mission with no queries falls back to its id, exactly like the old inline pipeline.
         let queries = mission.searchQueries.isEmpty ? [mission.id] : mission.searchQueries
-        guard let union = await ucp.searchUnion(queries) else { return nil }
+        // Fan the queries out in parallel and add each query's raw batch to the collector *as it
+        // returns*, so a subscriber sees picks stream in rather than waiting for the whole union.
+        // The collector dedupes by id, so overlapping queries (the mock collapses them) never
+        // double-count. `try?` keeps one failed query from cancelling its siblings; a query that
+        // errors contributes nothing.
+        let anySucceeded = await withTaskGroup(of: Bool.self) { group in
+            for query in queries {
+                group.addTask {
+                    guard let batch = try? await ucp.searchCatalog(query, placements: [.organic]) else { return false }
+                    await collector.add(batch)
+                    return true
+                }
+            }
+            var succeeded = false
+            for await ok in group { succeeded = succeeded || ok }
+            return succeeded
+        }
+        // A total outage (every query errored) is `nil`, so the caller can tell it from an empty
+        // success — matching `searchUnion`'s contract.
+        guard anySucceeded else { return nil }
         // Drop clearly off-topic items before the curator ranks/voices them; the gate keeps at least
         // `floor` candidates, so it can never turn a real result set into "no matches".
-        let gated = await gate.filter(union, for: mission, floor: floor)
+        let gated = await gate.filter(collector.products, for: mission, floor: floor)
         return GatheredCandidates(products: gated, usedAgent: false)
     }
 }

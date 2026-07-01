@@ -105,6 +105,46 @@ struct MissionOrchestratorTests {
         #expect(await collector.products.map(\.id) == ["1", "2"])
     }
 
+    @Test("Collector streams each newly-inserted batch once on `picks`, then finishes")
+    func collectorStreams() async {
+        let collector = CandidateCollector()
+        // Subscribe before adding so no batch is missed.
+        let consumer = Task {
+            var batches: [[String]] = []
+            for await batch in collector.picks { batches.append(batch.map(\.id)) }
+            return batches
+        }
+        await collector.add([product("1", "One"), product("2", "Two")])
+        await collector.add([product("2", "Two"), product("3", "Three")])   // "2" is a dup — not re-yielded
+        await collector.finish()
+        let batches = await consumer.value
+        #expect(batches == [["1", "2"], ["3"]])   // first batch both; second only the fresh id
+    }
+
+    @Test("Deterministic gather streams raw picks through the collector as it searches")
+    func deterministicGatherStreams() async {
+        // Short (≤2-char) queries make the gate keyword set empty → pass-through, so the terminal
+        // pool is the raw union and the test isolates the *streaming*, not the gate.
+        let ucp = StubUCP(results: [
+            "aa": [product("s1", "One")],
+            "bb": [product("s2", "Two")],
+        ])
+        let collector = CandidateCollector()
+        let consumer = Task {
+            var ids: [String] = []
+            for await batch in collector.picks { ids.append(contentsOf: batch.map(\.id)) }
+            return ids
+        }
+        let gathered = await DeterministicMissionOrchestrator().gather(
+            for: mission(queries: ["aa", "bb"]), floor: 1, using: ucp, gate: RuleBasedRelevanceGate(), into: collector
+        )
+        await collector.finish()
+        let streamed = await consumer.value
+        // Order isn't guaranteed across concurrent queries, so compare as sets.
+        #expect(Set(streamed) == ["s1", "s2"])                       // both raw picks streamed
+        #expect(Set(gathered?.products.map(\.id) ?? []) == ["s1", "s2"])   // and returned in the terminal pool
+    }
+
     // MARK: GatherToolSupport
 
     @Test("onTopic keeps mission-matching products and drops the off-topic")

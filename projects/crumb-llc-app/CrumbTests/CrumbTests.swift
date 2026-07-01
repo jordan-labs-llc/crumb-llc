@@ -163,6 +163,51 @@ struct CrumbTests {
         #expect(model.candidates.isEmpty)
     }
 
+    @Test("Streaming curate navigates to Curate and settles to the ranked deck")
+    @MainActor
+    func streamingLoadSettlesToRankedDeck() async {
+        // A seed mission on the mock: picks stream in, we navigate to Curate on the first, then the
+        // deck settles to the curator's ranked order once curation finishes.
+        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator(),
+                             tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile))
+        model.enterPlan(with: SeedData.coffee)   // sets selectedTask + route = .plan
+        await model.loadCandidates(for: SeedData.coffee)
+
+        #expect(model.route == .curate)                 // navigated (on the first streamed pick)
+        #expect(model.loadState == .loaded)             // then settled
+        #expect(!model.deck.isEmpty)
+        // No swipes happened, so the settled deck is the full ranked deck — same set and order as
+        // the curated candidates.
+        #expect(model.deck.map(\.id) == model.candidates.map(\.id))
+        #expect(Set(model.deck.map(\.id)) == Set(SeedData.coffeeProducts.map(\.id)))
+    }
+
+    @Test("A total catalog outage fails without navigating away from Plan")
+    @MainActor
+    func streamingOutageStaysOnPlan() async {
+        let fake = FakeUCP(byQuery: [:], failAll: true)
+        let task = Self.fakeTask(queries: ["q1", "q2"])
+        let model = AppModel(ucp: fake, curator: RuleBasedCurator())
+        model.enterPlan(with: task)
+        await model.loadCandidates(for: task)
+
+        #expect(model.loadState == .failed)
+        #expect(model.deck.isEmpty)
+        #expect(model.route == .plan)   // nothing streamed → never navigated
+    }
+
+    @Test("settledDeck keeps undecided cards in ranked order and drops swiped-away ones")
+    func settledDeckShaping() {
+        let settled = [Self.fakeProduct("a"), Self.fakeProduct("b"),
+                       Self.fakeProduct("c"), Self.fakeProduct("d")]   // ranked order
+        // The user swiped a and d away while streaming; b and c remain (c is on top).
+        let current = [Self.fakeProduct("c"), Self.fakeProduct("b")]
+        let out = AppModel.settledDeck(settled, keepingUndecidedFrom: current)
+        #expect(out.map(\.id) == ["b", "c"])   // undecided only, in the settled (ranked) order — not floated
+        // Nothing streamed yet → the full ranked deck is used unchanged.
+        #expect(AppModel.settledDeck(settled, keepingUndecidedFrom: []).map(\.id) == ["a", "b", "c", "d"])
+    }
+
     @Test("beginHandoff presents the sheet with a nil url when no link resolves")
     @MainActor
     func handoffPresentsHonestSheet() async {

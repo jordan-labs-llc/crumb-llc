@@ -32,16 +32,18 @@ public struct AppleFoundationMissionOrchestrator: MissionOrchestrator {
         for mission: ShoppingTask,
         floor: Int,
         using ucp: any UCPClient,
-        gate: any RelevanceGate
+        gate: any RelevanceGate,
+        into collector: CandidateCollector
     ) async -> GatheredCandidates? {
         let device = SystemLanguageModel.default
         guard case .available = device.availability else {
-            // No model — the mandatory deterministic floor.
-            return await deterministic.gather(for: mission, floor: floor, using: ucp, gate: gate)
+            // No model — the mandatory deterministic floor, streaming through the same collector.
+            return await deterministic.gather(for: mission, floor: floor, using: ucp, gate: gate, into: collector)
         }
 
-        let collector = CandidateCollector()
         do {
+            // The tools write into the *injected* collector, so its `picks` stream feeds the UI while
+            // the model is still driving the loop.
             let tools: [any Tool] = [
                 CatalogSearchTool(ucp: ucp, mission: mission, collector: collector),
                 FindSimilarTool(ucp: ucp, mission: mission, collector: collector),
@@ -52,20 +54,21 @@ public struct AppleFoundationMissionOrchestrator: MissionOrchestrator {
             _ = try await session.respond(to: Self.gatherPrompt(for: mission))
         } catch {
             Self.log.error("Agentic gather threw, using deterministic floor: \(error.localizedDescription, privacy: .public)")
-            return await deterministic.gather(for: mission, floor: floor, using: ucp, gate: gate)
+            return await deterministic.gather(for: mission, floor: floor, using: ucp, gate: gate, into: collector)
         }
 
         var pool = await collector.products
 
         // Safety floor: if the model gathered fewer than the floor, union with the deterministic
-        // gather so the agentic deck is never thinner than the floor pipeline would have produced.
-        if pool.count < floor, let floorGather = await deterministic.gather(for: mission, floor: floor, using: ucp, gate: gate) {
+        // gather (streaming its extra picks through the same collector) so the agentic deck is never
+        // thinner than the floor pipeline would have produced.
+        if pool.count < floor, let floorGather = await deterministic.gather(for: mission, floor: floor, using: ucp, gate: gate, into: collector) {
             pool = Self.mergeDedup(pool, floorGather.products)
         }
 
         // If the model gathered nothing usable at all, fall through to the floor entirely.
         guard !pool.isEmpty else {
-            return await deterministic.gather(for: mission, floor: floor, using: ucp, gate: gate)
+            return await deterministic.gather(for: mission, floor: floor, using: ucp, gate: gate, into: collector)
         }
         return GatheredCandidates(products: pool, usedAgent: true)
     }
