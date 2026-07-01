@@ -95,6 +95,14 @@ final class JasmineTeaJourneyTests: XCTestCase {
         // ---- Step 3: Curate swipe deck (live catalog search + curation) ----
         if el("CurateScreen").waitForExistence(timeout: 90) {
             snap("04-curate-first")
+            // The deck streams raw picks first (merchant blurbs), then *settles* into the ranked,
+            // curator-voiced order once gather + curation finish — the "Curating your picks…"
+            // shimmer (`gatheringBanner`) is up until then. Wait for it to clear so the captured
+            // cards show the curator's per-card voice, not the transient raw catalog description.
+            let gathering = el("gatheringBanner")
+            let settleDeadline = Date().addingTimeInterval(75)
+            while gathering.exists && Date() < settleDeadline { usleep(300_000) }
+            snap("04-curate-settled")
             for i in 0..<3 {
                 var add = app.buttons["addButton"]
                 if !add.exists { add = app.buttons["Add to kit"] }

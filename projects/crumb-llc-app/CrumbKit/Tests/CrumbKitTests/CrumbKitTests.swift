@@ -84,6 +84,53 @@ struct CrumbKitTests {
         }
     }
 
+    // MARK: Per-card voice floor (#22 — never echo the raw catalog blurb as the curator's voice)
+
+    /// A live-style product whose `rationale` is the raw merchant blurb (does not echo any leaning).
+    private func liveProduct(_ blurb: String) -> Product {
+        Product(
+            id: "live.p", name: "Jasmine Tea", shop: Shop(id: "s", name: "thefoalyard.co.uk"),
+            price: 17, rating: 0, reviews: 0, rationale: blurb, symbol: "bag",
+            gradient: SeedData.Gradient.pine,
+            variants: [Variant(id: "live.p.v", title: "Standard", price: 17, checkoutURL: nil)]
+        )
+    }
+
+    @Test("A live merchant blurb is reframed into curator voice, not echoed verbatim")
+    func liveBlurbReframedWithLeaning() {
+        let curator = RuleBasedCurator()
+        let blurb = "Premium loose jasmine green tea leaves in a 8.46 oz bag, ideal for hot or cold beverages and boba."
+        let product = liveProduct(blurb)
+        let profile = TasteProfile(vibe: [], leanings: ["Bright and floral"], budgetComfort: 0.5, signatureLine: "")
+
+        let owner = curator.rationale(for: product, profile: profile)
+        #expect(!owner.contains(blurb))                 // the raw blurb is NOT passed off as our voice
+        #expect(owner.contains("your lean toward"))     // a real curator line stands in its place
+
+        let mom = RecipientRef(id: "m", name: "Mom", accentHex: 0)
+        let gift = curator.rationale(for: product, profile: profile, recipient: mom)
+        #expect(!gift.contains(blurb))
+        #expect(gift.contains("Mom's lean toward"))
+        #expect(!gift.contains("your lean toward"))
+    }
+
+    @Test("With no stated leaning a live blurb still isn't echoed — a generic curator line stands in")
+    func liveBlurbReframedNoLeaning() {
+        let curator = RuleBasedCurator()
+        let blurb = "Premium loose jasmine green tea leaves, 8.46 oz."
+        let product = liveProduct(blurb)
+        let profile = TasteProfile(vibe: [], leanings: [], budgetComfort: 0.5, signatureLine: "")
+
+        let owner = curator.rationale(for: product, profile: profile)
+        #expect(!owner.contains(blurb))
+        #expect(!owner.isEmpty)
+
+        let mom = RecipientRef(id: "m", name: "Mom", accentHex: 0)
+        let gift = curator.rationale(for: product, profile: profile, recipient: mom)
+        #expect(!gift.contains(blurb))
+        #expect(gift.contains("Mom"))
+    }
+
     // MARK: Model-rank reconciliation (the deterministic guarantee behind the model call)
 
     @Test("reconcile honors the model's order and keeps every product exactly once")
