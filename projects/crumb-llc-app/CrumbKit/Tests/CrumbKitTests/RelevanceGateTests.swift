@@ -32,6 +32,19 @@ struct RelevanceGateTests {
         searchQueries: ["lacrosse stick", "lacrosse gloves", "shoulder pads", "lacrosse helmet", "lacrosse cleats", "lacrosse gear bag"]
     )
 
+    /// A **narrow** single-item mission — the jasmine-tea journey that drifted into black/green tea.
+    /// One search part, so the strict core-term gate applies.
+    private let jasmine = ShoppingTask(
+        id: "goal.premium-jasmine-tea",
+        title: "Premium jasmine tea",
+        subtitle: "A mission for you",
+        plan: ["Premium jasmine tea"],
+        curatorNote: "",
+        accentHex: 0x1C4B43,
+        candidateIDs: [],
+        searchQueries: ["premium jasmine tea"]
+    )
+
     // MARK: Keyword extraction
 
     @Test("Keywords pull significant words from queries + plan + title, dropping stopwords")
@@ -139,5 +152,85 @@ struct RelevanceGateTests {
     func applyDropsEmpty() {
         let deck = (1...3).map { product("p.\($0)", "Item \($0)") }
         #expect(AppleFoundationRelevanceGate.applyDrops([], to: deck, floor: 8).count == 3)
+    }
+
+    // MARK: Core-term gate (#21 — narrow-mission query drift)
+
+    @Test("coreTerms keeps the distinctive qualifier, dropping the head noun and generic adjectives")
+    func coreTermsJasmine() {
+        // "premium jasmine tea" → drop "premium" (generic) and "tea" (head noun) → {"jasmine"}.
+        #expect(RuleBasedRelevanceGate.coreTerms(for: jasmine) == ["jasmine"])
+    }
+
+    @Test("A multi-part mission has no core term, so the strict gate never applies")
+    func multiPartHasNoCore() {
+        #expect(RuleBasedRelevanceGate.coreTerms(for: lacrosse).isEmpty)
+    }
+
+    @Test("A bare-category narrow goal cores on the category word itself")
+    func bareCategoryCore() {
+        let broadTea = ShoppingTask(
+            id: "goal.premium-tea", title: "Premium tea", subtitle: "", plan: ["Premium tea"],
+            curatorNote: "", accentHex: 0, candidateIDs: [], searchQueries: ["premium tea"]
+        )
+        // Nothing distinctive survives dropping "premium" but the head noun — so require "tea".
+        #expect(RuleBasedRelevanceGate.coreTerms(for: broadTea) == ["tea"])
+    }
+
+    @Test("Narrow jasmine gate drops off-core black AND green tea when enough jasmine is present")
+    func narrowDropsOffCore() {
+        var deck = (1...9).map {
+            product("jas.\($0)", "Jasmine Pearl Tea \($0)", desc: "fragrant jasmine tea")
+        }
+        // The two drifted items the plain any-keyword gate kept (they share "premium"/"tea").
+        deck.append(product("black", "Premium Black Tea Leaf", desc: "black tea"))
+        deck.append(product("green", "Imperial Choice Premium Green Tea", desc: "green tea"))
+
+        let kept = RuleBasedRelevanceGate.keep(
+            deck,
+            matching: RuleBasedRelevanceGate.keywords(for: jasmine),
+            core: RuleBasedRelevanceGate.coreTerms(for: jasmine),
+            floor: 8
+        )
+        #expect(!kept.contains { $0.id == "black" })   // the $1,450 black tea is gone
+        #expect(!kept.contains { $0.id == "green" })   // the green tea is gone
+        #expect(kept.count == 9)                        // every jasmine item survives
+    }
+
+    @Test("Narrow gate never empties: too few jasmine matches top up from the remainder, jasmine leading")
+    func narrowFloorTopsUp() {
+        var deck = (1...10).map { product("tea.\($0)", "Premium Black Tea \($0)", desc: "black tea") }
+        deck.insert(product("jas.1", "Jasmine Pearl Tea", desc: "jasmine"), at: 3)
+        deck.insert(product("jas.2", "Silver Needle Jasmine", desc: "jasmine"), at: 7)
+
+        let kept = RuleBasedRelevanceGate.keep(
+            deck,
+            matching: RuleBasedRelevanceGate.keywords(for: jasmine),
+            core: RuleBasedRelevanceGate.coreTerms(for: jasmine),
+            floor: 8
+        )
+        #expect(kept.count == 8)                                  // never stranded below the floor
+        #expect(kept.prefix(2).map(\.id) == ["jas.1", "jas.2"])   // the on-core items lead
+    }
+
+    @Test("Tool-time onTopic drops a whole drifted off-core batch for a narrow mission")
+    func onTopicDropsDriftedBatch() {
+        // The model searched "premium black tea" for a jasmine mission — the whole batch is off-core.
+        let blackBatch = (1...5).map { product("blk.\($0)", "Premium Black Tea Leaf \($0)", desc: "black tea") }
+        #expect(GatherToolSupport.onTopic(blackBatch, for: jasmine).isEmpty)
+        // An on-core batch passes through intact.
+        let jasBatch = (1...3).map { product("j.\($0)", "Jasmine Dragon Pearl \($0)", desc: "jasmine tea") }
+        #expect(GatherToolSupport.onTopic(jasBatch, for: jasmine).count == 3)
+    }
+
+    @Test("A multi-part (broad) mission's tool filter is unchanged — any-keyword overlap still keeps on-topic items")
+    func onTopicBroadUnchanged() {
+        let batch = [
+            product("s1", "Carbon Lacrosse Stick", desc: "attack shaft"),
+            product("row", "RAF Rowing Training Top", desc: "rowing shirt"),
+        ]
+        let kept = GatherToolSupport.onTopic(batch, for: lacrosse)
+        #expect(kept.contains { $0.id == "s1" })     // on-topic stick kept
+        #expect(!kept.contains { $0.id == "row" })   // off-topic rower dropped
     }
 }
