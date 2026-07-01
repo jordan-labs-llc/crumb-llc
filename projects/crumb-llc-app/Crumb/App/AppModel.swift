@@ -1216,6 +1216,29 @@ final class AppModel {
         deck = candidates.filter { !isInKit($0) }
     }
 
+    // MARK: App Intents / onscreen entities (issue #41)
+
+    /// The mission's full curated pool — the products App Intents can resolve a ``ProductEntity``
+    /// against (the visible deck plus anything already swiped into the kit).
+    var sessionProducts: [Product] { candidates }
+
+    /// The visible swipe deck (undecided cards) — the entities Siri should *suggest*, since those
+    /// are what the user is looking at right now.
+    var deckProducts: [Product] { deck }
+
+    /// Resolves a session product by id for an App Intent acting on the deck; `nil` when the id is
+    /// stale (the mission changed, or the app cold-launched with no deck) so the intent can fail
+    /// honestly instead of mutating nothing.
+    func sessionProduct(id: Product.ID) -> Product? {
+        candidates.first { $0.id == id }
+    }
+
+    /// The kit's running subtotal (sum of each item's price) — surfaced in the App Intent
+    /// confirmation snippet after a hands-free "add to kit".
+    var kitSubtotal: Decimal {
+        kit.reduce(Decimal(0)) { $0 + $1.product.price }
+    }
+
     // MARK: Checkout handoff (per shop)
 
     /// Resolves the per-shop UCP handoff URL and presents the handoff sheet.

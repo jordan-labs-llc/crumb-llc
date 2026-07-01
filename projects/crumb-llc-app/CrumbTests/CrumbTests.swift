@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import AppIntents
 import CrumbKit
 @testable import Crumb
 
@@ -984,5 +985,104 @@ private struct MarkerTasteExtractor: TasteExtractor {
         var seeded = base
         seeded.vibe.append("GoalSeeded")
         return seeded
+    }
+}
+
+// MARK: - App Entities: onscreen deck control (#41)
+
+/// The App Intents plumbing that exposes the swipe deck to Siri. Live Siri needs a device, but the
+/// entity mapping, the ``ProductEntityQuery`` resolution against ``AppModel``, and each intent's
+/// `perform()` are all exercisable here. `@Dependency` can't be resolved via
+/// `AppDependencyManager` outside the real perform flow (it traps), but the framework lets us set
+/// it manually — so each test assigns `.model` before running, exactly as documented.
+@MainActor
+struct DeckAppIntentTests {
+
+    /// A real mock-backed deck so `deckProducts` / `sessionProduct(id:)` resolve.
+    private func loadedModel() async -> AppModel {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
+        )
+        model.select(SeedData.coffee)
+        await model.loadCandidates(for: SeedData.coffee)
+        return model
+    }
+
+    @Test("ProductEntity carries the product's display fields")
+    func entityMapsFields() {
+        let product = SeedData.coffeeProducts[0]
+        let entity = ProductEntity(product)
+        #expect(entity.id == product.id)
+        #expect(entity.name == product.name)
+        #expect(entity.shopName == product.shop.name)
+        #expect(entity.rationale == product.rationale)
+        #expect(entity.symbol == product.symbol)
+        #expect(!entity.priceText.isEmpty)
+    }
+
+    @Test("The query suggests the visible deck and resolves ids (stale ids drop out)")
+    func queryResolvesDeck() async throws {
+        let model = await loadedModel()
+        var query = ProductEntityQuery()
+        query.model = model   // manual dependency injection (see suite note)
+
+        let suggested = try await query.suggestedEntities()
+        #expect(suggested.count == model.deckProducts.count)
+        #expect(!suggested.isEmpty)
+
+        let firstID = try #require(suggested.first).id
+        let resolved = try await query.entities(for: [firstID, "not-a-real-id"])
+        #expect(resolved.map(\.id) == [firstID])   // the bogus id is dropped, not faked
+    }
+
+    @Test("AddToKit adds the resolved product through the same path as a swipe")
+    func addToKitAdds() async throws {
+        let model = await loadedModel()
+        let target = try #require(model.deckProducts.first)
+        #expect(!model.isInKit(target))
+
+        var intent = AddToKitIntent()
+        intent.model = model
+        intent.product = ProductEntity(target)
+        _ = try await intent.perform()
+
+        #expect(model.isInKit(target))                 // kit mutated via AppModel.accept
+        #expect(!model.deckProducts.contains { $0.id == target.id })  // advanced off the deck
+    }
+
+    @Test("Skip advances past the product without kitting it")
+    func skipAdvances() async throws {
+        let model = await loadedModel()
+        let target = try #require(model.deckProducts.first)
+
+        var intent = SkipProductIntent()
+        intent.model = model
+        intent.product = ProductEntity(target)
+        _ = try await intent.perform()
+
+        #expect(!model.isInKit(target))
+        #expect(!model.deckProducts.contains { $0.id == target.id })
+    }
+
+    @Test("A stale product id fails honestly instead of mutating nothing")
+    func staleIdThrows() async throws {
+        let model = await loadedModel()
+        let before = model.kit.count
+
+        var intent = AddToKitIntent()
+        intent.model = model
+        intent.product = ProductEntity(SeedData.hikeProducts[0])   // not in the coffee deck
+        await #expect(throws: DeckIntentError.self) {
+            _ = try await intent.perform()
+        }
+        #expect(model.kit.count == before)
+    }
+
+    @Test("ExplainPick answers from the entity's own rationale (even off-deck)")
+    func explainPickSucceeds() async throws {
+        var intent = ExplainPickIntent()
+        intent.product = ProductEntity(SeedData.coffeeProducts[0])
+        _ = try await intent.perform()   // returns dialog + snippet without throwing
     }
 }
