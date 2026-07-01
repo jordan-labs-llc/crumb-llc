@@ -50,6 +50,11 @@ struct CurateView: View {
                 .padding(.horizontal, CrumbMetrics.Space.l)
                 .padding(.bottom, CrumbMetrics.Space.s)
         }
+        // Mark the screen as an accessibility *container* so its id names the container, not every
+        // child. On a plain VStack root `.accessibilityIdentifier` propagates onto every descendant
+        // (addButton/skipButton/cards all reported "CurateScreen"); `.contain` keeps each child's
+        // own id queryable — same behavior a ScrollView root gets for free. (#24)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("CurateScreen")
     }
 

@@ -80,12 +80,14 @@ final class JasmineTeaJourneyTests: XCTestCase {
         let planScreen = el("PlanScreen")
         if planScreen.waitForExistence(timeout: 60) {
             snap("03-plan")
-            // NOTE: the "curateButton" id is clobbered by the parent "PlanScreen"
-            // accessibilityIdentifier (it sits in a safeAreaInset on the same view), so it is
-            // NOT queryable by id — tap it by its visible label instead.
-            var curate = el("curateButton")
-            if !curate.exists { curate = app.buttons["Curate my kit"] }
-            waitTap(curate, 12, "curateButton/Curate my kit")
+            // #24 regression guard: the plan CTA now carries its OWN id — the screen container no
+            // longer clobbers the safeAreaInset button to "PlanScreen". Assert it's queryable by id
+            // (fails if the a11y-id clobbering regresses), then tap it. Label fallback kept so the
+            // run still completes and captures where it broke.
+            let curate = el("curateButton")
+            let curateByID = curate.waitForExistence(timeout: 12)
+            XCTAssertTrue(curateByID, "curateButton is not queryable by id — #24 a11y-id clobbering regressed")
+            waitTap(curateByID ? curate : app.buttons["Curate my kit"], 12, "curateButton")
         } else if app.staticTexts["composerDecline"].exists || el("composerDecline").exists {
             snap("03-plan-declined"); return
         } else {
@@ -103,6 +105,12 @@ final class JasmineTeaJourneyTests: XCTestCase {
             let settleDeadline = Date().addingTimeInterval(75)
             while gathering.exists && Date() < settleDeadline { usleep(300_000) }
             snap("04-curate-settled")
+            // #24 regression guard: the deck controls must carry their OWN ids, not the screen
+            // container's — before the fix addButton/skipButton both reported "CurateScreen".
+            XCTAssertTrue(app.buttons["addButton"].waitForExistence(timeout: 20),
+                          "addButton is not queryable by id — #24 a11y-id clobbering regressed")
+            XCTAssertTrue(app.buttons["skipButton"].exists,
+                          "skipButton is not queryable by id — #24 a11y-id clobbering regressed")
             for i in 0..<3 {
                 var add = app.buttons["addButton"]
                 if !add.exists { add = app.buttons["Add to kit"] }

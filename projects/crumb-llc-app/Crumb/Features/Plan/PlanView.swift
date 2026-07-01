@@ -45,6 +45,10 @@ struct PlanView: View {
         .safeAreaInset(edge: .bottom) {
             curateCTA(accent: accent)
         }
+        // Container, not a blanket id: the scroll content keeps its ids for free, but the bottom
+        // `safeAreaInset` CTA (curateButton) sits outside the scroll element and was being clobbered
+        // to "PlanScreen". `.contain` names the screen container and leaves curateButton queryable. (#24)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("PlanScreen")
     }
 
