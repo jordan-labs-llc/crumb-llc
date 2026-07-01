@@ -1040,8 +1040,16 @@ final class AppModel {
                 guard self.selectedTask?.id == task.id else { break }
                 let fresh = batch.filter { product in !self.deck.contains { $0.id == product.id } }
                 guard !fresh.isEmpty else { continue }
+                // Voice each streamed pick with the deterministic floor the instant it lands, so the
+                // deck never shows the raw merchant blurb as the "why this is you" — not even in the
+                // stream-raw window before curation settles (#22). The settle then swaps in the
+                // ranked, model-voiced deck; this is the immediate, model-free curator line, and it
+                // matches what the settled deck falls back to if the on-device model can't rank.
+                let voicedFresh = fresh.map {
+                    $0.withRationale(self.curator.rationale(for: $0, profile: self.activeTaste, recipient: self.activeRecipientRef))
+                }
                 let wasEmpty = self.deck.isEmpty
-                self.deck.append(contentsOf: fresh)
+                self.deck.append(contentsOf: voicedFresh)
                 self.candidates = self.deck
                 if wasEmpty { self.route = .curate }   // navigate on the first pick
             }

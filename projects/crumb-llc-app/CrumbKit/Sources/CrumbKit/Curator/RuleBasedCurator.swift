@@ -62,24 +62,33 @@ public struct RuleBasedCurator: CuratorEngine {
         let echoesLeaning = profile.leanings.contains { lowered.contains(keyword(from: $0)) }
 
         guard let recipient else {
-            // Owner voice — unchanged.
+            // Owner voice. A rationale that already echoes a leaning is our own seed voice — it
+            // reads as Crumb, so keep it verbatim. Otherwise it's the raw merchant blurb of a live
+            // catalog item: never pass that off as the curator's "why this is you" (#22) — speak a
+            // short curator line instead, honest about carrying no invented facts.
             if echoesLeaning { return product.rationale }
             if let leaning = profile.leanings.first {
-                return "\(product.rationale) Fits your lean toward \(leaning.lowercased())."
+                return "A pick that fits your lean toward \(leaning.lowercased())."
             }
-            return product.rationale
+            return Self.genericOwnerVoice
         }
 
-        // Gift voice — addressed to the recipient by name.
+        // Gift voice — addressed to the recipient by name. Same rule: keep our seed voice, but never
+        // hand off the raw merchant blurb as the curator's gift note.
         let name = recipient.name
         if echoesLeaning {
             return "\(product.rationale) A gift for \(name)."
         }
         if let leaning = profile.leanings.first {
-            return "\(product.rationale) Fits \(possessive(name))'s lean toward \(leaning.lowercased())."
+            return "A gift that fits \(possessive(name))'s lean toward \(leaning.lowercased())."
         }
-        return "\(product.rationale) A gift for \(name)."
+        return "A gift picked with \(name) in mind."
     }
+
+    /// The owner-voice floor when there's neither a seed-voiced rationale to keep nor a stated
+    /// leaning to lean on — a short, honest curator line that invents nothing (live products carry
+    /// no ratings or reviews to cite).
+    static let genericOwnerVoice = "A considered pick for what you're after."
 
     /// The base for a possessive — Crumb writes "Mom's", "Dad's", "Alex's". We append "'s" in the
     /// caller, so this just yields the name; kept as a seam in case a name already ends in "s" and we
