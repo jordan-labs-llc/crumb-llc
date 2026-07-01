@@ -33,38 +33,10 @@ public struct RuleBasedRefinementInterpreter: RefinementInterpreter {
         return InterpretedRefinement(directive: directive, tier: .ruleBased(reason))
     }
 
-    // MARK: - Quick-chip directives (shared by the bar and tests)
-
-    /// The fixed quick-refinement chips shown on the Curate screen. Each maps to a deterministic
-    /// directive so a tap behaves identically with or without a model. The chips double as the
-    /// discoverable, headless-screenshot-able affordance for the free-text bar.
-    public enum Chip: String, CaseIterable, Sendable {
-        case cheaper
-        case warmer
-        case fewer
-        case durable
-
-        /// The user-facing chip label.
-        public var label: String {
-            switch self {
-            case .cheaper: return "Cheaper"
-            case .warmer: return "Warmer"
-            case .fewer: return "Fewer"
-            case .durable: return "More durable"
-            }
-        }
-
-        /// The refinement sentence a tap submits — the same text a user could have typed, so the
-        /// chip path and the free-text path run through one interpreter.
-        public var refinementText: String {
-            switch self {
-            case .cheaper: return "make it cheaper"
-            case .warmer: return "warmer tones and materials"
-            case .fewer: return "fewer, only the essentials"
-            case .durable: return "more durable, built to last"
-            }
-        }
-    }
+    // The quick-refinement chips shown on the Curate screen now live in the ``RefineChipSuggester``
+    // seam (``MissionCategory``/``RefineChip``), which fits them to the mission rather than the old
+    // fixed Cheaper/Warmer/Fewer/Durable row. Each chip's `refinementText` still routes through the
+    // free-text heuristic below, so a tap and a typed line read identically. See issue #25.
 
     // MARK: - Free-text heuristic (pure, exhaustively tested)
 

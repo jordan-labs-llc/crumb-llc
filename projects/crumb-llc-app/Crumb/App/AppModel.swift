@@ -221,6 +221,13 @@ final class AppModel {
     /// ``resetRefinements()`` restores so Reset truly undoes the conversation.
     private var baseCandidates: [Product] = []
 
+    /// The quick-refinement chips shown on the Curate screen, fit to the current mission
+    /// (tea → Organic/Caffeine-free/Bolder; a hike → Warmer/Lighter/Durable). Set to the
+    /// deterministic floor synchronously in ``enterPlan(with:recipient:)`` so the bar renders
+    /// instantly and headless screenshots stay stable, then upgraded in place by the
+    /// ``RefineChipSuggester`` seam when an on-device model tier is up. See issue #25.
+    private(set) var refineChips: [RefineChip] = []
+
     /// Ranked candidate products for the selected mission.
     private(set) var candidates: [Product] = []
     /// The remaining swipe deck (candidates not yet decided on).
@@ -273,6 +280,9 @@ final class AppModel {
     let tasteExtractor: any TasteExtractor
     let planner: any MissionPlanner
     let refiner: any RefinementInterpreter
+    /// Suggests the mission-fit quick-refinement chips for the Curate bar. Defaults to the
+    /// deterministic taxonomy floor (no model, mock-safe); the app wires the model-backed variant.
+    let chipSuggester: any RefineChipSuggester
     let recapWriter: any RecapWriter
     /// Drops clearly off-topic catalog results *before* the curator ranks/voices them, so a stray
     /// live result never reaches the deck with a confident rationale. Defaults to the deterministic
@@ -306,6 +316,7 @@ final class AppModel {
         tasteExtractor: any TasteExtractor = ManualTasteExtractor(),
         planner: any MissionPlanner = RuleBasedMissionPlanner(),
         refiner: any RefinementInterpreter = RuleBasedRefinementInterpreter(),
+        chipSuggester: any RefineChipSuggester = RuleBasedRefineChipSuggester(),
         recapWriter: any RecapWriter = RuleBasedRecapWriter(),
         relevanceGate: any RelevanceGate = RuleBasedRelevanceGate(),
         orchestrator: any MissionOrchestrator = DeterministicMissionOrchestrator(),
@@ -320,6 +331,7 @@ final class AppModel {
         self.tasteExtractor = tasteExtractor
         self.planner = planner
         self.refiner = refiner
+        self.chipSuggester = chipSuggester
         self.recapWriter = recapWriter
         self.relevanceGate = relevanceGate
         self.orchestrator = orchestrator
@@ -440,6 +452,19 @@ final class AppModel {
         refinementDirectives = []
         canSaveRefinementToTaste = false
         isReworking = false
+    }
+
+    /// Sets the Curate refine chips for `task`: the deterministic taxonomy floor immediately (so the
+    /// bar renders the instant we route to Curate, and headless screenshots stay stable), then a
+    /// best-effort on-device upgrade that replaces them in place when a model tier is up. The async
+    /// pass no-ops if the user has already moved to another mission. See [[conversational-refinement]].
+    private func refreshRefineChips(for task: ShoppingTask) {
+        refineChips = RuleBasedRefineChipSuggester.chips(for: task)
+        Task {
+            let suggested = await chipSuggester.chips(for: task, profile: activeTaste)
+            guard selectedTask?.id == task.id else { return }
+            refineChips = suggested
+        }
     }
 
     /// Builds editable parts from a task, pairing each plan label with its query by index and
@@ -1026,6 +1051,10 @@ final class AppModel {
     /// unchanged.
     func loadCandidates(for task: ShoppingTask) async {
         loadState = .loading
+        // Fit the Curate refine chips to this mission the moment its deck starts dealing — the
+        // universal choke point every deal path funnels through (live select/curate, the gift and
+        // screenshot deep-entries), so the chips are ready before Curate appears regardless of route.
+        refreshRefineChips(for: task)
 
         // Stream raw, then settle. The gather streams each newly-discovered batch through the
         // collector; we append raw picks to the deck the moment they land and flip to Curate on the

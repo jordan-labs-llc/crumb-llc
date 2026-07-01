@@ -9,21 +9,6 @@ import Foundation
 @Suite("RefinementInterpreter")
 struct RefinementInterpreterTests {
 
-    // MARK: Rule-based floor — chips
-
-    @Test("Each quick chip interprets into the directive it promises")
-    func chipDirectives() {
-        let cheaper = RuleBasedRefinementInterpreter.heuristicDirective(for: RuleBasedRefinementInterpreter.Chip.cheaper.refinementText)
-        #expect(cheaper.priceDirection == .cheaper)
-
-        for chip in [RuleBasedRefinementInterpreter.Chip.warmer, .fewer, .durable] {
-            let directive = RuleBasedRefinementInterpreter.heuristicDirective(for: chip.refinementText)
-            #expect(!directive.emphasis.isEmpty, "chip: \(chip)")   // re-rank/re-voice note
-            #expect(directive.addQueries.isEmpty, "chip: \(chip)")  // chips never search
-        }
-        #expect(RuleBasedRefinementInterpreter.Chip.allCases.count == 4)
-    }
-
     // MARK: Rule-based floor — free-text heuristic
 
     @Test("Price words set a price direction (and 'cheaper' is never read as a removal)")
