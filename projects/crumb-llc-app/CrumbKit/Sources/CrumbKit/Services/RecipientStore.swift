@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import os
 
 /// Persists the roster of people you shop *for* — each a ``Recipient`` with their own taste — so
 /// gift missions can curate to a saved person across launches.
@@ -50,8 +51,19 @@ func mergedRecipients(_ recipient: Recipient, into existing: [Recipient], cap: I
 /// `accentHex` as `Int`, mirroring ``HistoryEntryRecord``.
 @MainActor
 public final class SwiftDataRecipientStore: RecipientStore {
+    private static let log = Logger(subsystem: "llc.crumb.CrumbKit", category: "Persistence")
     private let container: ModelContainer
     private var context: ModelContext { container.mainContext }
+
+    /// Best-effort save: a failed roster write must never crash the app mid-edit, but it's logged
+    /// so a silent persistence failure can't hide the way the store-collision bug did.
+    private func persist() {
+        do {
+            try context.save()
+        } catch {
+            Self.log.error("recipient save failed: \(error, privacy: .public)")
+        }
+    }
 
     public init(container: ModelContainer) {
         self.container = container
@@ -75,14 +87,13 @@ public final class SwiftDataRecipientStore: RecipientStore {
         } else {
             context.insert(RecipientRecord(recipient))
         }
-        // Best-effort: a failed roster save must never crash the app mid-edit.
-        try? context.save()
+        persist()
     }
 
     public func delete(id: String) {
         guard let row = record(id: id) else { return }
         context.delete(row)
-        try? context.save()
+        persist()
     }
 
     /// All rows, newest-first.

@@ -1,6 +1,8 @@
 import SwiftUI
+import SwiftData
 import AppIntents
 import CrumbKit
+import os
 
 /// Crumb — a task-driven personal-curator shopping agent.
 ///
@@ -13,6 +15,8 @@ import CrumbKit
 /// ``MockUCPClient`` (no network, no keys) — which is the default for the scaffold.
 @main
 struct CrumbApp: App {
+    private static let log = Logger(subsystem: "llc.crumb.Crumb", category: "Persistence")
+
     @State private var model: AppModel
 
     init() {
@@ -34,10 +38,15 @@ struct CrumbApp: App {
         // The Apple Foundation Models mission planner decomposes a free-text goal into a plan;
         // like the curator it self-degrades to the deterministic `RuleBasedMissionPlanner` (and
         // reports why) when no model tier is usable, so it's safe to always inject.
+        // One shared SwiftData container backs every persisted store. Building a separate
+        // container per store makes them collide on the same `default.store` file (each creates
+        // only its own entity's table), which silently breaks persistence — see `CrumbPersistence`.
+        // A build failure degrades all four stores to in-memory (persistence off this session).
+        let container = Self.makeSharedContainer()
         let model = AppModel(
             ucp: ucp,
             curator: AppleFoundationCurator(),
-            tasteStore: Self.makeTasteStore(),
+            tasteStore: Self.makeTasteStore(container: container),
             tasteExtractor: AppleFoundationTasteExtractor(),
             planner: AppleFoundationMissionPlanner(),
             refiner: AppleFoundationRefinementInterpreter(),
@@ -49,9 +58,9 @@ struct CrumbApp: App {
             // reaching past the plan, widening a strong fit), degrading to the deterministic
             // fan-out + gate floor otherwise.
             orchestrator: AppleFoundationMissionOrchestrator(),
-            recentsStore: Self.makeRecentsStore(),
-            historyStore: Self.makeHistoryStore(),
-            recipientStore: Self.makeRecipientStore()
+            recentsStore: Self.makeRecentsStore(container: container),
+            historyStore: Self.makeHistoryStore(container: container),
+            recipientStore: Self.makeRecipientStore(container: container)
         )
         // Make the app model available to App Intents (`@Dependency`).
         AppDependencyManager.shared.add(dependency: model)
@@ -63,28 +72,45 @@ struct CrumbApp: App {
     /// a populated screen. `simctl` can't inject taps, so this is how deep screens are reached
     /// for headless screenshots; `RootView` reads the same env to deal a curate deck.
 
-    /// The persistent SwiftData store for the taste profile, degrading to an in-memory store
-    /// if the container can't be built (so a storage failure never blocks launch — the user
-    /// just won't have their taste remembered across relaunches this session).
-    private static func makeTasteStore() -> any TasteStore {
+    /// Builds the single shared SwiftData container, or `nil` (→ in-memory fallback) if it can't
+    /// open. Under a `CRUMB_SCREENSHOT` launch the stores use seeded in-memory doubles instead, so
+    /// no on-disk container is needed.
+    private static func makeSharedContainer() -> ModelContainer? {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] != nil { return nil }
+        #endif
+        do {
+            return try CrumbPersistence.makeContainer()
+        } catch {
+            log.error("shared persistence unavailable — stores fall back to in-memory this session: \(error, privacy: .public)")
+            return nil
+        }
+    }
+
+    /// The taste-profile store over the shared `container`, degrading to an in-memory store if the
+    /// container is absent (so a storage failure never blocks launch — the user just won't have
+    /// their taste remembered across relaunches this session).
+    private static func makeTasteStore(container: ModelContainer?) -> any TasteStore {
         #if DEBUG
         // A returning-user store for screenshots: a saved profile means no onboarding.
         if let mode = ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"], mode != "onboarding" {
             return InMemoryTasteStore(SeedData.defaultTasteProfile)
         }
         #endif
-        return (try? SwiftDataTasteStore()) ?? InMemoryTasteStore()
+        guard let container else { return InMemoryTasteStore() }
+        return SwiftDataTasteStore(container: container)
     }
 
     /// The SwiftData-backed recent-goals store, degrading to in-memory if the container can't be
     /// built. Under the composer screenshot env it's seeded so the "Recent" chips render.
-    private static func makeRecentsStore() -> any RecentMissionsStore {
+    private static func makeRecentsStore(container: ModelContainer?) -> any RecentMissionsStore {
         #if DEBUG
         if ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] == "composer" {
             return InMemoryRecentMissionsStore(["Make my desk feel calm", "Pack me for a rainy weekend hike"])
         }
         #endif
-        return (try? SwiftDataRecentMissionsStore()) ?? InMemoryRecentMissionsStore()
+        guard let container else { return InMemoryRecentMissionsStore() }
+        return SwiftDataRecentMissionsStore(container: container)
     }
 
     /// The SwiftData-backed history store, degrading to in-memory if the container can't be built
@@ -92,7 +118,7 @@ struct CrumbApp: App {
     /// Under a `CRUMB_SCREENSHOT` launch env it's an in-memory store, seeded with deterministic
     /// entries for the `history` / `history-detail` modes and left empty otherwise (incl.
     /// `history-empty`, which captures the first-run timeline).
-    private static func makeHistoryStore() -> any HistoryStore {
+    private static func makeHistoryStore(container: ModelContainer?) -> any HistoryStore {
         #if DEBUG
         if let mode = ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] {
             // `history-gift` seeds the gift-augmented set (a kit "for Mom") so the per-person filter
@@ -106,20 +132,22 @@ struct CrumbApp: App {
             return InMemoryHistoryStore(seed)
         }
         #endif
-        return (try? SwiftDataHistoryStore()) ?? InMemoryHistoryStore()
+        guard let container else { return InMemoryHistoryStore() }
+        return SwiftDataHistoryStore(container: container)
     }
 
     /// The SwiftData-backed recipient roster, degrading to in-memory if the container can't be
     /// built. Under the gift screenshot envs it's seeded with deterministic people (empty for
     /// `people-empty`, which captures the "no people yet" first-run state).
-    private static func makeRecipientStore() -> any RecipientStore {
+    private static func makeRecipientStore(container: ModelContainer?) -> any RecipientStore {
         #if DEBUG
         if let mode = ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] {
             let needsPeople: Set<String> = ["people", "gift", "composer-gift", "history-gift"]
             return InMemoryRecipientStore(needsPeople.contains(mode) ? SeedData.recipients(now: Date()) : [])
         }
         #endif
-        return (try? SwiftDataRecipientStore()) ?? InMemoryRecipientStore()
+        guard let container else { return InMemoryRecipientStore() }
+        return SwiftDataRecipientStore(container: container)
     }
 
     var body: some Scene {

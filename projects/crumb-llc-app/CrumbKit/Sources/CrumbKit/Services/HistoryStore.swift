@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import os
 
 /// Persists the user's past missions — each a ``HistoryEntry`` pairing the plan they ran with the
 /// kit they built — so the app has a durable, offline-viewable record (the agent loop's memory).
@@ -56,8 +57,19 @@ func mergedEntries(_ entry: HistoryEntry, into existing: [HistoryEntry], cap: In
 /// relationship), so the schema mirrors ``TasteProfileRecord``'s single-row simplicity.
 @MainActor
 public final class SwiftDataHistoryStore: HistoryStore {
+    private static let log = Logger(subsystem: "llc.crumb.CrumbKit", category: "Persistence")
     private let container: ModelContainer
     private var context: ModelContext { container.mainContext }
+
+    /// Best-effort save: a failed history write must never crash the app mid-checkout, but it's
+    /// logged so a silent persistence failure can't hide the way the store-collision bug did.
+    private func persist() {
+        do {
+            try context.save()
+        } catch {
+            Self.log.error("history save failed: \(error, privacy: .public)")
+        }
+    }
 
     public init(container: ModelContainer) {
         self.container = container
@@ -82,25 +94,24 @@ public final class SwiftDataHistoryStore: HistoryStore {
             context.insert(HistoryEntryRecord(entry))
         }
         evictBeyondCap()
-        // Best-effort: a failed history save must never crash the app mid-checkout.
-        try? context.save()
+        persist()
     }
 
     public func setHandedOff(_ id: String, _ value: Bool) {
         guard let row = record(id: id) else { return }
         row.handedOff = value
-        try? context.save()
+        persist()
     }
 
     public func delete(id: String) {
         guard let row = record(id: id) else { return }
         context.delete(row)
-        try? context.save()
+        persist()
     }
 
     public func clear() {
         for row in records() { context.delete(row) }
-        try? context.save()
+        persist()
     }
 
     /// All rows, newest-first.

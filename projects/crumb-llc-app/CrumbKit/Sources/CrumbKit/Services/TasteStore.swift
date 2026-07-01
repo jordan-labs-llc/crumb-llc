@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import os
 
 /// Persists the user's ``TasteProfile`` across launches.
 ///
@@ -26,6 +27,7 @@ public protocol TasteStore {
 /// later pass without a migration churn.
 @MainActor
 public final class SwiftDataTasteStore: TasteStore {
+    private static let log = Logger(subsystem: "llc.crumb.CrumbKit", category: "Persistence")
     private let container: ModelContainer
 
     private var context: ModelContext { container.mainContext }
@@ -57,8 +59,13 @@ public final class SwiftDataTasteStore: TasteStore {
             context.insert(TasteProfileRecord(profile))
         }
         // Best-effort: a failed taste save must never crash the app mid-edit. The in-memory
-        // value in `AppModel` stays authoritative for the session either way.
-        try? context.save()
+        // value in `AppModel` stays authoritative for the session either way — but log it, so a
+        // silent persistence failure can't hide the way the store-collision bug once did.
+        do {
+            try context.save()
+        } catch {
+            Self.log.error("taste save failed: \(error, privacy: .public)")
+        }
     }
 
     /// The single profile row, if one has been saved. (We keep exactly one; `fetchLimit: 1`
