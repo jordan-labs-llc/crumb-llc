@@ -134,11 +134,18 @@ public struct AppleFoundationCurator: CuratorEngine {
         return await voiceAll(ordered, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning)
     }
 
-    /// One guided call asks the model to order the deck best-fit-first; the returned IDs are
-    /// reconciled into a total order. Throws when the call fails *or* (for a real multi-item
-    /// deck) returns no usable IDs — either way the tier hasn't proven it can rank, so the
-    /// caller cascades. A single-item deck can't be mis-ordered, so an empty reply still
-    /// proves the tier (reconciliation backfills the one product).
+    /// Orders the deck best-fit-first with the model, then reconciles into a total order.
+    ///
+    /// Rather than send the whole deck in one call — which overflows the on-device 4096-token
+    /// context on a real live deck and drops the *entire* deck to the deterministic floor — it ranks
+    /// in a **map-reduce tournament**: split into reasonable-size chunks, rank each concurrently (a
+    /// small, reliable call), promote the top of each, and recurse on the promoted field until it
+    /// fits a single chunk. The survivors come out ordered best-first, the also-rans (in their
+    /// chunk-ranked order) behind them; ``reconcile(modelIDs:candidates:)`` then appends anything
+    /// past the cap in deterministic order.
+    ///
+    /// Throws only when the model truly can't rank (every first-level chunk call fails) — the same
+    /// tier-probe contract as the old single call, so the caller still cascades to the floor.
     private func modelRankedOrder<M: LanguageModel>(
         _ baseline: [Product],
         _ profile: TasteProfile,
@@ -148,21 +155,86 @@ public struct AppleFoundationCurator: CuratorEngine {
         model: M,
         deepReasoning: Bool
     ) async throws -> [Product] {
-        // Cap what we send so a big live deck doesn't blow context/latency on the 3B model;
-        // products past the cap keep their deterministic order via the reconciliation tail.
+        // Cap what we consider so a huge live deck doesn't spawn unbounded chunk calls; products
+        // past the cap keep their deterministic order via the reconciliation tail.
         let head = Array(baseline.prefix(Self.rankDeckCap))
+        let ordered = try await tournamentRank(head, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning)
+        return Self.reconcile(modelIDs: ordered.map(\.id), candidates: baseline)
+    }
+
+    /// The recursive map-reduce ranker. A pool that already fits one chunk is a single ranking call;
+    /// a larger pool is split, each chunk ranked concurrently, the top ``rankAdvancePerChunk`` of
+    /// each promoted, and the promoted field ranked again — until it fits one chunk. A chunk whose
+    /// call fails keeps its deterministic input order; a transient failure in a *reduce* round keeps
+    /// the promoted order rather than discarding partial work. Only an all-fail first split throws.
+    private func tournamentRank<M: LanguageModel>(
+        _ pool: [Product],
+        _ profile: TasteProfile,
+        _ mission: ShoppingTask,
+        _ refinement: RefinementContext?,
+        _ recipient: RecipientRef?,
+        model: M,
+        deepReasoning: Bool
+    ) async throws -> [Product] {
+        guard pool.count > Self.rankChunkSize else {
+            return try await rankOnce(pool, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning)
+        }
+        let chunks = Self.chunked(pool, size: Self.rankChunkSize)
+        let ranked = try await mapRankChunks(chunks, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning)
+        let (winners, losers) = Self.advance(ranked, keep: Self.rankAdvancePerChunk)
+        let top = (try? await tournamentRank(winners, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning)) ?? winners
+        return top + losers
+    }
+
+    /// Ranks the chunks concurrently. A chunk whose call fails keeps its deterministic input order,
+    /// so one transient failure doesn't sink the rank; but if EVERY chunk fails the model can't rank
+    /// at all → throw so ``curate(_:for:mission:refinement:recipient:)`` falls back to the floor.
+    private func mapRankChunks<M: LanguageModel>(
+        _ chunks: [[Product]],
+        _ profile: TasteProfile,
+        _ mission: ShoppingTask,
+        _ refinement: RefinementContext?,
+        _ recipient: RecipientRef?,
+        model: M,
+        deepReasoning: Bool
+    ) async throws -> [[Product]] {
+        let ranked = await withTaskGroup(of: (Int, [Product]?).self) { group in
+            for (index, chunk) in chunks.enumerated() {
+                group.addTask {
+                    (index, try? await rankOnce(chunk, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning))
+                }
+            }
+            var out = [[Product]?](repeating: nil, count: chunks.count)
+            for await (index, result) in group { out[index] = result }
+            return out
+        }
+        guard ranked.contains(where: { $0 != nil }) else { throw CuratorRankError.noUsableIDs }
+        // A failed chunk keeps its deterministic input order.
+        return zip(chunks, ranked).map { chunk, result in result ?? chunk }
+    }
+
+    /// One guided ranking call over a single set (a chunk, or a whole small deck): returns the set
+    /// ordered best-first, reconciled so every product is present exactly once even if the model
+    /// omits or repeats an id. Throws when the call fails or (for a multi-item set) returns no usable
+    /// ids. The response bound + context policy live on the session profile (see ``rankSession``).
+    private func rankOnce<M: LanguageModel>(
+        _ products: [Product],
+        _ profile: TasteProfile,
+        _ mission: ShoppingTask,
+        _ refinement: RefinementContext?,
+        _ recipient: RecipientRef?,
+        model: M,
+        deepReasoning: Bool
+    ) async throws -> [Product] {
         let session = Self.rankSession(profile: profile, mission: mission, refinement: refinement, recipient: recipient, model: model, deepReasoning: deepReasoning)
-        // The response bound + context policy live on the profile (see `rankSession`), not as an
-        // inline `GenerationOptions` band-aid.
         let response = try await session.respond(
-            to: Self.rankPrompt(for: head),
+            to: Self.rankPrompt(for: products),
             generating: RankedOrder.self
         )
         let ids = response.content.productIDs
-        let candidateIDs = Set(baseline.map(\.id))
-        let usable = Set(ids).intersection(candidateIDs)
-        if baseline.count > 1 && usable.isEmpty { throw CuratorRankError.noUsableIDs }
-        return Self.reconcile(modelIDs: ids, candidates: baseline)
+        let usable = Set(ids).intersection(Set(products.map(\.id)))
+        if products.count > 1 && usable.isEmpty { throw CuratorRankError.noUsableIDs }
+        return Self.reconcile(modelIDs: ids, candidates: products)
     }
 
     /// Folds the model's ID order back onto the candidate set into a **total** order that
@@ -182,6 +254,28 @@ public struct AppleFoundationCurator: CuratorEngine {
             ordered.append(product)
         }
         return ordered
+    }
+
+    /// Splits `products` into consecutive chunks of at most `size` (the last may be smaller),
+    /// preserving order — the map step of the ranking tournament. Pure and unit-tested.
+    static func chunked(_ products: [Product], size: Int) -> [[Product]] {
+        guard size > 0 else { return products.isEmpty ? [] : [products] }
+        return stride(from: 0, to: products.count, by: size).map {
+            Array(products[$0 ..< Swift.min($0 + size, products.count)])
+        }
+    }
+
+    /// Promotes the top `keep` of each ranked chunk into `winners` (the field for the next
+    /// tournament round) and gathers the rest into `losers` (kept in their chunk-ranked order, to sit
+    /// behind the finalists). Pure and unit-tested — the reduce step's promotion rule.
+    static func advance(_ rankedChunks: [[Product]], keep: Int) -> (winners: [Product], losers: [Product]) {
+        var winners: [Product] = []
+        var losers: [Product] = []
+        for chunk in rankedChunks {
+            winners.append(contentsOf: chunk.prefix(keep))
+            losers.append(contentsOf: chunk.dropFirst(keep))
+        }
+        return (winners, losers)
     }
 
     /// Voices every card best-effort: the tier is already proven by ranking, so a per-product
@@ -251,6 +345,16 @@ public struct AppleFoundationCurator: CuratorEngine {
     /// latency for the on-device 3B model; products past the cap keep their deterministic
     /// order via the reconciliation tail (see ``reconcile(modelIDs:candidates:)``).
     static let rankDeckCap = 25
+
+    /// Map-reduce ranking (see ``modelRankedOrder``): the largest set sent to the model in one
+    /// ranking call. Small enough to stay well under the on-device 4096-token context — a whole-deck
+    /// call overflowed it and dropped the deck to the deterministic floor; a chunk this size ranks
+    /// reliably (proven on the sim).
+    static let rankChunkSize = 6
+    /// How many of each ranked chunk advance to the next tournament round. Strictly less than
+    /// ``rankChunkSize`` so the promoted field always shrinks and the tournament converges; 2 keeps a
+    /// strong chunk's runner-up in contention rather than crowning only its winner.
+    static let rankAdvancePerChunk = 2
 
     /// Curator tuning — chosen per phase. Ranking is a judgment task that wants a stable order, so
     /// it runs cooler; voicing is short creative copy, so it runs warmer. The response bounds keep

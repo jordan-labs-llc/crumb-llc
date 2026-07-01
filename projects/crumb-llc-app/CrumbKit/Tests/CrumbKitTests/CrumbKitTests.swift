@@ -159,6 +159,49 @@ struct CrumbKitTests {
         #expect(Set(result.map(\.id)) == Set(products.map(\.id)))     // total order, nothing lost
     }
 
+    // MARK: Map-reduce ranking tournament (the pure chunking + promotion behind the model calls)
+
+    private func decoy(_ id: String) -> Product {
+        Product(id: id, name: id, shop: Shop(id: "s", name: "s"), price: 1, rating: 0, reviews: 0,
+                rationale: "", symbol: "bag", gradient: SeedData.Gradient.pine,
+                variants: [Variant(id: "\(id).v", title: "v", price: 1, checkoutURL: nil)])
+    }
+
+    @Test("chunked splits in order, last chunk may be smaller, empty stays empty")
+    func chunkedSplits() {
+        let items = (1...25).map { decoy("p\($0)") }
+        let chunks = AppleFoundationCurator.chunked(items, size: 6)
+        #expect(chunks.map(\.count) == [6, 6, 6, 6, 1])                 // 5 chunks, last is the remainder
+        #expect(chunks.flatMap { $0 }.map(\.id) == items.map(\.id))     // order preserved, nothing lost
+        #expect(AppleFoundationCurator.chunked([], size: 6).isEmpty)    // empty input → no chunks
+        // A pool that already fits one chunk is a single chunk (the tournament's base case).
+        #expect(AppleFoundationCurator.chunked(Array(items.prefix(4)), size: 6).count == 1)
+    }
+
+    @Test("advance promotes the top `keep` of each chunk and gathers the rest in order")
+    func advancePromotes() {
+        // Two chunks, each already ranked best-first.
+        let a = (1...6).map { decoy("a\($0)") }
+        let b = (1...6).map { decoy("b\($0)") }
+        let (winners, losers) = AppleFoundationCurator.advance([a, b], keep: 2)
+        #expect(winners.map(\.id) == ["a1", "a2", "b1", "b2"])                  // top-2 of each, in chunk order
+        #expect(losers.map(\.id) == ["a3", "a4", "a5", "a6", "b3", "b4", "b5", "b6"])
+        // keep ≥ chunk size → everyone is a winner, no losers (so the tournament can't strand items).
+        let (allWin, none) = AppleFoundationCurator.advance([a], keep: 10)
+        #expect(allWin.count == 6)
+        #expect(none.isEmpty)
+    }
+
+    @Test("advance always shrinks a multi-chunk field so the tournament converges")
+    func advanceConverges() {
+        // 25 items → chunks of 6 → promoting 2 each must yield fewer than 25 (strict shrink).
+        let items = (1...25).map { decoy("p\($0)") }
+        let chunks = AppleFoundationCurator.chunked(items, size: 6)
+        let (winners, _) = AppleFoundationCurator.advance(chunks, keep: 2)
+        #expect(winners.count < items.count)
+        #expect(winners.count == 9)   // 2+2+2+2+1
+    }
+
     @Test("reconcile ignores hallucinated IDs and collapses duplicates")
     func reconcileGarbage() {
         let products = SeedData.hikeProducts
