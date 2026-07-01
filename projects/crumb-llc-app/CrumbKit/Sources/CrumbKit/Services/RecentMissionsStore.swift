@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import os
 
 /// Persists the user's recently typed shopping goals, so the composer can offer them as
 /// quick-tap chips ("pick up where you left off").
@@ -42,6 +43,7 @@ func mergedRecents(_ goal: String, into existing: [String], cap: Int) -> [String
 /// `createdAt`; adding upserts the row to the front and prunes beyond the cap.
 @MainActor
 public final class SwiftDataRecentMissionsStore: RecentMissionsStore {
+    private static let log = Logger(subsystem: "llc.crumb.CrumbKit", category: "Persistence")
     private let container: ModelContainer
     private var context: ModelContext { container.mainContext }
 
@@ -78,8 +80,12 @@ public final class SwiftDataRecentMissionsStore: RecentMissionsStore {
         for stale in rows.dropFirst(Self.cap - 1) {
             context.delete(stale)
         }
-        // Best-effort: a failed recents save must never crash the app mid-plan.
-        try? context.save()
+        // Best-effort: a failed recents save must never crash the app mid-plan (but log it).
+        do {
+            try context.save()
+        } catch {
+            Self.log.error("recents save failed: \(error, privacy: .public)")
+        }
     }
 
     /// All recent rows, newest-first.
