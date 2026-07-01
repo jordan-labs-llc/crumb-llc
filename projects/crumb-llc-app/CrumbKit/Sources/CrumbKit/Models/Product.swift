@@ -1,5 +1,12 @@
 import Foundation
 
+/// Which art to render for a product: the real catalog photo, or the synthesized
+/// gradient + SF Symbol fallback (seed data, or a live product with no image).
+public enum ProductArtKind: Hashable, Sendable {
+    case photo(URL)
+    case synthesized
+}
+
 /// A product Crumb can propose for a mission.
 ///
 /// `rationale` is the curator's "why this is you" voice copy (rendered in the serif
@@ -51,6 +58,14 @@ public struct Product: Identifiable, Hashable, Sendable, Codable {
     /// The default variant a swipe-accept adds to the kit (first listed).
     public var defaultVariant: Variant {
         variants.first ?? Variant(id: "\(id).default", title: name, price: price)
+    }
+
+    /// Which art a card or thumbnail should show for this product: the real catalog photo
+    /// when one is available, otherwise the synthesized `gradient` + `symbol` fallback.
+    /// A pure decision so the "photo vs. gradient" choice is shared and testable across the
+    /// card, cart line, and kit-tray thumbnails.
+    public var artKind: ProductArtKind {
+        imageURL.map(ProductArtKind.photo) ?? .synthesized
     }
 
     /// A copy of this product with the curator's rationale swapped in. The curator engines

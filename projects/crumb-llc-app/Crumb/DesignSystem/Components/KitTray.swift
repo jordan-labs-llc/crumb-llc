@@ -67,17 +67,13 @@ struct KitTray: View {
     }
 
     private func thumbnail(for item: KitItem) -> some View {
-        ZStack {
-            LinearGradient(crumbStops: item.product.gradient)
-            Image(systemName: item.product.symbol)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
-        }
-        .frame(width: 34, height: 34)
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .strokeBorder(.white.opacity(0.65), lineWidth: 1.5)
+        ProductThumbnail(
+            product: item.product,
+            size: 34,
+            cornerRadius: 9,
+            glyphSize: 14,
+            strokeColor: .white.opacity(0.65),
+            strokeWidth: 1.5
         )
     }
 
