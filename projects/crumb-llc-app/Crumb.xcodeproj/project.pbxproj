@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0020306BCE0325C7B4DAB2AD /* ProductCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CD60E78A98B93B9526DBD8D /* ProductCard.swift */; };
+		0794BFA4BA0E25461F3396F9 /* MissionOrchestratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBBAC9D45516FD79E1E13658 /* MissionOrchestratorTests.swift */; };
 		0977683C1BACB17215A04510 /* SiriHandoffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFE8A88BB1C7340314D1DE3C /* SiriHandoffView.swift */; };
 		180EDA4F5CE0E7BDABE7DB25 /* TasteEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61C52B2400B3457774228546 /* TasteEditor.swift */; };
 		186DAFE618981282D949E448 /* CuratorNote.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2636664F2FF6491635448E6 /* CuratorNote.swift */; };
@@ -122,6 +123,7 @@
 		E2636664F2FF6491635448E6 /* CuratorNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CuratorNote.swift; sourceTree = "<group>"; };
 		E4553F448163F30B2353AFBA /* LiveUCPClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveUCPClientTests.swift; sourceTree = "<group>"; };
 		E5EFDFEC4C56A1BDC5A24787 /* Secrets.example.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Secrets.example.plist; sourceTree = "<group>"; };
+		EBBAC9D45516FD79E1E13658 /* MissionOrchestratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionOrchestratorTests.swift; sourceTree = "<group>"; };
 		F5A3B9520F2253A5F03A94A0 /* CrumbUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CrumbUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F614DD6F8A672D44B5BAF770 /* CrumbUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbUITests.swift; sourceTree = "<group>"; };
 		F65639EFF2FF1E75D8FAB265 /* Crumb.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Crumb.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -174,6 +176,7 @@
 				8E650966B1912922403F747B /* CrumbKitTests.swift */,
 				5F292C02F09F2C9287D9915B /* HistoryTests.swift */,
 				E4553F448163F30B2353AFBA /* LiveUCPClientTests.swift */,
+				EBBAC9D45516FD79E1E13658 /* MissionOrchestratorTests.swift */,
 				3AAA36FC0C29BF1240DF09A0 /* MissionPlannerTests.swift */,
 				4D5891C9EC66DD23B0FDA8A0 /* RecipientTests.swift */,
 				94CD80BCDEE53873337BD04A /* RefinementInterpreterTests.swift */,
@@ -565,6 +568,7 @@
 				218B938E1047EA5DAF0706C0 /* CrumbKitTests.swift in Sources */,
 				28E4C38CF4DDA70945A2DBAD /* HistoryTests.swift in Sources */,
 				CF1F4947BCB58FF53179E71A /* LiveUCPClientTests.swift in Sources */,
+				0794BFA4BA0E25461F3396F9 /* MissionOrchestratorTests.swift in Sources */,
 				594E533E13702E648E1AB8BD /* MissionPlannerTests.swift in Sources */,
 				8574FF0300BC2641FCF0CDFF /* RecipientTests.swift in Sources */,
 				B6DBA63785EFF1ECBE32D28F /* RefinementInterpreterTests.swift in Sources */,

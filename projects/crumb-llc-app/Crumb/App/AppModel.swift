@@ -278,6 +278,11 @@ final class AppModel {
     /// live result never reaches the deck with a confident rationale. Defaults to the deterministic
     /// floor (no model, mock-safe) so existing tests and the scaffold need nothing.
     let relevanceGate: any RelevanceGate
+    /// Gathers the mission's candidate pool (the search + relevance phase). Defaults to the
+    /// deterministic floor (the exact fan-out + gate the pipeline ran inline, no model, mock-safe);
+    /// the app wires ``AppleFoundationMissionOrchestrator``, which lets the model *drive* the search
+    /// via Tools when one is up and degrades to this floor otherwise.
+    let orchestrator: any MissionOrchestrator
     private let tasteStore: any TasteStore
     private let recentsStore: any RecentMissionsStore
     private let historyStore: any HistoryStore
@@ -303,6 +308,7 @@ final class AppModel {
         refiner: any RefinementInterpreter = RuleBasedRefinementInterpreter(),
         recapWriter: any RecapWriter = RuleBasedRecapWriter(),
         relevanceGate: any RelevanceGate = RuleBasedRelevanceGate(),
+        orchestrator: any MissionOrchestrator = DeterministicMissionOrchestrator(),
         recentsStore: any RecentMissionsStore = InMemoryRecentMissionsStore(),
         historyStore: any HistoryStore = InMemoryHistoryStore(),
         recipientStore: any RecipientStore = InMemoryRecipientStore(),
@@ -316,6 +322,7 @@ final class AppModel {
         self.refiner = refiner
         self.recapWriter = recapWriter
         self.relevanceGate = relevanceGate
+        self.orchestrator = orchestrator
         self.recentsStore = recentsStore
         self.historyStore = historyStore
         self.recipientStore = recipientStore
@@ -1009,13 +1016,20 @@ final class AppModel {
     /// unchanged.
     func loadCandidates(for task: ShoppingTask) async {
         loadState = .loading
-        let queries = task.searchQueries.isEmpty ? [task.id] : task.searchQueries
-        let union = await search(queries)
+
+        // Gather the candidate pool — the search + relevance phase. The agentic orchestrator lets
+        // the model *drive* the search via Tools (searching each part, reaching past the plan,
+        // widening a strong fit) with the relevance guard on every result; it degrades to the
+        // deterministic fan-out + gate when no model is up. Either way off-topic items are dropped
+        // *before* the curator ranks/voices them, and the floor keeps at least `relevanceFloor`
+        // candidates so a real result set never becomes "no matches". Returns nil only on a total
+        // catalog outage.
+        let gathered = await orchestrator.gather(for: task, floor: Self.relevanceFloor, using: ucp, gate: relevanceGate)
 
         // Only mutate if the user is still on this task.
         guard selectedTask?.id == task.id else { return }
 
-        guard let union else {
+        guard let gathered else {
             candidates = []
             deck = []
             baseCandidates = []
@@ -1023,16 +1037,10 @@ final class AppModel {
             return
         }
 
-        // Drop clearly off-topic results (a rowing shirt in a lacrosse kit) *before* the curator
-        // ranks/voices them — the curator only orders, it never drops. The gate keeps at least
-        // `relevanceFloor` candidates, so it can never turn a real result set into "no matches".
-        let gated = await relevanceGate.filter(union, for: task, floor: Self.relevanceFloor)
-        guard selectedTask?.id == task.id else { return }
-
         // `curate` both ranks and rewrites each rationale into Crumb's voice, and reports the
         // tier it used so the UI can be honest when it fell back from the AI curator. For a gift
         // mission this curates to the recipient's taste, with gift-framed voice.
-        let curated = await curator.curate(gated, for: activeTaste, mission: task, refinement: nil, recipient: activeRecipientRef)
+        let curated = await curator.curate(gathered.products, for: activeTaste, mission: task, refinement: nil, recipient: activeRecipientRef)
         guard selectedTask?.id == task.id else { return }
         candidates = curated.products
         deck = curated.products
@@ -1049,21 +1057,10 @@ final class AppModel {
     /// outage from a successful-but-empty result. Shared by the initial ``loadCandidates(for:)``
     /// and by an `addQueries` refinement, so both fan out and dedupe identically.
     private func search(_ queries: [String]) async -> [Product]? {
-        // `try?` keeps a failed query from cancelling its siblings; a failure surfaces as `nil`.
-        let batches: [[Product]?] = await withTaskGroup(of: [Product]?.self) { group in
-            for query in queries {
-                group.addTask { [ucp] in
-                    try? await ucp.searchCatalog(query, placements: [.organic])
-                }
-            }
-            var collected: [[Product]?] = []
-            for await batch in group { collected.append(batch) }
-            return collected
-        }
-        let succeeded = batches.compactMap { $0 }
-        guard !succeeded.isEmpty else { return nil }
-        var seen = Set<Product.ID>()
-        return succeeded.flatMap { $0 }.filter { seen.insert($0.id).inserted }
+        // The parallel fan-out + dedupe now lives in CrumbKit as `UCPClient.searchUnion`, shared
+        // with the deterministic orchestrator so a refinement's `addQueries` search behaves
+        // identically to the initial gather.
+        await ucp.searchUnion(queries)
     }
 
     // MARK: Swipe deck
