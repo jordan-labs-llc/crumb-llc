@@ -57,6 +57,51 @@ struct CrumbTests {
         #expect(model.recentGoals.isEmpty)             // nonsense isn't remembered
     }
 
+    // MARK: - Onboarding "let the goal lead" fast path (#28)
+
+    @Test("A first-run user can start from a goal: it plans straight to Curate and persists a profile")
+    @MainActor
+    func goalFirstOnboardingRoutesToPlan() async {
+        let store = InMemoryTasteStore()   // no saved profile → first-run onboarding
+        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator(), tasteStore: store)
+        #expect(model.route == .onboarding)
+
+        await model.runOnboardingGoal("Set up my pour-over corner")
+
+        #expect(model.route == .plan)                  // led straight into the editable plan
+        #expect(model.selectedTask != nil)
+        #expect(store.loadProfile() != nil)            // onboarding completed + persisted (won't reappear)
+    }
+
+    @Test("A first-run user is seeded with taste inferred from the goal")
+    @MainActor
+    func goalFirstSeedsTasteFromGoal() async {
+        let store = InMemoryTasteStore()
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: store, tasteExtractor: MarkerTasteExtractor()
+        )
+        await model.runOnboardingGoal("Set up my pour-over corner")
+
+        // The injected extractor read the goal into the profile — the goal-first path wired it in.
+        #expect(model.tasteProfile.vibe.contains("GoalSeeded"))
+        #expect(store.loadProfile()?.vibe.contains("GoalSeeded") == true)
+    }
+
+    @Test("A first-run user with a non-shoppable goal still finishes onboarding, not stranded")
+    @MainActor
+    func goalFirstNonShoppableCompletesOnboarding() async {
+        let store = InMemoryTasteStore()
+        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator(), tasteStore: store)
+
+        await model.runOnboardingGoal("what is the weather?")
+
+        #expect(model.route == .missions)              // dropped into the app, not left on onboarding
+        #expect(model.selectedTask == nil)
+        #expect(model.planDecline != nil)              // the friendly decline, shown on Missions
+        #expect(store.loadProfile() != nil)            // onboarding still persisted
+    }
+
     @Test("Editing the plan then curating searches the edited queries and advances to Curate")
     @MainActor
     func editPlanThenCurate() async {
@@ -929,5 +974,15 @@ private struct FakeUCP: UCPClient {
 
     func checkoutHandoff(for shop: Shop, in cart: Cart) async throws -> URL {
         throw UCPError.emptyShopHandoff(shop.id)
+    }
+}
+
+/// A deterministic ``TasteExtractor`` double: stamps a "GoalSeeded" marker into the vibe so a test
+/// can prove the goal-first onboarding path actually threads the goal through the extractor seam.
+private struct MarkerTasteExtractor: TasteExtractor {
+    func extract(from text: String, base: TasteProfile) async -> TasteProfile? {
+        var seeded = base
+        seeded.vibe.append("GoalSeeded")
+        return seeded
     }
 }

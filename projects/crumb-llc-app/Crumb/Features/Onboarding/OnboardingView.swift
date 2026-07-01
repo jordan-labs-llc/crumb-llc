@@ -32,7 +32,7 @@ struct OnboardingView: View {
 
         var subtitle: String {
             switch self {
-            case .intro: return "So Crumb curates for you, not the average shopper."
+            case .intro: return "Start with what you're shopping for — or set your taste first."
             case .vibe: return "A few words for the feel you're after."
             case .leanings: return "The trade-offs and preferences you keep coming back to."
             case .budget: return "How freely you spend — and your taste in a line."
@@ -113,8 +113,12 @@ struct OnboardingView: View {
         switch current {
         case .intro:
             CrumbHeroArt()
-                .frame(height: 140)
+                .frame(height: 120)
                 .padding(.bottom, CrumbMetrics.Space.s)
+            // Let the goal lead: a new user who just wants to shop can start here and pick up
+            // their taste as they go (issue #28). The taste-first path stays right below.
+            GoalFirstCard()
+            orDivider
             DescribeYourselfCard(draft: $draft)
         case .vibe:
             EditableChipSection(
@@ -136,6 +140,20 @@ struct OnboardingView: View {
                 SignatureEditor(text: $draft.signatureLine)
             }
         }
+    }
+
+    /// A quiet "or" separator between the goal-first fast path and the taste-first editors.
+    private var orDivider: some View {
+        HStack(spacing: CrumbMetrics.Space.m) {
+            Rectangle().fill(CrumbColor.line).frame(height: 1)
+            Text("or set your taste")
+                .font(CrumbType.caption)
+                .foregroundStyle(CrumbColor.ink3)
+                .fixedSize()
+            Rectangle().fill(CrumbColor.line).frame(height: 1)
+        }
+        .padding(.vertical, CrumbMetrics.Space.xs)
+        .accessibilityHidden(true)
     }
 
     // MARK: Nav
@@ -183,5 +201,87 @@ struct OnboardingView: View {
         } else {
             step += 1
         }
+    }
+}
+
+// MARK: - Goal-first fast path
+
+/// The "let the goal lead" card on the first onboarding step: a new user who just wants to shop
+/// types what they're after and goes, skipping taste capture. The goal seeds an initial taste and
+/// plans straight into the deck (``AppModel/startFromGoal(_:)``); the full taste flow stays right
+/// below for anyone who'd rather set it up first. See issue #28.
+struct GoalFirstCard: View {
+    @Environment(AppModel.self) private var model
+
+    @State private var text = GoalFirstCard.seededText
+    @FocusState private var focused: Bool
+
+    private var canStart: Bool { !text.trimmed.isEmpty && !model.isPlanning }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
+            Label("What are you shopping for?", systemImage: "bag")
+                .font(CrumbType.headline)
+                .foregroundStyle(CrumbColor.ink)
+
+            Text("Tell me what you need and I'll start curating — I'll pick up your taste as we go.")
+                .font(CrumbType.caption)
+                .foregroundStyle(CrumbColor.ink2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            TextField("Jasmine tea for Maya's birthday", text: $text, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(CrumbType.body)
+                .foregroundStyle(CrumbColor.ink)
+                .lineLimit(1...3)
+                .focused($focused)
+                .submitLabel(.go)
+                .onSubmit(start)
+                .padding(CrumbMetrics.Space.m)
+                .background(CrumbColor.paper, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.tile, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: CrumbMetrics.Radius.tile, style: .continuous)
+                        .strokeBorder(focused ? CrumbColor.pine : CrumbColor.line, lineWidth: focused ? 1.5 : 1)
+                )
+                .accessibilityIdentifier("goalFirstField")
+
+            Button(action: start) {
+                HStack(spacing: CrumbMetrics.Space.s) {
+                    if model.isPlanning {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "sparkles")
+                    }
+                    Text(model.isPlanning ? "Curating…" : "Start shopping")
+                        .font(CrumbType.headline)
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, CrumbMetrics.Space.m)
+                .background(canStart ? CrumbColor.pine : CrumbColor.ink3, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canStart)
+            .accessibilityIdentifier("goalFirstStart")
+        }
+        .crumbCard()
+    }
+
+    private func start() {
+        let goal = text.trimmed
+        guard !goal.isEmpty, !model.isPlanning else { return }
+        focused = false
+        model.startFromGoal(goal)
+    }
+
+    /// In DEBUG screenshot mode, pre-fill the goal from `CRUMB_GOAL` so the goal-first card can be
+    /// captured populated — `simctl` can inject neither taps nor keystrokes.
+    private static var seededText: String {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] == "onboarding" {
+            return ProcessInfo.processInfo.environment["CRUMB_GOAL"] ?? ""
+        }
+        #endif
+        return ""
     }
 }

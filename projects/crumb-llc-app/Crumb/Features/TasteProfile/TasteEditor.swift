@@ -316,7 +316,15 @@ struct DescribeYourselfCard: View {
                 .font(CrumbType.caption)
                 .foregroundStyle(CrumbColor.ink2)
                 .fixedSize(horizontal: false, vertical: true)
-        case .idle, .reading:
+        case .idle:
+            // Explain why the button is dimmed until there's something to read (issue #28).
+            if text.trimmed.isEmpty {
+                Text("Type a sentence above to enable.")
+                    .font(CrumbType.caption)
+                    .foregroundStyle(CrumbColor.ink3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case .reading:
             EmptyView()
         }
     }
