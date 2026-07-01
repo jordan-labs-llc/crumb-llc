@@ -188,8 +188,8 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
             let task = RuleBasedMissionPlanner.makeTask(
                 goal: trimmedGoal,
                 title: title,
-                subtitle: cleanedSubtitle(draft.subtitle),
-                note: cleanedNote(draft.note, parts: [title]),
+                subtitle: cleanedSubtitle(draft.subtitle, goal: trimmedGoal),
+                note: cleanedNote(draft.note, parts: [title], goal: trimmedGoal),
                 parts: [(label: title, query: RuleBasedMissionPlanner.clean(query: trimmedGoal))]
             )
             return PlannedMission(task: task, tier: tier, decline: nil)
@@ -199,8 +199,8 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
         let task = RuleBasedMissionPlanner.makeTask(
             goal: trimmedGoal,
             title: title,
-            subtitle: cleanedSubtitle(draft.subtitle),
-            note: cleanedNote(draft.note, parts: parts.map(\.label)),
+            subtitle: cleanedSubtitle(draft.subtitle, goal: trimmedGoal),
+            note: cleanedNote(draft.note, parts: parts.map(\.label), goal: trimmedGoal),
             parts: parts
         )
         return PlannedMission(task: task, tier: tier, decline: nil)
@@ -228,17 +228,49 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
 
     private static func cleanedTitle(_ raw: String, goal: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? RuleBasedMissionPlanner.title(from: goal) : trimmed
+        return (trimmed.isEmpty || isLeakedExemplar(trimmed, goal: goal))
+            ? RuleBasedMissionPlanner.title(from: goal) : trimmed
     }
 
-    private static func cleanedSubtitle(_ raw: String) -> String {
+    private static func cleanedSubtitle(_ raw: String, goal: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? RuleBasedMissionPlanner.defaultSubtitle : trimmed
+        return (trimmed.isEmpty || isLeakedExemplar(trimmed, goal: goal))
+            ? RuleBasedMissionPlanner.defaultSubtitle : trimmed
     }
 
-    private static func cleanedNote(_ raw: String, parts: [String]) -> String {
+    private static func cleanedNote(_ raw: String, parts: [String], goal: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? RuleBasedMissionPlanner.curatorNote(forParts: parts) : trimmed
+        return (trimmed.isEmpty || isLeakedExemplar(trimmed, goal: goal))
+            ? RuleBasedMissionPlanner.curatorNote(forParts: parts) : trimmed
+    }
+
+    // MARK: - Exemplar-leak guard (#23)
+
+    /// Seed-mission metadata the planner must never pass off as its *own* output for an unrelated
+    /// goal. The seed missions double as the on-device model's few-shot anchors, and the small model
+    /// will parrot a vivid one — the coffee subtitle "Slower mornings · better cup" — straight onto a
+    /// "premium jasmine tea" plan. Normalized (lowercased, punctuation → spaces) so a lightly-reworded
+    /// copy still matches. Built from ``SeedData/missions`` so it stays in sync as the seeds change.
+    static let reservedExemplars: Set<String> = Set(
+        SeedData.missions
+            .flatMap { [$0.title, $0.subtitle, $0.curatorNote] }
+            .map(normalizeExemplar)
+    )
+
+    /// The matching key for ``reservedExemplars``: lowercased, punctuation-stripped, whitespace-
+    /// collapsed. Pure.
+    static func normalizeExemplar(_ text: String) -> String {
+        text.lowercased().split { !$0.isLetter && !$0.isNumber }.joined(separator: " ")
+    }
+
+    /// Whether `text` is a seed exemplar **leaking onto an unrelated goal**: it matches a seed
+    /// mission's title/subtitle/note *and* shares no significant word with the goal. The two-part
+    /// test is deliberate — a field that genuinely fits the goal (a pour-over title for a pour-over
+    /// goal) matches a seed but shares a word, so it is kept; only an off-topic copy is dropped for
+    /// the goal-derived deterministic default. Pure — unit-tested.
+    static func isLeakedExemplar(_ text: String, goal: String) -> Bool {
+        guard reservedExemplars.contains(normalizeExemplar(text)) else { return false }
+        return RuleBasedRelevanceGate.tokens(text).isDisjoint(with: RuleBasedRelevanceGate.tokens(goal))
     }
 
     // MARK: Prompt construction
@@ -326,10 +358,10 @@ public struct MissionDraft {
     @Guide(description: "true if the goal names ONE specific item to buy (e.g. 'premium jasmine tea', 'a cast iron skillet'); false if it's outfitting a space or activity that genuinely needs several complementary things (e.g. 'set up my pour-over corner').")
     public var isSingleItem: Bool
 
-    @Guide(description: "A short, warm mission title in the user's intent, e.g. 'Set up my pour-over corner'. Empty if not shoppable.")
+    @Guide(description: "A short, warm mission title in the user's own words, drawn from THIS goal specifically — not a generic or example phrase. Empty if not shoppable.")
     public var title: String
 
-    @Guide(description: "A brief subtitle of context or constraints, e.g. 'Slower mornings · better cup'. Empty if not shoppable.")
+    @Guide(description: "A brief subtitle: a few words of context for THIS goal — its occasion, setting, or constraints. Draw it from the goal, not an example. Empty if not shoppable.")
     public var subtitle: String
 
     @Guide(description: "One short sentence in Crumb's curator voice framing the plan. No emoji or exclamation marks. Empty if not shoppable.")
