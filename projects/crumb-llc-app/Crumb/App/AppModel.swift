@@ -1046,7 +1046,7 @@ final class AppModel {
                 // ranked, model-voiced deck; this is the immediate, model-free curator line, and it
                 // matches what the settled deck falls back to if the on-device model can't rank.
                 let voicedFresh = fresh.map {
-                    $0.withRationale(self.curator.rationale(for: $0, profile: self.activeTaste, recipient: self.activeRecipientRef))
+                    $0.withRationale(self.curator.rationale(for: $0, profile: self.activeTaste, recipient: self.activeRecipientRef, mission: task))
                 }
                 let wasEmpty = self.deck.isEmpty
                 self.deck.append(contentsOf: voicedFresh)

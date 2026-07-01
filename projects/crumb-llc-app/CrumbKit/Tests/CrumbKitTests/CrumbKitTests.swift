@@ -78,9 +78,10 @@ struct CrumbKitTests {
         // The default engine is a *chosen* default, not a degraded one → no honest note.
         #expect(deck.tier == .ruleBased(nil))
         #expect(deck.tier.fallbackNote == nil)
-        // Every card carries the curator's rationale (matches rationale(for:profile:)).
+        // Every card carries the curator's rationale — mission-aware now (#33): the default curate
+        // threads the mission through, so the floor voices against *this* mission, not mission-agnostically.
         for product in deck.products {
-            #expect(product.rationale == curator.rationale(for: product, profile: profile))
+            #expect(product.rationale == curator.rationale(for: product, profile: profile, recipient: nil, mission: SeedData.hike))
         }
     }
 

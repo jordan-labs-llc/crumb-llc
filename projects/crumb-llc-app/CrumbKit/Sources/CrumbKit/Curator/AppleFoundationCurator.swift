@@ -69,6 +69,14 @@ public struct AppleFoundationCurator: CuratorEngine {
         rule.rationale(for: product, profile: profile, recipient: recipient)
     }
 
+    /// The mission-aware floor (#33) must reach the ``RuleBasedCurator`` — without this override the
+    /// protocol default would forward to the mission-*agnostic* `recipient:` overload, dropping the
+    /// mission and voicing "…your lean toward merino…" on a tea card. This is the line the app's
+    /// streamed floor (`AppModel`) renders before the model-voiced deck settles.
+    public func rationale(for product: Product, profile: TasteProfile, recipient: RecipientRef?, mission: ShoppingTask?) -> String {
+        rule.rationale(for: product, profile: profile, recipient: recipient, mission: mission)
+    }
+
     // MARK: Curation
 
     public func curate(
@@ -106,9 +114,9 @@ public struct AppleFoundationCurator: CuratorEngine {
             if let voiced = try? await rankAndVoice(baseline, profile, mission, refinement, recipient, model: device, deepReasoning: false) {
                 return CuratedDeck(products: voiced, tier: .onDevice)
             }
-            return fallback(baseline, profile, refinement, recipient, reason: .offlineOrError)
+            return fallback(baseline, profile, mission, refinement, recipient, reason: .offlineOrError)
         case let .unavailable(reason):
-            return fallback(baseline, profile, refinement, recipient, reason: Self.map(reason))
+            return fallback(baseline, profile, mission, refinement, recipient, reason: Self.map(reason))
         }
     }
 
@@ -302,7 +310,7 @@ public struct AppleFoundationCurator: CuratorEngine {
             }
             for await (index, text) in group {
                 out[index] = products[index].withRationale(
-                    text ?? rule.rationale(for: products[index], profile: profile, recipient: recipient)
+                    text ?? rule.rationale(for: products[index], profile: profile, recipient: recipient, mission: mission)
                 )
             }
         }
@@ -330,12 +338,13 @@ public struct AppleFoundationCurator: CuratorEngine {
     private func fallback(
         _ ranked: [Product],
         _ profile: TasteProfile,
+        _ mission: ShoppingTask,
         _ refinement: RefinementContext?,
         _ recipient: RecipientRef?,
         reason: CuratorTier.Fallback
     ) -> CuratedDeck {
         let shaped = RefinementContext.apply(refinement, to: ranked)
-        let voiced = shaped.map { $0.withRationale(rule.rationale(for: $0, profile: profile, recipient: recipient)) }
+        let voiced = shaped.map { $0.withRationale(rule.rationale(for: $0, profile: profile, recipient: recipient, mission: mission)) }
         return CuratedDeck(products: voiced, tier: .ruleBased(reason))
     }
 
