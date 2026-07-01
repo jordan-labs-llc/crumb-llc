@@ -11,11 +11,20 @@ public struct LiveUCPClient: UCPClient {
     private let baseURL: URL
     private let brokerKey: String?
     private let session: URLSession
+    /// A launch-time readiness ping that warms the scale-to-zero broker, retried until the container
+    /// answers. `searchCatalog` awaits it, so the ~30s cold start is absorbed *here* — kicked at
+    /// construction (app init), overlapping the seconds the user spends typing a goal and editing the
+    /// plan — instead of stalling the user's first real query. `nil` when warming is off (the plain
+    /// `init`, used by tests) so it stays a no-op there.
+    private let readiness: Task<Void, Never>?
 
-    public init(baseURL: URL, brokerKey: String? = nil, session: URLSession = .shared) {
+    /// - Parameter warmOnInit: when `true`, kick the readiness ping immediately (the app path). Off by
+    ///   default so a test's stub-session client doesn't fire background network.
+    public init(baseURL: URL, brokerKey: String? = nil, session: URLSession = .shared, warmOnInit: Bool = false) {
         self.baseURL = baseURL
         self.brokerKey = brokerKey
         self.session = session
+        self.readiness = warmOnInit ? Self.startReadiness(baseURL: baseURL, session: session) : nil
     }
 
     /// Convenience init from a ``UCPConfig``; returns `nil` when no broker is configured.
@@ -23,15 +32,36 @@ public struct LiveUCPClient: UCPClient {
     /// When no explicit `session` is passed it builds one with a longer request timeout than
     /// `URLSession.shared`'s 60s default is comfortable with for our purposes: the broker
     /// scales to zero, so the first request after idle can spend ~20s+ in a cold start. The
-    /// bumped timeout keeps that first real query from being cut off (paired with the
-    /// launch-time ``warmUp()`` ping, which usually warms the container first).
+    /// bumped timeout keeps that first real query from being cut off, and the readiness ping
+    /// (started here, at construction) warms the container while the user is still deciding.
     public init?(config: UCPConfig, session: URLSession? = nil) {
         guard let url = config.brokerBaseURL else { return nil }
         self.init(
             baseURL: url,
             brokerKey: config.brokerKey,
-            session: session ?? Self.makeSession()
+            session: session ?? Self.makeSession(),
+            warmOnInit: true
         )
+    }
+
+    /// Pings the broker's cheap `.well-known/ucp` endpoint, retrying with a short backoff until the
+    /// container answers (any HTTP status means it's up) or the attempts run out. Detached + utility
+    /// priority so it never blocks launch; all errors are absorbed — a failed warm is no worse than
+    /// not warming. Retrying is the fix for the old single-shot ping that a slow cold start could miss.
+    static func startReadiness(baseURL: URL, session: URLSession) -> Task<Void, Never> {
+        Task.detached(priority: .utility) {
+            let url = baseURL.appending(path: ".well-known/ucp")
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            for attempt in 0..<3 {
+                if Task.isCancelled { return }
+                if let (_, response) = try? await session.data(for: request),
+                   response is HTTPURLResponse {
+                    return   // the container answered — it's warm
+                }
+                if attempt < 2 { try? await Task.sleep(for: .seconds(2)) }
+            }
+        }
     }
 
     /// A session tuned for the broker's cold-start latency.
@@ -51,6 +81,10 @@ public struct LiveUCPClient: UCPClient {
         _ query: String,
         placements: [Placement]
     ) async throws -> [Product] {
+        // Absorb the cold start into the launch-time warm: if the broker is still spinning up, wait
+        // for the readiness ping (already in flight since app init) rather than racing it. Once warm
+        // this returns instantly, so it only ever delays the very first query on a cold container.
+        await readiness?.value
         let response: BrokerSearchResponse = try await post(
             "catalog/search",
             body: ["query": query]
@@ -97,14 +131,12 @@ public struct LiveUCPClient: UCPClient {
         return URL(string: "https://\(domain)")
     }
 
-    /// Wakes the (scale-to-zero) broker with a cheap, cacheable GET so the first real query
-    /// usually lands warm. Fire-and-forget: the result is discarded and every error is
-    /// swallowed — a failed warm-up is no worse than not warming up at all.
+    /// Awaits the launch-time readiness ping (see ``startReadiness(baseURL:session:)``), which the
+    /// `init?(config:)` path kicks at construction. Kept for the `RootView` warm-up hook: calling it
+    /// just joins the in-flight warm rather than firing a second, un-retried GET. A no-op when warming
+    /// is off (the plain `init`).
     public func warmUp() async {
-        let url = baseURL.appending(path: ".well-known/ucp")
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        _ = try? await session.data(for: request)
+        await readiness?.value
     }
 
     // MARK: Transport
