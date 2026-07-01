@@ -142,6 +142,39 @@ struct MissionPlannerTests {
         #expect(planned.tier == .onDevice)                           // tier still reported as proven
     }
 
+    @Test("A single-item draft collapses to exactly one part, even if the model over-produced")
+    func reconcileSingleItemStaysTight() {
+        // The model flagged a single item but padded the plan with accessories anyway. The pure
+        // reconcile must keep only the core (first) part, so tightness never rides on the model.
+        let draft = MissionDraft(
+            isShoppable: true, isSingleItem: true, title: "Premium jasmine tea", subtitle: "", note: "",
+            parts: [
+                PlanPartDraft(label: "Premium jasmine tea", query: "premium jasmine tea"),
+                PlanPartDraft(label: "Teapot", query: "glass teapot"),          // accessory — must be dropped
+                PlanPartDraft(label: "Tea strainer", query: "tea strainer"),    // accessory — must be dropped
+            ],
+            decline: ""
+        )
+        let task = AppleFoundationMissionPlanner.mission(from: draft, goal: "buy premium jasmine tea", tier: .onDevice).task
+        #expect(task?.plan.count == 1)
+        #expect(task?.searchQueries == ["premium jasmine tea"])   // the core item only, no accessories
+    }
+
+    @Test("A broad draft keeps its several complementary parts")
+    func reconcileBroadKeepsParts() {
+        let draft = MissionDraft(
+            isShoppable: true, isSingleItem: false, title: "Set up my pour-over corner", subtitle: "", note: "",
+            parts: [
+                PlanPartDraft(label: "Gooseneck kettle", query: "gooseneck kettle"),
+                PlanPartDraft(label: "Burr grinder", query: "burr grinder"),
+                PlanPartDraft(label: "Pour-over dripper", query: "pour over dripper"),
+            ],
+            decline: ""
+        )
+        let task = AppleFoundationMissionPlanner.mission(from: draft, goal: "set up my pour-over corner", tier: .onDevice).task
+        #expect(task?.plan.count == 3)   // a broad goal is not collapsed
+    }
+
     @Test("A not-shoppable draft yields no task and a decline message")
     func reconcileNotShoppable() {
         let withMsg = MissionDraft(

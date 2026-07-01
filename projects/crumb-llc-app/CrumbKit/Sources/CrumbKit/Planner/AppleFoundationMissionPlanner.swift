@@ -176,7 +176,11 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
             )
         }
 
-        let parts = cleanParts(draft.parts)
+        // Honor the altitude flag deterministically: a single-item goal is collapsed to its one
+        // core part even if the model over-produced accessories, so tightness never depends on the
+        // model obeying the instruction. A broad goal keeps its (already capped) complementary parts.
+        let cleaned = cleanParts(draft.parts)
+        let parts = draft.isSingleItem ? Array(cleaned.prefix(1)) : cleaned
         guard !parts.isEmpty else {
             // The model said "shoppable" but gave nothing usable — fall back to the single
             // generic query, while keeping the (proven) model tier in the report.
@@ -295,11 +299,15 @@ struct PlannerInstructions: DynamicInstructions {
 
     /// The decomposition + decline guidance. Pure — unit-tested.
     static let guide = """
-        Break the goal into 3 to \(RuleBasedMissionPlanner.maxParts) concrete parts to shop for. \
-        For each part give a short human label (what it is) and a concise catalog search query \
-        (a few plain keywords, no punctuation) you'd type into a shop's search. Lean the plan \
-        toward this person's taste, but never invent constraints they didn't imply. Keep the \
-        title and subtitle short and in their intent.
+        Break the goal into the parts to shop for, each with a short human label (what it is) and \
+        a concise catalog search query (a few plain keywords, no punctuation) you'd type into a \
+        shop's search. Match the plan to the goal's altitude: when the goal names ONE specific \
+        item, return exactly one part and set isSingleItem to true — never pad it with accessories \
+        or extras they didn't ask for. Only when the goal is to outfit a space or an activity that \
+        genuinely needs several complementary things, break it into up to \
+        \(RuleBasedMissionPlanner.maxParts) parts and set isSingleItem to false. Let this person's \
+        taste guide which style of thing you'd pick within a part, but never add parts or \
+        constraints they didn't imply. Keep the title and subtitle short and in their intent.
 
         If the goal is NOT something a shop can fulfill — a question, nonsense, or a non-shopping \
         request — set isShoppable to false and write one short, friendly sentence telling them \
@@ -315,6 +323,9 @@ public struct MissionDraft {
     @Guide(description: "true if this is a shopping goal a shop can fulfill; false for a question, nonsense, or a non-shopping request.")
     public var isShoppable: Bool
 
+    @Guide(description: "true if the goal names ONE specific item to buy (e.g. 'premium jasmine tea', 'a cast iron skillet'); false if it's outfitting a space or activity that genuinely needs several complementary things (e.g. 'set up my pour-over corner').")
+    public var isSingleItem: Bool
+
     @Guide(description: "A short, warm mission title in the user's intent, e.g. 'Set up my pour-over corner'. Empty if not shoppable.")
     public var title: String
 
@@ -324,7 +335,7 @@ public struct MissionDraft {
     @Guide(description: "One short sentence in Crumb's curator voice framing the plan. No emoji or exclamation marks. Empty if not shoppable.")
     public var note: String
 
-    @Guide(description: "The mission broken into 3 to 6 concrete parts to shop for. Empty if not shoppable.")
+    @Guide(description: "The parts to shop for: exactly ONE when isSingleItem is true, otherwise up to 6 concrete complementary parts. Empty if not shoppable.")
     public var parts: [PlanPartDraft]
 
     @Guide(description: "If not shoppable, one short friendly sentence saying you shop for things and to try a shopping goal. Empty otherwise.")
@@ -332,6 +343,7 @@ public struct MissionDraft {
 
     public init(
         isShoppable: Bool,
+        isSingleItem: Bool = false,
         title: String,
         subtitle: String,
         note: String,
@@ -339,6 +351,7 @@ public struct MissionDraft {
         decline: String
     ) {
         self.isShoppable = isShoppable
+        self.isSingleItem = isSingleItem
         self.title = title
         self.subtitle = subtitle
         self.note = note
