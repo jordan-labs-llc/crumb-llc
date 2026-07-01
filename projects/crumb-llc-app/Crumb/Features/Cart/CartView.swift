@@ -162,9 +162,13 @@ struct CartLine: View {
             ProductThumbnail(product: item.product, size: 44, cornerRadius: 10, glyphSize: 18)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(item.product.name)
+                // Cleaned display name; the raw title stays on the a11y label so VoiceOver reads it
+                // in full. Two lines keeps a long name legible in the cart line.
+                Text(TitleHygiene.display(for: item.product.name))
                     .font(CrumbType.callout)
                     .foregroundStyle(CrumbColor.ink)
+                    .lineLimit(2)
+                    .accessibilityLabel(item.product.name)
                 Text(item.variant.title)
                     .font(CrumbType.caption)
                     .foregroundStyle(CrumbColor.ink3)
