@@ -14,7 +14,12 @@ public struct RuleBasedRelevanceGate: RelevanceGate {
     public init() {}
 
     public func filter(_ products: [Product], for mission: ShoppingTask, floor: Int) async -> [Product] {
-        Self.keep(products, matching: Self.keywords(for: mission), floor: floor)
+        Self.keep(
+            products,
+            matching: Self.keywords(for: mission),
+            core: Self.coreTerms(for: mission),
+            floor: floor
+        )
     }
 
     // MARK: - Pure core (the unit-tested guarantee behind the gate)
@@ -55,6 +60,59 @@ public struct RuleBasedRelevanceGate: RelevanceGate {
         return relevant + filler.prefix(floor - relevant.count)
     }
 
+    /// Core-term–aware keep: for a **narrow** mission (`core` non-empty) a candidate must share one
+    /// of the mission's distinctive core terms — the head qualifier "jasmine", not the generic
+    /// category word "tea". When enough do (`onCore >= floor`) the off-core items are dropped
+    /// outright: this is what finally removes the black/green tea that drifted into a jasmine deck,
+    /// which the plain any-keyword ``keep(_:matching:floor:)`` kept because it shared "premium"/"tea".
+    ///
+    /// When too few match to trust the strict drop, the on-core items lead and the remainder tops up
+    /// to the floor in input order, so a thin catalog is never stranded below it (the price band is
+    /// the backstop for any off-core outlier that rides in as filler). `core` empty — a broad or
+    /// multi-part mission — is exactly the plain any-keyword ``keep(_:matching:floor:)``, unchanged,
+    /// so a genuinely varied deck (a lacrosse kit spanning stick/gloves/pads) is never over-trimmed.
+    ///
+    /// Pure and model-free: same inputs always produce the same kept set.
+    public static func keep(_ products: [Product], matching keywords: Set<String>, core: Set<String>, floor: Int) -> [Product] {
+        guard !core.isEmpty else { return keep(products, matching: keywords, floor: floor) }
+        let floor = max(0, floor)
+        let onCore = products.filter { isRelevant($0, keywords: core) }
+        guard onCore.count < floor else { return onCore }
+        // Too few on-core to trust the strict drop — keep them first, then top up from the remainder
+        // in input order so we never strand the user below the floor.
+        let onCoreIDs = Set(onCore.map(\.id))
+        let filler = products.filter { !onCoreIDs.contains($0.id) }
+        return onCore + filler.prefix(floor - onCore.count)
+    }
+
+    /// The distinctive "core" terms a **narrow** mission is about — the head qualifier(s) a candidate
+    /// must share to survive the strict gate (e.g. `{"jasmine"}` for "premium jasmine tea"). Empty
+    /// for broad/multi-part missions, where any-keyword overlap is the right altitude and a strict
+    /// gate would wrongly drop a legitimately varied deck.
+    ///
+    /// A mission is narrow when it has a single search part — the "single-item altitude" the planner
+    /// already collapses to. From that one query we take the significant words in order, drop generic
+    /// quality adjectives ("premium", "best") and the trailing head noun ("tea" — the category
+    /// itself, which is exactly what lets an adjacent category match), and keep the remaining
+    /// qualifiers. Pure.
+    public static func coreTerms(for mission: ShoppingTask) -> Set<String> {
+        let parts = mission.searchQueries.isEmpty ? mission.plan : mission.searchQueries
+        guard parts.count == 1, let query = parts.first else { return [] }
+        return distinctiveTerms(in: query)
+    }
+
+    /// The distinctive qualifier(s) of a single query: its significant words in order, minus generic
+    /// quality adjectives and the trailing head noun. Returns the lone remaining word when nothing
+    /// else is left (a bare-category goal like "premium tea" → `{"tea"}`, so it still requires the
+    /// category), and empty for an all-generic/all-stopword query. Pure.
+    static func distinctiveTerms(in query: String) -> Set<String> {
+        let ordered = orderedTokens(query).filter { !genericQualifiers.contains($0) }
+        guard ordered.count > 1 else { return Set(ordered) }
+        // The trailing token is the head noun (the category, e.g. "tea"); the qualifiers before it
+        // ("jasmine") are the distinctive signal a candidate must share.
+        return Set(ordered.dropLast())
+    }
+
     /// A product is on-topic when its name or merchant description shares at least one significant
     /// word with the mission's keywords. (At gate time — before the curator voices the deck —
     /// `rationale` is still the raw merchant description, which helps a sparsely-named product
@@ -66,14 +124,30 @@ public struct RuleBasedRelevanceGate: RelevanceGate {
     /// Lowercased word tokens split on any non-alphanumeric, with stopwords and 1–2 character
     /// tokens dropped. Pure and deterministic.
     static func tokens(_ text: String) -> Set<String> {
-        var out = Set<String>()
+        Set(orderedTokens(text))
+    }
+
+    /// The same significant tokens as ``tokens(_:)`` but in source order (and keeping repeats), so
+    /// callers that care about position — which word is the trailing head noun — can. Pure.
+    static func orderedTokens(_ text: String) -> [String] {
+        var out: [String] = []
         for raw in text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }) {
             let word = String(raw)
             guard word.count >= 3, !stopwords.contains(word) else { continue }
-            out.insert(word)
+            out.append(word)
         }
         return out
     }
+
+    /// Generic quality/marketing adjectives that carry no *category* signal — they describe how nice
+    /// a thing is, not what it is. Stripped from a narrow query before we pick the distinctive core
+    /// term, so "premium jasmine tea" cores on "jasmine", not "premium". Kept small and only applied
+    /// to the query (never to product names), so it can't strip a real product keyword.
+    static let genericQualifiers: Set<String> = [
+        "premium", "luxury", "deluxe", "quality", "fine", "finest", "best", "top",
+        "classic", "signature", "gourmet", "professional", "standard", "value",
+        "budget", "affordable",
+    ]
 
     /// Common words that carry no topic signal — deliberately small and generic so it never
     /// strips a real product keyword (note "kit", "gear", "bag", etc. are *not* here).

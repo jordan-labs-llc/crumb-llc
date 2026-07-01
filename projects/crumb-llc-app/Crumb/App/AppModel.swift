@@ -806,8 +806,9 @@ final class AppModel {
         let curated = await curator.curate(candidates, for: activeTaste, mission: task, refinement: nil, recipient: activeRecipientRef)
         // The user may have navigated to another mission while we were re-curating.
         guard selectedTask?.id == task.id else { return }
-        candidates = curated.products
-        deck = curated.products.filter { !isInKit($0) }
+        let priced = PriceBand.priceSane(curated.products)
+        candidates = priced
+        deck = priced.filter { !isInKit($0) }
         curatorTier = curated.tier
     }
 
@@ -852,8 +853,13 @@ final class AppModel {
         let curated = await curator.curate(working, for: activeTaste, mission: task, refinement: context, recipient: activeRecipientRef)
         // The user may have navigated to another mission while we were reworking.
         guard selectedTask?.id == task.id else { return }
-        candidates = curated.products
-        deck = curated.products.filter { !isInKit($0) }
+        // Keep the price backstop on refinement too — unless the user explicitly asked to go
+        // pricier, in which case honor it and leave the order the curator produced.
+        let priced = interpreted.directive.priceDirection == .pricier
+            ? curated.products
+            : PriceBand.priceSane(curated.products)
+        candidates = priced
+        deck = priced.filter { !isInKit($0) }
         curatorTier = curated.tier
         canSaveRefinementToTaste = refinementDirectives.contains { $0.isActionable }
     }
@@ -1075,12 +1081,17 @@ final class AppModel {
             await curator.curate(gathered.products, for: activeTaste, mission: task, refinement: nil, recipient: activeRecipientRef)
         }
         guard selectedTask?.id == task.id else { return }
-        candidates = curated.products
-        baseCandidates = curated.products   // the snapshot Reset restores
+        // Price sanity: sink any wildly-mispriced catalog outlier (the $1,450 "Premium Black Tea
+        // Leaf" against a $4–$60 norm) to the tail *after* the curator has ranked, so it can never
+        // lead or reach the top-3 — in every curator tier, offline included. A deck with too few
+        // priced items to judge a band passes through untouched.
+        let priced = PriceBand.priceSane(curated.products)
+        candidates = priced
+        baseCandidates = priced   // the snapshot Reset restores
         curatorTier = curated.tier
-        // Settle: swap the streamed raw deck for the curated (ranked, voiced) order, keeping only
-        // cards the user hasn't already swiped past.
-        deck = Self.settledDeck(curated.products, keepingUndecidedFrom: deck)
+        // Settle: swap the streamed raw deck for the curated (ranked, voiced, price-saned) order,
+        // keeping only cards the user hasn't already swiped past.
+        deck = Self.settledDeck(priced, keepingUndecidedFrom: deck)
         loadState = .loaded
         // If nothing streamed (a successful but empty gather), the stream never navigated us — land
         // on Curate anyway so the empty state shows, matching the pre-streaming behavior.

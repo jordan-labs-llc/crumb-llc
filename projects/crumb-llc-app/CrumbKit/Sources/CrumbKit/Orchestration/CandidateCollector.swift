@@ -70,9 +70,18 @@ public enum GatherToolSupport {
     /// keep only the products sharing a significant word with what the mission is about, dropping
     /// the clearly off-topic. `floor: 0` means "keep exactly the on-topic set" (no top-up) — the
     /// overall floor is guaranteed later by the orchestrator's union with the deterministic gather.
-    /// Reuses ``RuleBasedRelevanceGate`` so tool-time filtering and the gate agree. Pure.
+    ///
+    /// For a **narrow** mission this also enforces the distinctive core term, so a whole drifted
+    /// batch — the model searched "premium black tea" for a jasmine mission — is dropped at the
+    /// tool boundary before it can pool. Reuses ``RuleBasedRelevanceGate`` so tool-time filtering
+    /// and the gate agree. Pure.
     public static func onTopic(_ products: [Product], for mission: ShoppingTask) -> [Product] {
-        RuleBasedRelevanceGate.keep(products, matching: RuleBasedRelevanceGate.keywords(for: mission), floor: 0)
+        RuleBasedRelevanceGate.keep(
+            products,
+            matching: RuleBasedRelevanceGate.keywords(for: mission),
+            core: RuleBasedRelevanceGate.coreTerms(for: mission),
+            floor: 0
+        )
     }
 
     /// A compact, model-readable summary of what a tool call found — the tool's return value. Kept
