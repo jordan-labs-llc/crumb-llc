@@ -48,18 +48,41 @@ public struct RuleBasedCurator: CuratorEngine {
     }
 
     public func rationale(for product: Product, profile: TasteProfile) -> String {
-        rationale(for: product, profile: profile, recipient: nil)
+        rationale(for: product, profile: profile, recipient: nil, mission: nil)
     }
 
-    /// Gift-aware deterministic voice — **this is what renders on the sim/CI** (no model), so it's
-    /// the unit-tested floor. When `recipient` is `nil` it's the owner's voice (today's behavior):
-    /// the product's rationale stands if it already echoes a leaning, else a quiet "Fits your lean
-    /// toward …" nod. When `recipient` is set, the nod is addressed to *them* by name — "Fits Mom's
-    /// lean toward …" — and a card that already echoes a leaning gets a light "A gift for Mom." tag,
-    /// so every gift card honestly reads as a gift for that person without repeating a full sentence.
     public func rationale(for product: Product, profile: TasteProfile, recipient: RecipientRef?) -> String {
+        rationale(for: product, profile: profile, recipient: recipient, mission: nil)
+    }
+
+    /// Gift- **and** mission-aware deterministic voice — **this is what renders on the sim/CI** (no
+    /// model), so it's the unit-tested floor. A rationale that already echoes a leaning is our own
+    /// seed voice and is always kept verbatim (the gift path tags it "A gift for Mom."). Otherwise
+    /// the floor is:
+    ///
+    /// - **With a mission** (#33): anchored to *that mission* — "A steady pick for “Premium jasmine
+    ///   tea”." — so the line reads on-topic even against the skipped-onboarding default profile. A
+    ///   taste leaning is named only when it genuinely touches the mission, so a hiking "merino over
+    ///   synthetic" no longer lands on a tea card.
+    /// - **Without a mission** (`mission == nil`): today's mission-agnostic behavior, unchanged — a
+    ///   quiet "Fits your lean toward …" nod on the owner's first stated leaning (or a generic line),
+    ///   addressed to the recipient by name in the gift path.
+    public func rationale(
+        for product: Product,
+        profile: TasteProfile,
+        recipient: RecipientRef?,
+        mission: ShoppingTask?
+    ) -> String {
         let lowered = product.rationale.lowercased()
         let echoesLeaning = profile.leanings.contains { lowered.contains(keyword(from: $0)) }
+
+        // Which leaning, if any, to name. With no mission we keep today's behavior — the first
+        // stated leaning, whether or not it fits. With a mission we name a leaning only when its
+        // keyword actually shows up in the mission, so an unrelated default leaning is left off (#33).
+        let leaning: String? = {
+            guard let mission else { return profile.leanings.first }
+            return profile.leanings.first { missionMentions(keyword(from: $0), in: mission) }
+        }()
 
         guard let recipient else {
             // Owner voice. A rationale that already echoes a leaning is our own seed voice — it
@@ -67,10 +90,7 @@ public struct RuleBasedCurator: CuratorEngine {
             // catalog item: never pass that off as the curator's "why this is you" (#22) — speak a
             // short curator line instead, honest about carrying no invented facts.
             if echoesLeaning { return product.rationale }
-            if let leaning = profile.leanings.first {
-                return "A pick that fits your lean toward \(leaning.lowercased())."
-            }
-            return Self.genericOwnerVoice
+            return ownerFloor(mission: mission, leaning: leaning)
         }
 
         // Gift voice — addressed to the recipient by name. Same rule: keep our seed voice, but never
@@ -79,10 +99,46 @@ public struct RuleBasedCurator: CuratorEngine {
         if echoesLeaning {
             return "\(product.rationale) A gift for \(name)."
         }
-        if let leaning = profile.leanings.first {
-            return "A gift that fits \(possessive(name))'s lean toward \(leaning.lowercased())."
+        return giftFloor(name: name, mission: mission, leaning: leaning)
+    }
+
+    /// The owner floor line. Mission-anchored when a mission is present (#33); otherwise the
+    /// mission-agnostic leaning nod, byte-for-byte today's copy.
+    private func ownerFloor(mission: ShoppingTask?, leaning: String?) -> String {
+        guard let mission else {
+            if let leaning { return "A pick that fits your lean toward \(leaning.lowercased())." }
+            return Self.genericOwnerVoice
         }
-        return "A gift picked with \(name) in mind."
+        if let leaning {
+            return "A steady pick for \(missionAnchor(mission)), true to your lean toward \(leaning.lowercased())."
+        }
+        return "A steady pick for \(missionAnchor(mission))."
+    }
+
+    /// The gift floor line, addressed to `name`. Mission-anchored when present (#33); otherwise the
+    /// mission-agnostic gift nod, byte-for-byte today's copy.
+    private func giftFloor(name: String, mission: ShoppingTask?, leaning: String?) -> String {
+        guard let mission else {
+            if let leaning { return "A gift that fits \(possessive(name))'s lean toward \(leaning.lowercased())." }
+            return "A gift picked with \(name) in mind."
+        }
+        if let leaning {
+            return "A steady \(missionAnchor(mission)) pick for \(name), true to \(possessive(name))'s lean toward \(leaning.lowercased())."
+        }
+        return "A steady \(missionAnchor(mission)) pick, chosen for \(name)."
+    }
+
+    /// The mission, quoted for a rationale line — mirrors ``MissionBlock`` so the floor reads
+    /// on-topic for any goal (a noun-phrase "premium jasmine tea" *or* an imperative "pack me for a
+    /// hike") without inventing facts about the product.
+    private func missionAnchor(_ mission: ShoppingTask) -> String {
+        "\u{201C}\(mission.title)\u{201D}"
+    }
+
+    /// Whether the mission's title or subtitle mentions `keyword` (a lowercased substring) — the
+    /// deterministic test for whether a stated leaning genuinely fits this mission (#33).
+    private func missionMentions(_ keyword: String, in mission: ShoppingTask) -> Bool {
+        "\(mission.title) \(mission.subtitle)".lowercased().contains(keyword)
     }
 
     /// The owner-voice floor when there's neither a seed-voiced rationale to keep nor a stated

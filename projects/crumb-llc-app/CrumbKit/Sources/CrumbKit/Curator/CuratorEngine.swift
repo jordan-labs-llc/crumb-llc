@@ -23,6 +23,13 @@ public protocol CuratorEngine: Sendable {
     /// deterministic gift framing, and ``AppleFoundationCurator`` threads it into the model.
     func rationale(for product: Product, profile: TasteProfile, recipient: RecipientRef?) -> String
 
+    /// Gift- **and** mission-aware voice: the deterministic floor's "why this is you" note, anchored
+    /// to `mission` when one is set so it reads on-topic even against a default taste profile ("A
+    /// steady pick for “Premium jasmine tea”." rather than a leaning that lands off-topic). `mission
+    /// == nil` is identical to ``rationale(for:profile:recipient:)``. The default ignores `mission`
+    /// (so a curator with no mission-aware floor still compiles); ``RuleBasedCurator`` overrides it.
+    func rationale(for product: Product, profile: TasteProfile, recipient: RecipientRef?, mission: ShoppingTask?) -> String
+
     /// Ranks the candidates **and** rewrites each one's rationale into the curator's voice,
     /// returning a ready-to-deal deck plus the ``CuratorTier`` that produced it.
     func curate(
@@ -63,6 +70,12 @@ public extension CuratorEngine {
         rationale(for: product, profile: profile)
     }
 
+    /// Default mission-aware floor: ignore `mission` and speak the recipient-aware line. Curators
+    /// with a real mission-aware floor (``RuleBasedCurator``) override this.
+    func rationale(for product: Product, profile: TasteProfile, recipient: RecipientRef?, mission: ShoppingTask?) -> String {
+        rationale(for: product, profile: profile, recipient: recipient)
+    }
+
     /// The plain curation entry point — refinement- and recipient-free curation is just the full
     /// path with no context. Kept so every existing call site is unchanged.
     func curate(
@@ -95,7 +108,7 @@ public extension CuratorEngine {
     ) async -> CuratedDeck {
         let ranked = await rank(products, for: profile)
         let shaped = RefinementContext.apply(refinement, to: ranked)
-        let voiced = shaped.map { $0.withRationale(rationale(for: $0, profile: profile, recipient: recipient)) }
+        let voiced = shaped.map { $0.withRationale(rationale(for: $0, profile: profile, recipient: recipient, mission: mission)) }
         return CuratedDeck(products: voiced, tier: .ruleBased(nil))
     }
 }
