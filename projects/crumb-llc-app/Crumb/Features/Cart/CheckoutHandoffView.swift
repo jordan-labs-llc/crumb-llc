@@ -24,9 +24,11 @@ struct CheckoutHandoffView: View {
             VStack(alignment: .leading, spacing: CrumbMetrics.Space.l) {
                 ForEach(handoff.items) { item in
                     HStack {
-                        Text(item.product.name)
+                        Text(TitleHygiene.display(for: item.product.name))
                             .font(CrumbType.body)
                             .foregroundStyle(CrumbColor.ink)
+                            .lineLimit(2)
+                            .accessibilityLabel(item.product.name)
                         Spacer()
                         Text(item.variant.price, format: .currency(code: "USD"))
                             .font(CrumbType.body)

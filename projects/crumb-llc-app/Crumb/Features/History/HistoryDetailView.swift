@@ -253,10 +253,12 @@ struct HistoryItemRow: View {
             .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(item.name)
+                // Cleaned display name; raw title kept on the a11y label for VoiceOver.
+                Text(TitleHygiene.display(for: item.name))
                     .font(CrumbType.callout)
                     .foregroundStyle(CrumbColor.ink)
                     .lineLimit(1)
+                    .accessibilityLabel(item.name)
                 Text(item.variantTitle)
                     .font(CrumbType.caption)
                     .foregroundStyle(CrumbColor.ink3)
@@ -324,9 +326,10 @@ struct HistoryReshopView: View {
     private func reshopRow(_ item: HistoryItem) -> some View {
         HStack(spacing: CrumbMetrics.Space.m) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(item.name)
+                Text(TitleHygiene.display(for: item.name))
                     .font(CrumbType.callout)
                     .foregroundStyle(CrumbColor.ink)
+                    .accessibilityLabel(item.name)
                 Text(item.price, format: .currency(code: "USD"))
                     .font(CrumbType.caption)
                     .foregroundStyle(CrumbColor.ink3)

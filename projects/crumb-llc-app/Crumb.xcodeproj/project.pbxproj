@@ -55,6 +55,7 @@
 		C72A95D78DE9E6663BC0E62E /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 852440CA683F418082909F40 /* OnboardingView.swift */; };
 		C73ACC304819971F35FA166E /* CrumbType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31A60DFD88D0193AE3DBC125 /* CrumbType.swift */; };
 		CA296C5901D22F2EDA0A98F4 /* CrumbKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5B27FEEA6954F68CEA3048D1 /* CrumbKit */; };
+		CAC6DAEB3BC490937FFA1751 /* TitleHygieneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D99D4F9F0DC47E8279877F /* TitleHygieneTests.swift */; };
 		CF1F4947BCB58FF53179E71A /* LiveUCPClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4553F448163F30B2353AFBA /* LiveUCPClientTests.swift */; };
 		D94CF92CC4FA821A481A9062 /* CrumbKit in Frameworks */ = {isa = PBXBuildFile; productRef = ECEC8D61420FB33F67060AD5 /* CrumbKit */; };
 		D9829C2E08E5EF574A388F24 /* HistoryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7B4DECD197D4080D8485B61 /* HistoryDetailView.swift */; };
@@ -131,6 +132,7 @@
 		B39838CC41131244B136FB45 /* CrumbColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbColor.swift; sourceTree = "<group>"; };
 		B45506CA6A95FBAB2B31241C /* CrumbTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbTests.swift; sourceTree = "<group>"; };
 		BB3BD6BA969C6AD04D7BBCDC /* BottomSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BottomSheet.swift; sourceTree = "<group>"; };
+		C3D99D4F9F0DC47E8279877F /* TitleHygieneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TitleHygieneTests.swift; sourceTree = "<group>"; };
 		CC7ECC2C0E9B4003FBB011A0 /* CrumbTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CrumbTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CFE8A88BB1C7340314D1DE3C /* SiriHandoffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiriHandoffView.swift; sourceTree = "<group>"; };
 		D0F3D5A8552124AB50E0BF6D /* CartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartView.swift; sourceTree = "<group>"; };
@@ -205,6 +207,7 @@
 				16038877BB32342393CD3E3D /* RelevanceGateTests.swift */,
 				3A4B9A7BEF514008BC05E2C0 /* SeamInstructionsTests.swift */,
 				0DB94BBFAEB5A18FF05695F3 /* TasteCaptureTests.swift */,
+				C3D99D4F9F0DC47E8279877F /* TitleHygieneTests.swift */,
 			);
 			path = CrumbKitTests;
 			sourceTree = "<group>";
@@ -605,6 +608,7 @@
 				41A92EDCE9E0048D514EF3C0 /* RelevanceGateTests.swift in Sources */,
 				5D91677F5D2CA3B68ADC593F /* SeamInstructionsTests.swift in Sources */,
 				44D61C98F90CE573EB2CE4D3 /* TasteCaptureTests.swift in Sources */,
+				CAC6DAEB3BC490937FFA1751 /* TitleHygieneTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

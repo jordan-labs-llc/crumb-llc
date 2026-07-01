@@ -75,9 +75,15 @@ struct ProductCard: View {
     private var details: some View {
         VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
             HStack(alignment: .firstTextBaseline) {
-                Text(product.name)
+                // Cleaned display name (mixed-script titles reduced to their Latin portion);
+                // the full raw name stays in `accessibilitySummary` for VoiceOver. Two lines +
+                // tail truncation keeps a long title legible instead of cut mid-word.
+                Text(product.displayTitle)
                     .font(CrumbType.title2)
                     .foregroundStyle(CrumbColor.ink)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Text(product.price, format: .currency(code: "USD"))
                     .font(CrumbType.headline)
