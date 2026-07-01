@@ -807,6 +807,33 @@ final class AppModel {
         route = .missions
     }
 
+    /// The onboarding "let the goal lead" fast path: a brand-new user who just wants to shop can
+    /// type what they're after and go, skipping the taste-capture steps. Fire-and-forget wrapper
+    /// over ``runOnboardingGoal(_:)`` so the button stays synchronous; the async core is what tests
+    /// drive deterministically. See issue #28.
+    func startFromGoal(_ goal: String) {
+        Task { await runOnboardingGoal(goal) }
+    }
+
+    /// Seeds an initial ``TasteProfile`` from the first goal (via the ``TasteExtractor`` seam,
+    /// degrading to the seed default when no model), finishes onboarding with it (persisted, so
+    /// onboarding never reappears), then plans the goal. A shoppable goal lands on the editable
+    /// Plan; a non-shoppable one still completes onboarding and drops the user on Missions with the
+    /// friendly decline, never stranded on the onboarding screen. Internal (not private) so tests
+    /// can await it rather than racing the fire-and-forget `Task`.
+    func runOnboardingGoal(_ goal: String) async {
+        let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isPlanning else { return }
+        // Hold the "planning" flag across the whole path — taste extraction runs on-device and can
+        // take a moment, and this keeps the Start button disabled + spinning so a second tap can't
+        // kick off a duplicate plan before `runPlan` takes over the flag.
+        isPlanning = true
+        // Infer taste from the goal; fall back to the current (seed) profile when no model reads it.
+        let seeded = await extractTaste(from: trimmed, base: tasteProfile) ?? tasteProfile
+        completeOnboarding(with: seeded)
+        await runPlan(goal: trimmed)   // re-asserts isPlanning and clears it in its own defer
+    }
+
     /// Replaces the taste profile, persists it, and — when a deck is already on screen —
     /// **re-curates it in place** so the change is *felt*: the live candidates re-rank and
     /// re-voice against the new taste without re-fetching the catalog. A no-op deck (nothing
