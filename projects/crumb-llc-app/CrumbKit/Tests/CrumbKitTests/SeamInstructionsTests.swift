@@ -15,10 +15,12 @@ struct SeamInstructionsTests {
 
     // MARK: Planner
 
-    @Test("Planner guide asks for a 3-to-N part plan and the not-shoppable decline")
+    @Test("Planner guide asks for an altitude-matched plan (single item vs up-to-N) and the decline")
     func plannerGuide() {
         let guide = PlannerInstructions.guide
-        #expect(guide.contains("Break the goal into 3 to \(RuleBasedMissionPlanner.maxParts)"))
+        #expect(guide.contains("up to \(RuleBasedMissionPlanner.maxParts)"))   // broad-goal ceiling, not a floor
+        #expect(guide.contains("isSingleItem to true"))                        // the single-item altitude
+        #expect(guide.contains("never pad"))                                    // no accessory padding
         #expect(guide.contains("set isShoppable to false"))
     }
 
