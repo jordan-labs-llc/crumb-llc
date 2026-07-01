@@ -175,6 +175,56 @@ struct MissionPlannerTests {
         #expect(task?.plan.count == 3)   // a broad goal is not collapsed
     }
 
+    // MARK: Exemplar-leak guard (#23 — a seed subtitle must not leak onto an unrelated goal)
+
+    @Test("A leaked coffee exemplar (title/subtitle/note) is dropped for an unrelated tea goal")
+    func reconcileDropsLeakedExemplar() {
+        // The bug: for "premium jasmine tea" the model parroted the coffee seed's metadata verbatim.
+        let draft = MissionDraft(
+            isShoppable: true, isSingleItem: true,
+            title: SeedData.coffee.title,          // "Set up my pour-over corner"
+            subtitle: SeedData.coffee.subtitle,    // "Slower mornings · better cup"
+            note: SeedData.coffee.curatorNote,
+            parts: [PlanPartDraft(label: "Premium jasmine tea", query: "premium jasmine tea")],
+            decline: ""
+        )
+        let task = AppleFoundationMissionPlanner.mission(from: draft, goal: "premium jasmine tea", tier: .onDevice).task
+
+        #expect(task?.subtitle != SeedData.coffee.subtitle)                 // the leak is gone
+        #expect(task?.subtitle == RuleBasedMissionPlanner.defaultSubtitle)  // → deterministic default
+        #expect(task?.title != SeedData.coffee.title)                       // title leak gone too
+        #expect(task?.title == "Premium jasmine tea")                       // → goal-derived
+        #expect(task?.curatorNote != SeedData.coffee.curatorNote)           // note leak gone
+    }
+
+    @Test("A seed-matching field that genuinely fits the goal is kept (not a leak)")
+    func reconcileKeepsOnGoalExemplar() {
+        // "Set up my pour-over corner" IS the right title for a pour-over goal — it shares words
+        // with the goal, so the guard must keep it rather than treat it as a leak.
+        let draft = MissionDraft(
+            isShoppable: true, isSingleItem: false,
+            title: SeedData.coffee.title, subtitle: "Slow mornings, better pour-over",
+            note: "A calm corner for a better cup.",
+            parts: [PlanPartDraft(label: "Gooseneck kettle", query: "gooseneck kettle")],
+            decline: ""
+        )
+        let task = AppleFoundationMissionPlanner.mission(from: draft, goal: "set up my pour-over corner", tier: .onDevice).task
+        #expect(task?.title == SeedData.coffee.title)   // shares "pour over" with the goal → kept
+    }
+
+    @Test("isLeakedExemplar: a seed phrase off-topic for the goal leaks; on-topic or novel does not")
+    func isLeakedExemplarPure() {
+        // Off-topic copy of a seed subtitle → a leak.
+        #expect(AppleFoundationMissionPlanner.isLeakedExemplar(SeedData.coffee.subtitle, goal: "premium jasmine tea"))
+        #expect(AppleFoundationMissionPlanner.isLeakedExemplar(SeedData.hike.subtitle, goal: "a birthday gift for mom"))
+        // A seed title that shares a word with the goal is legitimate, not a leak.
+        #expect(!AppleFoundationMissionPlanner.isLeakedExemplar(SeedData.coffee.title, goal: "pour over setup"))
+        // Anything the planner actually wrote for the goal (not a seed phrase) is never a leak.
+        #expect(!AppleFoundationMissionPlanner.isLeakedExemplar("A fragrant jasmine ritual", goal: "premium jasmine tea"))
+        // Punctuation/casing variations of a seed phrase still match (normalized).
+        #expect(AppleFoundationMissionPlanner.isLeakedExemplar("slower mornings, better cup!", goal: "premium jasmine tea"))
+    }
+
     @Test("A not-shoppable draft yields no task and a decline message")
     func reconcileNotShoppable() {
         let withMsg = MissionDraft(
