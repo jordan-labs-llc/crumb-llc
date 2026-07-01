@@ -36,6 +36,7 @@
 		7E0F32D23984C28C3CC632CE /* CurateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57C7249333139EE164B9BDE8 /* CurateView.swift */; };
 		8574FF0300BC2641FCF0CDFF /* RecipientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D5891C9EC66DD23B0FDA8A0 /* RecipientTests.swift */; };
 		86AAF236CC8DB3B5FDDDF192 /* CrumbKit in Frameworks */ = {isa = PBXBuildFile; productRef = D936D5DF956C9B5DC6AF69F5 /* CrumbKit */; };
+		8869A618D5D883D1EFF5B655 /* ProductThumbnail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A75F1526C77451E9EF3B7F5 /* ProductThumbnail.swift */; };
 		89EAE1A11546F89C1ABB1B30 /* Secrets.plist in Resources */ = {isa = PBXBuildFile; fileRef = 51452F38ECE9387FD5B7DBD7 /* Secrets.plist */; };
 		8A22D99E08AD2E8D980D1D34 /* CrumbUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F614DD6F8A672D44B5BAF770 /* CrumbUITests.swift */; };
 		8D1E6F3FE239B2DEE2CA7044 /* CrumbInstructionBlocksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AD913494857ACA50D92D695 /* CrumbInstructionBlocksTests.swift */; };
@@ -62,6 +63,7 @@
 		E5B50E8435E6962D09AF2504 /* KitTray.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9166722AFAFB67FB518791DC /* KitTray.swift */; };
 		F725BCC7D129907D03B064A9 /* RecipientPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11C9995BE9444031794FB7BF /* RecipientPicker.swift */; };
 		F75F3A9439503E440572EF6A /* MissionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 769625F3ADB578C3FFED06E4 /* MissionsView.swift */; };
+		FE034318016D9DD3A5894A18 /* ProductArtKindTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4A3E095EBA64D3F5D55D0FF /* ProductArtKindTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -116,10 +118,12 @@
 		7CA275868FCE4041982E84B9 /* CrumbArt */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CrumbArt; path = CrumbArt; sourceTree = SOURCE_ROOT; };
 		852440CA683F418082909F40 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		88E88478E6D27F43A1624825 /* ApiTag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApiTag.swift; sourceTree = "<group>"; };
+		8A75F1526C77451E9EF3B7F5 /* ProductThumbnail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductThumbnail.swift; sourceTree = "<group>"; };
 		8E650966B1912922403F747B /* CrumbKitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbKitTests.swift; sourceTree = "<group>"; };
 		9166722AFAFB67FB518791DC /* KitTray.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KitTray.swift; sourceTree = "<group>"; };
 		94CD80BCDEE53873337BD04A /* RefinementInterpreterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefinementInterpreterTests.swift; sourceTree = "<group>"; };
 		9CC065A9AB4BE69B19D606D3 /* PeopleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeopleView.swift; sourceTree = "<group>"; };
+		A4A3E095EBA64D3F5D55D0FF /* ProductArtKindTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductArtKindTests.swift; sourceTree = "<group>"; };
 		A6C032FB2C786FD91F4A2C0D /* TasteProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasteProfileView.swift; sourceTree = "<group>"; };
 		AD871FFFFBA9508EBC8C6AA0 /* CrumbKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CrumbKit; path = CrumbKit; sourceTree = SOURCE_ROOT; };
 		B39838CC41131244B136FB45 /* CrumbColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrumbColor.swift; sourceTree = "<group>"; };
@@ -192,6 +196,7 @@
 				3AAA36FC0C29BF1240DF09A0 /* MissionPlannerTests.swift */,
 				314140480DB5271ABD5D404C /* PersistenceTests.swift */,
 				DDE470E7CC6F0666823F5C4A /* PriceBandTests.swift */,
+				A4A3E095EBA64D3F5D55D0FF /* ProductArtKindTests.swift */,
 				4D5891C9EC66DD23B0FDA8A0 /* RecipientTests.swift */,
 				94CD80BCDEE53873337BD04A /* RefinementInterpreterTests.swift */,
 				16038877BB32342393CD3E3D /* RelevanceGateTests.swift */,
@@ -363,6 +368,7 @@
 				E2636664F2FF6491635448E6 /* CuratorNote.swift */,
 				9166722AFAFB67FB518791DC /* KitTray.swift */,
 				1CD60E78A98B93B9526DBD8D /* ProductCard.swift */,
+				8A75F1526C77451E9EF3B7F5 /* ProductThumbnail.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -589,6 +595,7 @@
 				594E533E13702E648E1AB8BD /* MissionPlannerTests.swift in Sources */,
 				A69A189D8625E7FC1409D75F /* PersistenceTests.swift in Sources */,
 				47A2384ED2AF5BD57BDD5D81 /* PriceBandTests.swift in Sources */,
+				FE034318016D9DD3A5894A18 /* ProductArtKindTests.swift in Sources */,
 				8574FF0300BC2641FCF0CDFF /* RecipientTests.swift in Sources */,
 				B6DBA63785EFF1ECBE32D28F /* RefinementInterpreterTests.swift in Sources */,
 				41A92EDCE9E0048D514EF3C0 /* RelevanceGateTests.swift in Sources */,
@@ -623,6 +630,7 @@
 				E2B1CD46E0D826E7F7BA05A1 /* PersonEditorView.swift in Sources */,
 				77CB08A82302A2B725A76544 /* PlanView.swift in Sources */,
 				0020306BCE0325C7B4DAB2AD /* ProductCard.swift in Sources */,
+				8869A618D5D883D1EFF5B655 /* ProductThumbnail.swift in Sources */,
 				F725BCC7D129907D03B064A9 /* RecipientPicker.swift in Sources */,
 				2C26E20A09349A027858C2AC /* RefinementBar.swift in Sources */,
 				71D1D43E4F3A01C8E758E78B /* RootView.swift in Sources */,

@@ -159,14 +159,7 @@ struct CartLine: View {
 
     var body: some View {
         HStack(spacing: CrumbMetrics.Space.m) {
-            ZStack {
-                LinearGradient(crumbStops: item.product.gradient)
-                Image(systemName: item.product.symbol)
-                    .foregroundStyle(.white)
-                    .font(.system(size: 18, weight: .semibold))
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            ProductThumbnail(product: item.product, size: 44, cornerRadius: 10, glyphSize: 18)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.product.name)
