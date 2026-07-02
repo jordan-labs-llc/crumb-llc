@@ -22,6 +22,9 @@ struct SeamInstructionsTests {
         #expect(guide.contains("isSingleItem to true"))                        // the single-item altitude
         #expect(guide.contains("never pad"))                                    // no accessory padding
         #expect(guide.contains("set isShoppable to false"))
+        // #65: a gear/equipment goal is a complete kit, not a single generic part like "collar".
+        #expect(guide.contains("complete multi-part kit"))
+        #expect(guide.contains("collar"))                                       // the anti-example
     }
 
     // MARK: Relevance gate

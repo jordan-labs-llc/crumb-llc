@@ -48,13 +48,18 @@ public struct RuleBasedMissionPlanner: MissionPlanner {
     static func isSingleItem(goal: String) -> Bool {
         let lowered = clean(query: goal).lowercased()
         guard !lowered.isEmpty else { return false }
-        // Cues that the goal outfits a space/activity rather than naming one product.
+        // Cues that the goal is a multi-item kit — outfitting a space/activity, or a "gear/equipment"
+        // goal that inherently spans several complementary things. Without this, a short phrase like
+        // "premium lacrosse gear" falls through the word-count check and reads as one product, so the
+        // plan collapses to a single (often wrong) item instead of a player kit (#65).
         let kitCues = [
             "set up", "setup", "set-up", "pack ", "outfit", "build ", "make my", "make me",
             "make the", "plan ", "prep ", "prepare", "stock ", "everything for", "essentials for",
             "gear for", "kit ", " kit", "corner", "nook", "station", "trip", "weekend", "getaway",
             "office", "desk", "kitchen", "nursery", "wardrobe", "closet", "for a ", "for my ",
             "for the ", "for our ",
+            // "<X> gear/equipment/supplies/essentials/loadout" is a complete kit, not a lone item.
+            "gear", "equipment", "supplies", "essentials", "loadout",
         ]
         if kitCues.contains(where: lowered.contains) { return false }
         // Otherwise a short, concrete noun phrase reads as one product to buy.

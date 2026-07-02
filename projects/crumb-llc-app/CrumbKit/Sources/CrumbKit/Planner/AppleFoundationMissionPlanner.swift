@@ -342,9 +342,18 @@ struct PlannerInstructions: DynamicInstructions {
         item, return exactly one part and set isSingleItem to true — never pad it with accessories \
         or extras they didn't ask for. Only when the goal is to outfit a space or an activity that \
         genuinely needs several complementary things, break it into up to \
-        \(RuleBasedMissionPlanner.maxParts) parts and set isSingleItem to false. Let this person's \
-        taste guide which style of thing you'd pick within a part, but never add parts or \
-        constraints they didn't imply. Keep the title and subtitle short and in their intent.
+        \(RuleBasedMissionPlanner.maxParts) parts and set isSingleItem to false.
+
+        A goal for "gear", "equipment", "kit", or "supplies" (e.g. "premium lacrosse gear", \
+        "ski equipment") is ALWAYS a complete multi-part kit, never one item: enumerate the real \
+        pieces someone needs for that pursuit (for a sport: the stick/implement, protective pads, \
+        helmet or eyewear, gloves, footwear, mouthguard, a bag), each as its own part with a \
+        specific query — never a single generic part like "collar". For protective or technical \
+        gear, let fit, safety, and completeness drive the parts; do NOT apply apparel/aesthetic \
+        taste language (fabrics, colors, "quiet", "muted") to equipment that is chosen for function.
+
+        Let this person's taste guide which style of thing you'd pick within a part, but never add \
+        parts or constraints they didn't imply. Keep the title and subtitle short and in their intent.
 
         If the goal is NOT something a shop can fulfill — a question, nonsense, or a non-shopping \
         request — set isShoppable to false and write one short, friendly sentence telling them \
@@ -360,7 +369,7 @@ public struct MissionDraft {
     @Guide(description: "true if this is a shopping goal a shop can fulfill; false for a question, nonsense, or a non-shopping request.")
     public var isShoppable: Bool
 
-    @Guide(description: "true if the goal names ONE specific item to buy (e.g. 'premium jasmine tea', 'a cast iron skillet'); false if it's outfitting a space or activity that genuinely needs several complementary things (e.g. 'set up my pour-over corner').")
+    @Guide(description: "true ONLY if the goal names ONE specific item to buy (e.g. 'premium jasmine tea', 'a cast iron skillet'). false if it needs several complementary things: outfitting a space or activity ('set up my pour-over corner'), OR any 'gear', 'equipment', 'kit', or 'supplies' goal ('premium lacrosse gear', 'ski equipment', 'camping gear') — those are complete multi-part kits, never one item.")
     public var isSingleItem: Bool
 
     @Guide(description: "A short, warm mission title in the user's own words, drawn from THIS goal specifically — not a generic or example phrase. Empty if not shoppable.")
