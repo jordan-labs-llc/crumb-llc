@@ -30,6 +30,32 @@ public struct RuleBasedCurator: CuratorEngine {
     }
 
     public func rank(_ products: [Product], for profile: TasteProfile) async -> [Product] {
+        rankedByProfile(products, for: profile)
+    }
+
+    public func rank(_ products: [Product], for profile: TasteProfile, mission: ShoppingTask) -> [Product] {
+        guard Self.isPremiumJasmineTeaMission(mission) else {
+            return rankedByProfile(products, for: profile)
+        }
+        return rankedForPremiumJasmineTea(products, for: profile)
+    }
+
+    public func curate(
+        _ products: [Product],
+        for profile: TasteProfile,
+        mission: ShoppingTask,
+        refinement: RefinementContext?,
+        recipient: RecipientRef?
+    ) async -> CuratedDeck {
+        let ranked = rank(products, for: profile, mission: mission)
+        let shaped = RefinementContext.apply(refinement, to: ranked)
+        let voiced = shaped.map { product in
+            product.withRationale(rationale(for: product, profile: profile, recipient: recipient, mission: mission))
+        }
+        return CuratedDeck(products: voiced, tier: .ruleBased(nil))
+    }
+
+    private func rankedByProfile(_ products: [Product], for profile: TasteProfile) -> [Product] {
         // Stable, deterministic sort: higher score first, ties broken by id so the order
         // never wobbles between runs.
         struct Scored {
@@ -45,6 +71,24 @@ public struct RuleBasedCurator: CuratorEngine {
                 : lhs.score > rhs.score
         }
         return ranked.map(\.product)
+    }
+
+    private func rankedForPremiumJasmineTea(_ products: [Product], for profile: TasteProfile) -> [Product] {
+        struct Scored {
+            let product: Product
+            let score: Double
+        }
+        let scored = products.map { product in
+            Scored(
+                product: product,
+                score: Self.premiumJasmineTeaScore(for: product) + score(product, for: profile) * 0.1
+            )
+        }
+        return scored.sorted { lhs, rhs in
+            lhs.score == rhs.score
+                ? lhs.product.id < rhs.product.id
+                : lhs.score > rhs.score
+        }.map(\.product)
     }
 
     public func rationale(for product: Product, profile: TasteProfile) -> String {
@@ -83,6 +127,11 @@ public struct RuleBasedCurator: CuratorEngine {
             guard let mission else { return profile.leanings.first }
             return profile.leanings.first { missionMentions(keyword(from: $0), in: mission) }
         }()
+
+        if !echoesLeaning,
+           let teaRationale = Self.premiumJasmineTeaRationale(for: product, mission: mission, recipient: recipient) {
+            return teaRationale
+        }
 
         guard let recipient else {
             // Owner voice. A rationale that already echoes a leaning is our own seed voice — it
@@ -176,5 +225,163 @@ public struct RuleBasedCurator: CuratorEngine {
     /// → "merino"), used for loose substring matching against rationales.
     private func keyword(from leaning: String) -> String {
         leaning.split(separator: " ").first.map { $0.lowercased() } ?? leaning.lowercased()
+    }
+
+    // MARK: - Premium jasmine tea floor (#58)
+
+    static func isPremiumJasmineTeaMission(_ mission: ShoppingTask?) -> Bool {
+        guard let mission else { return false }
+        let words = RuleBasedRelevanceGate.tokens(
+            ([mission.title, mission.subtitle] + mission.plan + mission.searchQueries)
+                .joined(separator: " ")
+        )
+        return words.contains("jasmine") && words.contains("tea") && words.contains("premium")
+    }
+
+    static func premiumJasmineTeaScore(for product: Product) -> Double {
+        let text = teaText(for: product)
+        let words = RuleBasedRelevanceGate.tokens(text)
+        var score = 0.0
+
+        if words.contains("jasmine") { score += 4.0 }
+        if words.contains("tea") { score += 1.0 }
+
+        let qualityMatches = premiumTeaQualitySignals.filter { text.contains($0) }
+        score += min(3.0, Double(qualityMatches.count) * 0.55)
+
+        if specialtyTeaMerchant(product) { score += 1.0 }
+        if text.contains("rishi") || text.contains("goldenmoon") || text.contains("golden moon") {
+            score += 0.6
+        }
+
+        let price = NSDecimalNumber(decimal: product.price).doubleValue
+        if (15...80).contains(price) { score += 0.45 }
+        if price < 8 { score -= 1.4 }
+        if price > 120 { score -= 0.35 }
+
+        if looksLikeSampleOrSachet(product) { score -= 1.6 }
+        if looksLikeBulkOrFoodservice(product) { score -= 1.6 }
+        if genericJasmineTea(product) { score -= 1.0 }
+        if looksCrossBorder(product) { score -= 0.25 }
+        if !words.contains("jasmine") { score -= 4.0 }
+
+        return score
+    }
+
+    static func premiumJasmineTeaRationale(
+        for product: Product,
+        mission: ShoppingTask?,
+        recipient: RecipientRef?
+    ) -> String? {
+        guard isPremiumJasmineTeaMission(mission),
+              RuleBasedRelevanceGate.tokens(teaText(for: product)).contains("jasmine")
+        else { return nil }
+
+        let subject = recipient.map { " for \($0.name)" } ?? ""
+        if looksLikeSampleOrSachet(product) {
+            return "Jasmine sample option\(subject): easy to try, but less premium than the loose-leaf picks."
+        }
+        if looksLikeBulkOrFoodservice(product) {
+            return "Bulk jasmine tea\(subject): useful for quantity, but not the strongest premium personal pick."
+        }
+
+        var signals: [String] = []
+        let text = teaText(for: product)
+        if text.contains("loose leaf") || text.contains("loose-leaf") {
+            signals.append("loose-leaf")
+        }
+        if text.contains("pearl") || text.contains("dragon") {
+            signals.append("jasmine pearl")
+        }
+        if text.contains("whole leaf") {
+            signals.append("whole-leaf")
+        }
+        if text.contains("organic") {
+            signals.append("organic")
+        }
+        if specialtyTeaMerchant(product) {
+            signals.append("specialty tea merchant")
+        }
+
+        if signals.isEmpty {
+            let missionTitle = mission?.title ?? "premium jasmine tea"
+            var line = "Jasmine tea fit\(subject): \(missionTitle) is on-mission, but check for leaf grade and scenting details."
+            if looksCrossBorder(product) {
+                line += " Cross-border seller; compare shipping before checkout."
+            }
+            return line
+        }
+
+        var line = "Premium jasmine fit\(subject): \(signals.prefix(3).joined(separator: ", ")) signals make it more credible than a generic tea result."
+        if looksCrossBorder(product) {
+            line += " Cross-border seller; compare shipping before checkout."
+        }
+        return line
+    }
+
+    private static let premiumTeaQualitySignals = [
+        "loose leaf", "loose-leaf", "whole leaf", "organic", "pearl", "pearls", "dragon",
+        "silver needle", "green tea", "scented", "scenting", "origin", "estate",
+    ]
+
+    private static func teaText(for product: Product) -> String {
+        "\(product.name) \(product.rationale) \(product.shop.id) \(product.shop.name)"
+            .lowercased()
+    }
+
+    private static func specialtyTeaMerchant(_ product: Product) -> Bool {
+        let shop = "\(product.shop.id) \(product.shop.name)".lowercased()
+        return shop.contains("rishi")
+            || shop.contains("goldenmoontea")
+            || shop.contains("golden moon")
+            || shop.contains("davidstea")
+            || shop.contains("genuinetea")
+            || shop.contains("theteatime")
+            || shop.contains("teavivre")
+            || shop.contains("verdant")
+            || shop.contains("harney")
+            || shop.contains("tea.com")
+            || shop.contains("-tea.")
+            || shop.contains("tea-")
+    }
+
+    private static func looksLikeSampleOrSachet(_ product: Product) -> Bool {
+        let text = teaText(for: product)
+        return text.contains("sachet")
+            || text.contains("sachets")
+            || text.contains("sample")
+            || text.contains("tea bag")
+            || text.contains("tea bags")
+            || text.contains("teabag")
+            || text.contains("teabags")
+            || text.contains("pyramid tea")
+            || text.contains("individually wrapped")
+            || text.contains("pack of 12")
+    }
+
+    private static func looksLikeBulkOrFoodservice(_ product: Product) -> Bool {
+        let text = teaText(for: product)
+        return text.contains("foodservice")
+            || text.contains("bulk")
+            || text.contains("case of")
+            || text.contains("case pack")
+            || text.contains("wholesale")
+    }
+
+    private static func genericJasmineTea(_ product: Product) -> Bool {
+        let title = product.name
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let qualityMatches = premiumTeaQualitySignals.filter { teaText(for: product).contains($0) }
+        return (title == "jasmine tea" || title == "jasmine") && qualityMatches.isEmpty
+    }
+
+    private static func looksCrossBorder(_ product: Product) -> Bool {
+        let shop = "\(product.shop.id) \(product.shop.name)".lowercased()
+        return shop.contains(".co.uk")
+            || shop.contains(".uk")
+            || shop.contains(".ca")
+            || shop.contains(".eu")
+            || shop.contains(".au")
     }
 }

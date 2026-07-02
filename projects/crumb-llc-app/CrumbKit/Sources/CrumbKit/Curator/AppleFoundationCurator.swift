@@ -88,7 +88,7 @@ public struct AppleFoundationCurator: CuratorEngine {
     ) async -> CuratedDeck {
         // The deterministic order: the input we hand the model, the order of the
         // reconciliation tail, and the whole-deck fallback when no tier ranks.
-        let baseline = await rule.rank(products, for: profile)
+        let baseline = rule.rank(products, for: profile, mission: mission)
         guard !baseline.isEmpty else { return CuratedDeck(products: [], tier: .onDevice) }
 
         // Tier 1 — Private Cloud Compute. Gated behind `CRUMB_PCC_ENABLED` because *merely
@@ -167,7 +167,8 @@ public struct AppleFoundationCurator: CuratorEngine {
         // past the cap keep their deterministic order via the reconciliation tail.
         let head = Array(baseline.prefix(Self.rankDeckCap))
         let ordered = try await tournamentRank(head, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning)
-        return Self.reconcile(modelIDs: ordered.map(\.id), candidates: baseline)
+        let reconciled = Self.reconcile(modelIDs: ordered.map(\.id), candidates: baseline)
+        return RuleBasedCurator().rank(reconciled, for: profile, mission: mission)
     }
 
     /// The recursive map-reduce ranker. A pool that already fits one chunk is a single ranking call;
@@ -498,6 +499,8 @@ struct CuratorRankInstructions: DynamicInstructions {
         mission — and the refinement above when one is present (order cheaper products first if \
         they asked for cheaper, warmer ones first if warmer, and push anything they asked to \
         avoid toward the end). Do not invent ratings, reviews, or facts you weren't given. \
+        For premium food or beverage missions, prefer specialty merchants and concrete quality \
+        signals over generic, sample, bulk, or low-trust matches. \
         Return the product IDs in your recommended order, best fit first, using only the IDs \
         provided and including each one exactly once.
         """
@@ -532,6 +535,9 @@ struct CuratorVoiceInstructions: DynamicInstructions {
         \(voiceLine)
         - is specific and honest about THIS product — never invent ratings, reviews, materials, \
         or facts you weren't given;
+        - for premium tea missions, names concrete quality signals when present (loose leaf, \
+        whole leaf, jasmine pearls, organic, origin/scenting, or specialty tea merchant) and \
+        honestly calls out sample/budget/cross-border tradeoffs when those are the visible facts;
         - reflects the refinement above when one is present (e.g. lead with value if they asked \
         for cheaper, warmth if they asked for warmer);
         - sounds like a trusted friend with taste, not a marketing blurb. No emoji, no hashtags, \

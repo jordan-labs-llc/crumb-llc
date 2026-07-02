@@ -1049,7 +1049,7 @@ final class AppModel {
                     $0.withRationale(self.curator.rationale(for: $0, profile: self.activeTaste, recipient: self.activeRecipientRef, mission: task))
                 }
                 let wasEmpty = self.deck.isEmpty
-                self.deck.append(contentsOf: voicedFresh)
+                self.deck = Self.streamedDeck(self.deck + voicedFresh, profile: self.activeTaste, mission: task)
                 self.candidates = self.deck
                 if wasEmpty { self.route = .curate }   // navigate on the first pick
             }
@@ -1119,6 +1119,13 @@ final class AppModel {
         guard !current.isEmpty else { return settled }
         let undecided = Set(current.map(\.id))
         return settled.filter { undecided.contains($0.id) }
+    }
+
+    /// The streamed deck is visible and actionable before the full model curation settles, so apply
+    /// the deterministic mission floor immediately. This keeps single-item quality missions from
+    /// exposing raw catalog order while the richer curator is still working.
+    nonisolated static func streamedDeck(_ products: [Product], profile: TasteProfile, mission: ShoppingTask) -> [Product] {
+        RuleBasedCurator().rank(products, for: profile, mission: mission)
     }
 
     /// Fans `queries` out to the catalog **in parallel** and dedupes the union by product id.

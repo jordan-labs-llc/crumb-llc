@@ -182,6 +182,43 @@ struct CrumbTests {
         #expect(Set(model.deck.map(\.id)) == Set(SeedData.coffeeProducts.map(\.id)))
     }
 
+    @Test("Premium jasmine streams specialty picks before generic cross-border tea (#58)")
+    @MainActor
+    func premiumJasmineStreamUsesQualityFloor() async {
+        let generic = Self.teaProduct(
+            "generic",
+            "Jasmine Tea",
+            shop: Shop(id: "thefoalyard.co.uk", name: "thefoalyard.co.uk"),
+            price: 17,
+            desc: "Jasmine tea."
+        )
+        let rishi = Self.teaProduct(
+            "rishi",
+            "Jasmine",
+            shop: Shop(id: "rishi-tea.com", name: "rishi-tea.com"),
+            price: 58,
+            desc: "Organic loose leaf jasmine green tea scented for a floral cup."
+        )
+        let sachets = Self.teaProduct(
+            "sachets",
+            "Organic Silk Dragon Jasmine Tea Pack of 12 Sachets",
+            shop: Shop(id: "davidstea.com", name: "davidstea.com"),
+            price: 6.15,
+            desc: "Organic jasmine green tea sachets."
+        )
+        let task = Self.premiumJasmineTask(queries: ["premium jasmine tea"])
+        let fake = FakeUCP(byQuery: ["premium jasmine tea": [generic, rishi, sachets]])
+        let model = AppModel(ucp: fake, curator: RuleBasedCurator(),
+                             tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile))
+        model.enterPlan(with: task)
+        await model.loadCandidates(for: task)
+
+        #expect(model.curatorTier == .ruleBased(nil))
+        #expect(model.deck.first?.id == "rishi")
+        #expect(model.deck.firstIndex { $0.id == "generic" }! > model.deck.firstIndex { $0.id == "rishi" }!)
+        #expect(model.deck.first?.rationale.contains("Premium jasmine fit") == true)
+    }
+
     @Test("A total catalog outage fails without navigating away from Plan")
     @MainActor
     func streamingOutageStaysOnPlan() async {
@@ -839,6 +876,28 @@ struct CrumbTests {
         ShoppingTask(
             id: "fake", title: "Fake", subtitle: "", plan: [], curatorNote: "",
             accentHex: 0, candidateIDs: [], searchQueries: queries
+        )
+    }
+
+    private static func premiumJasmineTask(queries: [String]) -> ShoppingTask {
+        ShoppingTask(
+            id: "tea", title: "Premium jasmine tea", subtitle: "",
+            plan: ["Premium jasmine tea"], curatorNote: "",
+            accentHex: 0, candidateIDs: [], searchQueries: queries
+        )
+    }
+
+    private static func teaProduct(
+        _ id: String,
+        _ name: String,
+        shop: Shop,
+        price: Decimal,
+        desc: String
+    ) -> Product {
+        Product(
+            id: id, name: name, shop: shop, price: price, rating: 0, reviews: 0,
+            rationale: desc, symbol: "bag", gradient: SeedData.Gradient.pine,
+            variants: [Variant(id: "\(id).v", title: "Standard", price: price)]
         )
     }
 }
