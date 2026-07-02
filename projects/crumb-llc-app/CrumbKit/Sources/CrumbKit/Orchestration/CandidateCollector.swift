@@ -12,6 +12,11 @@ public actor CandidateCollector {
     private var seen: Set<Product.ID> = []
     private let cap: Int
     private var continuation: AsyncStream<[Product]>.Continuation?
+    /// Set by ``finish()``; makes ``add(_:)`` a full no-op afterward. With the #54 turn deadline a
+    /// cancelled model turn can be a *zombie* whose tools still call ``add(_:)`` after settle — this
+    /// keeps such late writes from mutating the pool nondeterministically (nobody reads it post-settle,
+    /// so it was latent, but the deadline makes it reachable).
+    private var finished = false
 
     /// A live stream of **newly-inserted** picks, one batch per ``add(_:)`` that discovered something
     /// first-seen. A progressive UI subscribes to this to show picks the moment they land — the
@@ -32,6 +37,8 @@ public actor CandidateCollector {
     /// Adds first-seen products in order until the cap is reached; ignores duplicates and overflow.
     /// Emits the batch of *newly-inserted* products (if any) on ``picks``.
     public func add(_ products: [Product]) {
+        // A full no-op once finished — a zombie turn's late tool writes must not touch the pool.
+        guard !finished else { return }
         var inserted: [Product] = []
         for product in products where !seen.contains(product.id) {
             guard order.count < cap else { break }
@@ -45,6 +52,7 @@ public actor CandidateCollector {
     /// Closes the ``picks`` stream — call once gathering is done so a subscriber's `for await` loop
     /// ends. Idempotent: a second call is a no-op.
     public func finish() {
+        finished = true
         continuation?.finish()
         continuation = nil
     }

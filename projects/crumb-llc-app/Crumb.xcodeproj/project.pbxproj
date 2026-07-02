@@ -35,6 +35,7 @@
 		740E2507DD3C1F2A03C27203 /* BottomSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB3BD6BA969C6AD04D7BBCDC /* BottomSheet.swift */; };
 		77CB08A82302A2B725A76544 /* PlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02E208AB6AE4BD44B00EE2E0 /* PlanView.swift */; };
 		7B6E98A8B2E11623C92C3F5E /* ProductEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C86EEEC4388A1AB7D4B39BF0 /* ProductEntity.swift */; };
+		7B8EAABB8C882D8059EC8B24 /* GatherSafetyNetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BA0DF59610438E27E081AF6 /* GatherSafetyNetTests.swift */; };
 		7E0F32D23984C28C3CC632CE /* CurateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57C7249333139EE164B9BDE8 /* CurateView.swift */; };
 		8574FF0300BC2641FCF0CDFF /* RecipientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D5891C9EC66DD23B0FDA8A0 /* RecipientTests.swift */; };
 		86AAF236CC8DB3B5FDDDF192 /* CrumbKit in Frameworks */ = {isa = PBXBuildFile; productRef = D936D5DF956C9B5DC6AF69F5 /* CrumbKit */; };
@@ -122,6 +123,7 @@
 		769625F3ADB578C3FFED06E4 /* MissionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionsView.swift; sourceTree = "<group>"; };
 		794427C2191C234D54235EFB /* JasmineTeaJourneyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JasmineTeaJourneyTests.swift; sourceTree = "<group>"; };
 		7A6F10C970521EAE8C0EE85D /* GoldenMissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoldenMissionTests.swift; sourceTree = "<group>"; };
+		7BA0DF59610438E27E081AF6 /* GatherSafetyNetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatherSafetyNetTests.swift; sourceTree = "<group>"; };
 		7CA275868FCE4041982E84B9 /* CrumbArt */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CrumbArt; path = CrumbArt; sourceTree = SOURCE_ROOT; };
 		852440CA683F418082909F40 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		88E88478E6D27F43A1624825 /* ApiTag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApiTag.swift; sourceTree = "<group>"; };
@@ -202,6 +204,7 @@
 				8E650966B1912922403F747B /* CrumbKitTests.swift */,
 				60F4C60C12547C7814111808 /* CrumbTraceTests.swift */,
 				9396FCE2238CD5AEE0A09B67 /* CuratorFloorMissionTests.swift */,
+				7BA0DF59610438E27E081AF6 /* GatherSafetyNetTests.swift */,
 				7A6F10C970521EAE8C0EE85D /* GoldenMissionTests.swift */,
 				5F292C02F09F2C9287D9915B /* HistoryTests.swift */,
 				E4553F448163F30B2353AFBA /* LiveUCPClientTests.swift */,
@@ -623,6 +626,7 @@
 				218B938E1047EA5DAF0706C0 /* CrumbKitTests.swift in Sources */,
 				7049EC9812393FBFBF30B7AA /* CrumbTraceTests.swift in Sources */,
 				E1B764FDE7B67246468DA913 /* CuratorFloorMissionTests.swift in Sources */,
+				7B8EAABB8C882D8059EC8B24 /* GatherSafetyNetTests.swift in Sources */,
 				E3EB9A08B7A59D2F2218E325 /* GoldenMissionTests.swift in Sources */,
 				28E4C38CF4DDA70945A2DBAD /* HistoryTests.swift in Sources */,
 				CF1F4947BCB58FF53179E71A /* LiveUCPClientTests.swift in Sources */,
