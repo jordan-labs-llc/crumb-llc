@@ -264,6 +264,35 @@ struct CrumbTests {
         #expect(model.curatorFallbackNote != nil)
     }
 
+    @Test("kitCompleteness flags a partial kit and stays nil for a single-product mission (#67)")
+    @MainActor
+    func kitCompletenessGuardsCheckout() {
+        func named(_ id: String, _ name: String) -> Product {
+            Product(id: id, name: name, shop: Shop(id: "s", name: "Shop"), price: 20, rating: 0,
+                    reviews: 0, rationale: "", symbol: "bag", gradient: SeedData.Gradient.pine,
+                    variants: [Variant(id: "\(id).v", title: "Standard", price: 20)])
+        }
+        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
+        let kitTask = ShoppingTask(
+            id: "lax", title: "Lacrosse gear", subtitle: "",
+            plan: ["Lacrosse stick", "Gloves", "Helmet", "Cleats"],
+            curatorNote: "", accentHex: 0, candidateIDs: [], searchQueries: ["lacrosse stick"],
+            isSingleItem: false
+        )
+        model.enterPlan(with: kitTask)
+        model.accept(named("s1", "Lacrosse Stick"))   // covers only "Lacrosse stick"
+
+        let completeness = model.kitCompleteness
+        #expect(completeness != nil)
+        #expect(completeness?.isComplete == false)
+        #expect(completeness?.missing == ["Gloves", "Helmet", "Cleats"])
+
+        // A single-product shortlist mission never gets a completeness panel.
+        model.enterPlan(with: kitTask.settingSingleItem(true))   // resets the kit
+        model.accept(named("s1", "Lacrosse Stick"))
+        #expect(model.kitCompleteness == nil)
+    }
+
     @Test("A total catalog outage fails without navigating away from Plan")
     @MainActor
     func streamingOutageStaysOnPlan() async {

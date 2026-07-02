@@ -28,6 +28,13 @@ struct CartView: View {
             VStack(alignment: .leading, spacing: CrumbMetrics.Space.l) {
                 header
 
+                // Readiness before checkout: for a complete-kit mission, say which plan categories
+                // the kit still misses so a partial cart (three sticks, no pads/helmet) is never
+                // framed as a finished kit (#67).
+                if let completeness = model.kitCompleteness {
+                    KitReadinessPanel(completeness: completeness) { model.back() }
+                }
+
                 ForEach(cart.shops) { shop in
                     ShopGroup(
                         shop: shop,
@@ -151,6 +158,71 @@ struct CartView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("CartScreen")
+    }
+}
+
+/// The kit-readiness panel (#67): for a complete-kit mission, a calm "kit covers the plan" when the
+/// checklist is satisfied, or a prominent "still missing …" warning naming the concrete categories
+/// the kit lacks, with a "Keep curating" action. Per-shop checkout stays available below either way —
+/// this is a pre-handoff readiness signal, not a block.
+struct KitReadinessPanel: View {
+    let completeness: KitCompleteness
+    let onKeepCurating: () -> Void
+
+    var body: some View {
+        if completeness.isComplete {
+            HStack(spacing: CrumbMetrics.Space.s) {
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundStyle(CrumbColor.pine)
+                    .accessibilityHidden(true)
+                Text("Your kit covers the plan — ^[all \(completeness.requiredCount) part](inflect: true).")
+                    .font(CrumbType.callout)
+                    .foregroundStyle(CrumbColor.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .padding(CrumbMetrics.Space.m)
+            .background(CrumbColor.pineSoft, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("kitReady")
+        } else {
+            VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
+                HStack(spacing: CrumbMetrics.Space.s) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(CrumbColor.ochre)
+                        .accessibilityHidden(true)
+                    Text("Your kit may be incomplete")
+                        .font(CrumbType.headline)
+                        .foregroundStyle(CrumbColor.ink)
+                    Spacer(minLength: 0)
+                }
+                Text("Still missing: \(completeness.missing.joined(separator: ", "))")
+                    .font(CrumbType.callout)
+                    .foregroundStyle(CrumbColor.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("kitMissingList")
+                Text("You can keep curating to fill the gaps, or continue per shop below.")
+                    .font(CrumbType.caption)
+                    .foregroundStyle(CrumbColor.ink3)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button(action: onKeepCurating) {
+                    HStack(spacing: CrumbMetrics.Space.xs) {
+                        Image(systemName: "rectangle.stack")
+                        Text("Keep curating")
+                    }
+                    .font(CrumbType.headline)
+                    .foregroundStyle(CrumbColor.pine)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, CrumbMetrics.Space.xs)
+                .accessibilityIdentifier("keepCuratingButton")
+            }
+            .padding(CrumbMetrics.Space.m)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(CrumbColor.ochre.opacity(0.12), in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("kitCompletenessWarning")
+        }
     }
 }
 
