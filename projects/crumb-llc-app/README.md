@@ -5,9 +5,13 @@ You hand over a **mission**, Crumb proposes products as a swipeable deck, accept
 build into a **kit** (a cross-merchant cart), and checkout **hands off per shop** to each
 merchant's own secure checkout.
 
-This is the **initial scaffold**: structure, navigation, design tokens, mock data, and
-protocol seams. There is intentionally **no real networking, payments, or curation model**
-yet — everything runs on `MockUCPClient` and the deterministic `RuleBasedCurator`.
+The app ships a full **Apple Foundation Models seam stack** for its AI work — planning,
+curation, refinement, relevance, recap, and tool-driven search — each behind a protocol
+with a deterministic `RuleBased*` floor. Every seam **self-degrades** to its floor (and
+reports the tier it used) when no model is available, so the app is fully functional with
+no model and no network: it then runs on `MockUCPClient` and the deterministic curator.
+A live catalog backend (`LiveUCPClient`) is wired and used automatically when a
+`Secrets.plist` supplies a broker URL.
 
 ## Layout
 
@@ -18,27 +22,37 @@ crumb-llc-app/
 ├── Crumb/               # the multiplatform app target (UI only)
 │   ├── App/             # CrumbApp (@main), AppModel (@Observable), RootView
 │   ├── DesignSystem/    # CrumbColor / CrumbType / CrumbMetrics + Components/
-│   ├── Features/        # Missions → Plan → Curate → Cart, TasteProfile, Siri
+│   ├── Features/        # Missions → Plan → Curate → Cart, TasteProfile, History, Siri
 │   ├── Intents/         # CurateKitIntent, ShoppingTaskEntity, CrumbShortcuts
 │   └── Resources/       # Assets.xcassets, Secrets.example.plist
 ├── CrumbKit/            # local Swift package — core logic, no UI, fully testable
-│   ├── Sources/CrumbKit/{Models,Services,Curator,SeedData}
+│   ├── Sources/CrumbKit/
+│   │   ├── Models/        # Product, Shop, Variant, ShoppingTask, TasteProfile, …
+│   │   ├── Services/      # UCPClient (Mock + Live), UCPConfig, persistence stores
+│   │   ├── Curator/       # CuratorEngine + RuleBasedCurator + AppleFoundationCurator + TeaCuration
+│   │   ├── Planner/       # MissionPlanner + RuleBased + AppleFoundation
+│   │   ├── Refinement/    # refinement interpreter + refine-chip suggester (floor + AppleFoundation)
+│   │   ├── Relevance/     # RelevanceGate + RuleBased + AppleFoundation
+│   │   ├── Orchestration/ # MissionOrchestrator (Deterministic + AppleFoundation tool-calling)
+│   │   ├── Recap/         # recap writer (floor + AppleFoundation)
+│   │   ├── FoundationSession/ # CrumbContext + TokenBudget — on-device session context policy
+│   │   ├── Pricing/       # PriceBand price-sanity floor
+│   │   └── SeedData/      # deterministic seed catalog + default taste
 │   └── Tests/CrumbKitTests
 ├── CrumbTests/          # app-level unit tests (Swift Testing)
-└── CrumbUITests/        # one launch smoke test (XCUITest)
+└── CrumbUITests/        # launch smoke test + live-broker purchase journeys + a11y tests
 ```
 
-UI lives entirely in the app target. Models, services, and curation live in `CrumbKit`
-so they are testable (`swift test`) and reusable by future projects.
+UI lives entirely in the app target. Models, services, and the AI seams live in `CrumbKit`
+so they are testable and reusable by future projects.
 
 ## Requirements
 
-- **Xcode 26 / Swift 6** line or newer (built and verified on Xcode 26.6, Swift 6.3).
-  The brief targets Xcode 27 / Swift 6.4; the code uses no 27-only API in compiled paths
-  (27-only features sit behind `#available(iOS 27, …)` seams).
+- **Xcode 27 beta / Swift 6** (built and verified on the Xcode 27 beta toolchain with the
+  iOS 27 simulator runtime). Swift 6 strict concurrency (`complete`) is on.
 - [XcodeGen](https://github.com/yonsm/XcodeGen) to (re)generate the project:
   `brew install xcodegen`.
-- Deployment minimums: iOS / iPadOS / macOS / visionOS **26.0**.
+- Deployment minimums: iOS / iPadOS / macOS / visionOS **27.0**.
 
 ## Build & run
 
@@ -51,63 +65,90 @@ open Crumb.xcodeproj          # then ⌘R with the "My Mac" destination
 #    …or from the command line:
 xcodebuild -scheme Crumb -destination 'platform=macOS' build
 
-# 2b. iOS / visionOS simulators
-xcodebuild -scheme Crumb -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
+# 2b. iOS / visionOS simulators (iOS 27 runtime)
+xcodebuild -scheme Crumb -destination 'platform=iOS Simulator,name=iPhone 17' build
 xcodebuild -scheme Crumb -destination 'platform=visionOS Simulator,name=Apple Vision Pro' build
 ```
 
-The app launches to **Missions** with three seed tasks. Tap one → **Plan** (curator note
-+ parts list + "scanning shops") → **Curate** (swipe the deck; the **KitTray** fills) →
-**Cart** (grouped by shop, "Continue to {shop}" per merchant). The header's profile
-button opens the **Taste Profile** sheet. The "Ask with Siri" row demos the App Intents
-handoff that also drives `CurateKitIntent`.
+The app launches to **Missions** with seed tasks (or a free-text goal). Tap one → **Plan**
+(curator note + editable parts list) → **Curate** (swipe the deck; the **KitTray** fills;
+talk back to refine) → **Cart** (grouped by shop, "Continue to {shop}" per merchant). The
+header opens **Taste Profile**, **Recipients**, and **History**. The "Ask with Siri" row
+demos the App Intents handoff that also drives `CurateKitIntent`.
+
+## AI & curation — the seam stack
+
+Each AI capability is a **protocol** with a deterministic `RuleBased*`/`Deterministic*`
+**floor** and an **`AppleFoundation*`** implementation that uses Apple's on-device
+`SystemLanguageModel` (and, behind the `CRUMB_PCC_ENABLED` flag, the Private Cloud Compute
+model). `CrumbApp.init()` injects the `AppleFoundation*` implementation for every seam; each
+self-degrades to its floor and reports the tier it actually used (`.privateCloud` /
+`.onDevice` / `.ruleBased(reason)`), surfaced in the UI as an honest fallback note.
+
+| Seam | Floor | Model implementation | What it does |
+|------|-------|----------------------|--------------|
+| Curator | `RuleBasedCurator` | `AppleFoundationCurator` | Ranks + voices the deck (map-reduce tournament); category-aware premium-tea layer (`TeaCuration`) |
+| Mission planner | `RuleBasedMissionPlanner` | `AppleFoundationMissionPlanner` | Decomposes a free-text goal into an editable plan (single item vs. multi-part kit) |
+| Taste extractor | manual capture | `AppleFoundationTasteExtractor` | Parses a free-text self-description into a `TasteProfile` |
+| Refinement interpreter | rule-based | `AppleFoundationRefinementInterpreter` | Turns "make it cheaper / warmer / …" into a deck rework |
+| Refine-chip suggester | category taxonomy | `AppleFoundationRefineChipSuggester` | Fits the Curate refine chips to the mission |
+| Recap writer | rule-based | `AppleFoundationRecapWriter` | Composes an on-device tag + line for saved-mission history |
+| Relevance gate | `RuleBasedRelevanceGate` | `AppleFoundationRelevanceGate` | Drops clearly off-topic catalog results before curation |
+| Mission orchestrator | `DeterministicMissionOrchestrator` | `AppleFoundationMissionOrchestrator` | Drives the search phase via Tools when a tier is up; else a deterministic fan-out + gate |
+
+On-device session context is managed by `FoundationSession/` — `TokenBudget` queries the
+model's real `contextSize` and derives the ranking caps + response bounds; `CrumbContext`
+holds the pair-safe transcript-trim policy for the agentic tool loop.
 
 ## Tests
 
 ```sh
-# CrumbKit core (no app host required)
+# CrumbKit core, on the macOS host (deterministic floors only — no model)
 cd CrumbKit && swift test
 
-# App unit tests + UI smoke test via Xcode
-cd .. && xcodebuild -scheme Crumb -destination 'platform=macOS' test
+# App unit tests + the CrumbKit suites re-hosted on the iOS 27 simulator, via Xcode
+cd .. && xcodebuild -scheme Crumb -destination 'platform=iOS Simulator,name=iPhone 17' test
 ```
 
-To drive a **full purchase journey** in the iOS 27 Simulator (capture every screen,
-audit accessibility, and file issues), follow [`docs/e2e-user-journey.md`](docs/e2e-user-journey.md).
-It runs the `CrumbUITests/JasmineTeaJourneyTests` XCUITest against the live broker.
+- **`CrumbTests`** — app-level unit tests. **`CrumbKitSimTests`** re-hosts the
+  `CrumbKit/Tests/CrumbKitTests` suites on the iOS 27 simulator (same files, no
+  duplication). **`CrumbUITests`** — a launch smoke test plus live-broker purchase
+  journeys (`JasmineTeaJourneyTests`, `LacrosseGearJourneyTests`) and accessibility checks.
+- **What CI exercises:** the deterministic floors. Foundation Models calls are **not**
+  testable on CI hosts (no on-device model), so the `AppleFoundation*` tiers are validated
+  on the iOS 27 simulator and via the live journey tests, while unit tests pin the pure
+  floor logic each seam degrades to.
+
+To drive a **full purchase journey** in the iOS 27 Simulator (capture every screen, audit
+accessibility, and file issues), follow [`docs/e2e-user-journey.md`](docs/e2e-user-journey.md).
 
 ## Secrets
 
 `UCPConfig` reads a **gitignored** `Secrets.plist`; a template lives at
-`Crumb/Resources/Secrets.example.plist`. The scaffold needs **no** real key — a missing
-`Secrets.plist` resolves to `UCPConfig.mock`. To wire a live backend later, copy the
-template to `Secrets.plist` and fill in `UCP_BASE_URL` / `UCP_API_KEY`.
+`Crumb/Resources/Secrets.example.plist`. With **no** `Secrets.plist` the app resolves to
+`UCPConfig.mock` and runs entirely on `MockUCPClient` (no network, no keys). To talk to the
+live broker, copy the template to `Secrets.plist` and set `CRUMB_API_BASE_URL` (required)
+and `CRUMB_API_KEY` (optional). Never commit `Secrets.plist`.
 
 ## Seams left open
 
-- **UCP networking** — `UCPClient` protocol, only `MockUCPClient` implemented. A
-  `LiveUCPClient` maps `searchCatalog`/`product`/`assembleCart`/`checkoutHandoff` to the
-  real UCP Catalog APIs. Global Catalog search is GA (API key only); native in-agent
-  checkout requires Shopify opt-in; Universal Cart is early access — so **per-shop
-  handoff** is the default checkout path.
-- **Curation** — `RuleBasedCurator` is the default; a `FoundationModelsCurator`
-  (on-device `LanguageModelSession`) can sit behind the same `CuratorEngine` protocol,
-  gated by `#available(iOS 27, *)` + `SystemLanguageModel.default.isAvailable`.
-- **Platforms** — iOS / iPadOS / macOS / visionOS are wired; watchOS / tvOS are noted
-  seams only, not built.
+- **UCP networking scope** — `LiveUCPClient` implements the `UCPClient` protocol against the
+  real UCP Catalog APIs. Global Catalog search is GA (API key only); native in-agent checkout
+  requires Shopify opt-in and Universal Cart is early access — so **per-shop handoff** is the
+  default checkout path.
+- **Private Cloud Compute tier** — the deep-reasoning tier is compiled out behind
+  `CRUMB_PCC_ENABLED`; merely constructing `PrivateCloudComputeLanguageModel` traps without the
+  `com.apple.developer.private-cloud-compute` entitlement, which is not yet granted. The
+  on-device and rule-based tiers run without it.
+- **Platforms** — iOS / iPadOS / macOS / visionOS are wired; watchOS / tvOS are noted seams
+  only, not built.
 
-## Verification notes (this environment)
+## Verification notes
 
-What was confirmed while scaffolding, and what the local toolchain blocked:
-
-- ✅ `CrumbKit` builds; `swift test` runs **5/5** passing.
-- ✅ `Crumb` **builds and runs on macOS** (native SwiftUI); app unit tests **5/5** pass.
-- ✅ iOS / visionOS sources **compile** against the simulator SDK.
-- ⚠️ A full iOS/visionOS **simulator app** could not be linked here: this machine has
-  Xcode 26.6 (iOS SDK 26.5) but only the iOS/visionOS **27.0** simulator runtimes
-  installed — Xcode won't pair a 27.0 runtime with its 26.5 SDK, and no 26.5 runtime is
-  present. Installing the matching simulator runtime (Xcode ▸ Settings ▸ Components)
-  resolves this; the project is already configured for those destinations.
-- ⚠️ The `CrumbUITests` launch test is written and host-wired, but macOS XCUITest needs a
-  GUI/accessibility session and cannot run in a headless sandbox. Run it from Xcode or a
-  logged-in session.
+- ✅ `CrumbKit` builds; `swift test` runs the deterministic-floor suites on the macOS host.
+- ✅ `Crumb` builds and runs on macOS (native SwiftUI); `CrumbTests` and the sim-re-hosted
+  `CrumbKitSimTests` pass on the iOS 27 simulator.
+- ✅ The live purchase journeys (`CrumbUITests`) run against the broker on the iPhone 17 /
+  iOS 27 simulator — plan → curate (on-device ranked + voiced) → cart → per-shop handoff.
+- ℹ️ Foundation Models calls run only on-device: they are exercised on the iOS 27 simulator
+  and in the journey tests, not on CI hosts, where the deterministic floors stand in.
