@@ -26,9 +26,11 @@ import FoundationModels
 /// pure, unit-tested core.
 public enum CrumbContext {
 
-    /// The on-device model's context window, in tokens. The hard ceiling every on-device session
-    /// shares; the trim/response policies keep the transcript comfortably under it.
-    public static let onDeviceContextTokens = 4096
+    /// The **fallback** on-device context window, in tokens, used only when the live model's real
+    /// `contextSize` can't be read. The actual window is now queried per session and the response /
+    /// deck caps are derived from it via ``TokenBudget`` (#37) — 8192 on newer hardware, 4096 on
+    /// older. This constant is that documented floor, not an assumed ceiling.
+    public static let onDeviceContextTokens = TokenBudget.fallbackContextWindow
 
     /// How many of the most recent *non-pinned* transcript entries to retain by default, for the
     /// generic (non-tool) trim. Instructions are always pinned and never counted against this.

@@ -79,8 +79,9 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
     /// `.maximumResponseTokens` (a *declared* policy, not an inline `GenerationOptions` band-aid)
     /// and pair it with `.transcriptErrorHandlingPolicy(.revertTranscript)`. A normal
     /// ``MissionDraft`` plan is well under the cap, so bounding can't truncate a real plan; it only
-    /// fences off the runaway. The fixed prompt cost is kept small by ``cappedGoal(_:)``.
-    static let maxResponseTokens = 1024
+    /// fences off the runaway. The bound is derived from the live model's real context window via
+    /// ``TokenBudget`` (#37) — 1024 on a 4096-token device, larger on a bigger window. The fixed
+    /// prompt cost is kept small by ``cappedGoal(_:)``.
     /// Planning wants structure with a little creative latitude in labels — cooler than the recap,
     /// warmer than the parse seams.
     static let temperature = 0.55
@@ -89,7 +90,7 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
     /// thrown error. With default sampling a second generation is usually shorter, so a transient
     /// near-the-limit overflow recovers rather than degrading the user to the single-query floor.
     /// Returns `nil` only when both attempts throw — the caller then cascades / degrades.
-    private func attemptDecompose<M: LanguageModel>(
+    private func attemptDecompose<M: LanguageModel & ContextWindowProviding>(
         _ goal: String,
         _ profile: TasteProfile,
         model: M,
@@ -114,7 +115,7 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
     /// so the tier cascade / rule-based fallback in ``plan(goal:profile:)`` takes over. The
     /// response bound + context policy live on the session's profile (see ``planSession``), so a
     /// runaway generation can't overflow the context window.
-    private func decompose<M: LanguageModel>(
+    private func decompose<M: LanguageModel & ContextWindowProviding>(
         _ goal: String,
         _ profile: TasteProfile,
         model: M,
@@ -132,7 +133,7 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
     /// Builds the planning session: ``PlannerInstructions`` in a profile that selects the tier's
     /// model and declares the planning tuning + context policy. Reasoning is applied only on the
     /// deep-reasoning (PCC) tier — the on-device model rejects `.reasoningLevel`.
-    static func planSession<M: LanguageModel>(
+    static func planSession<M: LanguageModel & ContextWindowProviding>(
         profile: TasteProfile,
         model: M,
         deepReasoning: Bool
@@ -140,7 +141,7 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
         let base = LanguageModelSession.Profile { PlannerInstructions(profile: profile) }
             .model(model)
             .temperature(temperature)
-            .maximumResponseTokens(maxResponseTokens)
+            .maximumResponseTokens(TokenBudget(model: model).plannerMaxResponseTokens)
             .historyTransform { CrumbContext.trimmed($0) }
             .transcriptErrorHandlingPolicy(.revertTranscript)
         if deepReasoning {
