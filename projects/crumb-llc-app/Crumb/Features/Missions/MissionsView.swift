@@ -76,9 +76,13 @@ struct MissionComposer: View {
     @State private var goal: String = MissionComposer.seededGoal
     @FocusState private var focused: Bool
 
-    /// Curated starting prompts — these double as the deterministic seed-mission triggers, so
-    /// the live mock resolves them to a full deck on device or sim.
+    /// Curated starting prompts. The kit/space examples double as the deterministic seed-mission
+    /// triggers (so the mock resolves them to a full deck offline), and at least one **direct
+    /// product** example teaches that finding a single specific thing is a first-class use too —
+    /// not only kit/outfitting missions (#61). The direct-product one resolves against the live
+    /// catalog (the mock has no tea), which is exactly the mode it's demonstrating.
     private static let examples = [
+        "Find premium jasmine tea",
         "Set up my pour-over corner",
         "Pack me for a rainy weekend hike",
         "Make my desk feel calm",

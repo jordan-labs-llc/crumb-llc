@@ -59,6 +59,12 @@ struct OnboardingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .safeAreaInset(edge: .bottom) { navBar }
         .animation(.easeInOut(duration: 0.2), value: step)
+        // Mark the screen as an accessibility *container* so its id names the container, not every
+        // child. On a plain VStack root `.accessibilityIdentifier` propagates onto every descendant —
+        // Skip/Next/title/scroll view all reported "OnboardingScreen", so `onboardingSkip` /
+        // `onboardingNext` weren't queryable and UI tests fell back to the "Skip" label. `.contain`
+        // keeps each child's own id queryable (same fix as CurateView, #24). (#61)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("OnboardingScreen")
     }
 
