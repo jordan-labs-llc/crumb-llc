@@ -22,6 +22,16 @@ struct RootView: View {
                 }
                 routedContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Give each route its own identity and an OPAQUE paper backing, then swap with an
+                    // asymmetric transition: the outgoing screen is removed instantly (`.identity`)
+                    // while the incoming fades in (`.opacity`). The old default — a symmetric opacity
+                    // crossfade of two transparent screens — left both visible mid-transition, so the
+                    // Plan title collided with the ghosted composer ("What are we shopping for?") and
+                    // Missions content lingered behind the plan. Removing the outgoing screen up front
+                    // means the two screens are never on screen at once. (#66)
+                    .id(model.route)
+                    .background(CrumbColor.paper)
+                    .transition(.asymmetric(insertion: .opacity, removal: .identity))
             }
             // macOS / visionOS get a wider windowed layout; iOS is the phone column.
             .frame(maxWidth: contentMaxWidth)

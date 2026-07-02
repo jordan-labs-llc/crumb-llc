@@ -79,7 +79,17 @@ final class JasmineTeaJourneyTests: XCTestCase {
         // ---- Step 2: Plan editor (live planner: network + on-device model / fallback) ----
         let planScreen = el("PlanScreen")
         if planScreen.waitForExistence(timeout: 60) {
+            usleep(600_000)   // let the route transition settle before auditing the hierarchy
             snap("03-plan")
+            // #66 regression guard: once the Plan screen is up, the Missions/composer surface must be
+            // fully gone — not ghosted behind it. The old crossfade left both mounted at once, so the
+            // Plan title collided with "What are we shopping for?" and "Ask with Siri".
+            XCTAssertFalse(el("MissionsScreen").exists,
+                           "#66: MissionsScreen still in the hierarchy behind PlanScreen (ghosting)")
+            XCTAssertFalse(app.staticTexts["What are we shopping for?"].exists,
+                           "#66: composer greeting still ghosted behind the Plan screen")
+            XCTAssertFalse(app.staticTexts["Ask with Siri"].exists,
+                           "#66: 'Ask with Siri' still ghosted behind the Plan screen")
             // #24 regression guard: the plan CTA now carries its OWN id — the screen container no
             // longer clobbers the safeAreaInset button to "PlanScreen". Assert it's queryable by id
             // (fails if the a11y-id clobbering regresses), then tap it. Label fallback kept so the
