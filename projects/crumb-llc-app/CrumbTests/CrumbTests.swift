@@ -228,6 +228,42 @@ struct CrumbTests {
         #expect(Set(model.deck.map(\.id)) == Set(SeedData.coffeeProducts.map(\.id)))
     }
 
+    @Test("First streamed pick flips loadState from loading to refining, then settles to loaded (#57)")
+    @MainActor
+    func firstPickEntersRefiningThenSettles() async {
+        // A slow curator keeps the settle running long enough that the deck is genuinely actionable
+        // (refining) before it settles — the state the indefinite-spinner bug lived in.
+        let model = AppModel(ucp: MockUCPClient(), curator: DelayingCurator(delay: .milliseconds(150)),
+                             tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile))
+        model.enterPlan(with: SeedData.coffee)
+        await model.loadCandidates(for: SeedData.coffee)
+        // By the time the call returns we've settled; the deck is the model-ranked one (not fallback).
+        #expect(model.loadState == .loaded)
+        #expect(model.route == .curate)
+        #expect(!model.deck.isEmpty)
+        #expect(model.curatorTier == .onDevice)          // the slow curation completed in time
+        #expect(model.curationRefiningOvertime == false) // reset on settle
+    }
+
+    @Test("A curation that overruns the settle deadline settles the streamed deck, not a spinner (#57)")
+    @MainActor
+    func settleDeadlineFallsBackToStreamedDeck() async {
+        // The curator stalls well past the (shrunk) hard deadline — the load must still settle with
+        // the streamed, deterministically-voiced deck instead of hanging in `.refining` forever.
+        let model = AppModel(ucp: MockUCPClient(), curator: DelayingCurator(delay: .seconds(5)),
+                             tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile))
+        model.curationSettleWindow = 0.02
+        model.curationSettleDeadline = 0.1
+        model.enterPlan(with: SeedData.coffee)
+        await model.loadCandidates(for: SeedData.coffee)
+
+        #expect(model.loadState == .loaded)                        // settled, never stuck refining
+        #expect(model.route == .curate)
+        #expect(!model.deck.isEmpty)                               // the streamed deck is usable
+        #expect(model.curatorTier == .ruleBased(.modelNotReady))  // honest fallback note is surfaced
+        #expect(model.curatorFallbackNote != nil)
+    }
+
     @Test("A total catalog outage fails without navigating away from Plan")
     @MainActor
     func streamingOutageStaysOnPlan() async {
@@ -931,6 +967,38 @@ private struct ProfileSortCurator: CuratorEngine {
         recipient: RecipientRef?
     ) async -> CuratedDeck {
         CuratedDeck(products: await rank(products, for: profile), tier: .onDevice)
+    }
+}
+
+/// A curator that stalls before ranking, standing in for a slow/hung on-device model turn so the
+/// settle watchdog + hard deadline (#57) can be exercised deterministically. It delegates voice and
+/// ranking to ``RuleBasedCurator`` after the delay, and reports the on-device tier (so a *successful*
+/// slow curation is distinguishable from the deterministic fallback).
+private struct DelayingCurator: CuratorEngine {
+    let delay: Duration
+    private let inner = RuleBasedCurator()
+
+    func plan(for task: ShoppingTask) async -> [String] { await inner.plan(for: task) }
+
+    func rank(_ products: [Product], for profile: TasteProfile) async -> [Product] {
+        try? await Task.sleep(for: delay)
+        return await inner.rank(products, for: profile)
+    }
+
+    func rationale(for product: Product, profile: TasteProfile) -> String {
+        inner.rationale(for: product, profile: profile)
+    }
+
+    func curate(
+        _ products: [Product],
+        for profile: TasteProfile,
+        mission: ShoppingTask,
+        refinement: RefinementContext?,
+        recipient: RecipientRef?
+    ) async -> CuratedDeck {
+        let ranked = await rank(products, for: profile)   // the delay lives here
+        let voiced = ranked.map { $0.withRationale(inner.rationale(for: $0, profile: profile, recipient: recipient, mission: mission)) }
+        return CuratedDeck(products: voiced, tier: .onDevice)
     }
 }
 

@@ -236,12 +236,32 @@ final class AppModel {
     /// Where the Plan screen's candidate load currently stands.
     enum LoadState: Equatable {
         case idle
-        case loading   // "scanning shops…"
+        case loading   // "scanning shops…" — no products yet, the Plan scan is blocking
+        case refining  // products are on screen and actionable; gather/curation still settling (#57)
         case loaded    // results in `candidates` (possibly empty == "no matches")
         case failed    // every query errored (broker down / offline) — retryable
     }
 
     private(set) var loadState: LoadState = .idle
+
+    /// `true` once the deck is actionable (``LoadState/refining``) but the settle has run past
+    /// ``curationSettleWindow`` — the Curate screen downgrades the blocking-looking "Curating your
+    /// picks…" spinner to a quiet, honest, non-blocking status so the user is never left staring at
+    /// an indefinite spinner over a usable deck (#57). Reset the moment the deck settles or reloads.
+    private(set) var curationRefiningOvertime = false
+
+    /// How long the "Curating your picks…" spinner may show over an actionable deck before it
+    /// downgrades to a non-blocking status (#57). An instance `var` (not a `static let`) purely so
+    /// tests can shrink it to exercise the downgrade/timeout without real-time waits.
+    var curationSettleWindow: Double = 12
+    /// The hard settle deadline: if the curator's ranking/voice hasn't returned within this window,
+    /// the load settles with the streamed, deterministically-voiced deck rather than holding the
+    /// user behind a hung on-device model turn (#57). Well above a healthy on-device settle.
+    var curationSettleDeadline: Double = 60
+
+    /// Fires ``curationRefiningOvertime`` once the settle window elapses while still refining;
+    /// cancelled the moment the deck settles, fails, or a new load starts.
+    private var settleWatchdog: Task<Void, Never>?
 
     /// Which curator voice produced the current deck. Drives the honest "AI curator
     /// unavailable" note on the Curate screen (see ``curatorFallbackNote``).
@@ -252,8 +272,11 @@ final class AppModel {
     /// `nil` when the AI curator ran, or when rule-based is the configured default.
     var curatorFallbackNote: String? { curatorTier?.fallbackNote }
 
-    /// `true` while Crumb is "scanning shops" on the Plan screen.
+    /// `true` while Crumb is "scanning shops" on the Plan screen — no products yet, blocking.
     var isScanning: Bool { loadState == .loading }
+    /// `true` while the deck is on screen and actionable but the gather/curation is still settling
+    /// in the background (#57). Distinct from ``isScanning``: the user can already swipe and add.
+    var isRefining: Bool { loadState == .refining }
     /// `true` when the load failed outright (distinct from a successful empty result).
     var loadFailed: Bool { loadState == .failed }
 
@@ -444,6 +467,8 @@ final class AppModel {
         currentHistoryEntryID = nil
         currentMissionGoal = nil
         loadState = .idle
+        settleWatchdog?.cancel()
+        curationRefiningOvertime = false
         planDirty = true
         route = .plan
     }
@@ -1107,6 +1132,8 @@ final class AppModel {
     /// unchanged.
     func loadCandidates(for task: ShoppingTask) async {
         loadState = .loading
+        settleWatchdog?.cancel()
+        curationRefiningOvertime = false
         // Fit the Curate refine chips to this mission the moment its deck starts dealing — the
         // universal choke point every deal path funnels through (live select/curate, the gift and
         // screenshot deep-entries), so the chips are ready before Curate appears regardless of route.
@@ -1136,7 +1163,15 @@ final class AppModel {
                 let wasEmpty = self.deck.isEmpty
                 self.deck.append(contentsOf: voicedFresh)
                 self.candidates = self.deck
-                if wasEmpty { self.route = .curate }   // navigate on the first pick
+                if wasEmpty {
+                    // First pick: the deck is now actionable. Navigate to Curate and flip out of the
+                    // blocking "loading" state into "refining" — the gather/curation keep settling,
+                    // but the user can already swipe, so the banner must not read as a blocking
+                    // spinner (#57). Arm the watchdog that downgrades it if the settle runs long.
+                    self.route = .curate
+                    self.loadState = .refining
+                    self.startSettleWatchdog(for: task)
+                }
             }
         }
 
@@ -1158,40 +1193,101 @@ final class AppModel {
         guard selectedTask?.id == task.id else { return }
 
         guard let gathered else {
+            settleWatchdog?.cancel()
             candidates = []
             deck = []
             baseCandidates = []
             loadState = .failed
+            curationRefiningOvertime = false
             return
         }
 
-        // `curate` both ranks and rewrites each rationale into Crumb's voice, and reports the
-        // tier it used so the UI can be honest when it fell back from the AI curator. For a gift
-        // mission this curates to the recipient's taste, with gift-framed voice.
-        let curated = await CrumbTrace.measure("curate", summarize: {
-            "in=\(gathered.products.count) deck=\($0.products.count) tier=\($0.tier.traceLabel)"
-        }) {
-            await curator.curate(gathered.products, for: activeTaste, mission: task, refinement: nil, recipient: activeRecipientRef)
-        }
+        // `curate` both ranks and rewrites each rationale into Crumb's voice, and reports the tier
+        // it used so the UI can be honest when it fell back from the AI curator. Bounded by
+        // `curationSettleDeadline`: a hung on-device model turn returns `nil` and we settle with the
+        // streamed, deterministically-voiced deck rather than spin forever (#57). For a gift mission
+        // this curates to the recipient's taste, with gift-framed voice.
+        let curated = await curateBounded(gathered.products, for: task)
         guard selectedTask?.id == task.id else { return }
+        settleWatchdog?.cancel()
+
         // Price sanity: sink any wildly-mispriced catalog outlier (the $1,450 "Premium Black Tea
         // Leaf" against a $4–$60 norm) to the tail *after* the curator has ranked, so it can never
         // lead or reach the top-3 — in every curator tier, offline included. A deck with too few
-        // priced items to judge a band passes through untouched.
-        let priced = PriceBand.priceSane(curated.products)
+        // priced items to judge a band passes through untouched. On a settle timeout we price-sane
+        // the streamed deck (already deterministically voiced) and mark the honest fallback tier.
+        let priced: [Product]
+        if let curated {
+            priced = PriceBand.priceSane(curated.products)
+            curatorTier = curated.tier
+        } else {
+            priced = PriceBand.priceSane(deck)
+            curatorTier = .ruleBased(.modelNotReady)
+        }
         candidates = priced
         baseCandidates = priced   // the snapshot Reset restores
-        curatorTier = curated.tier
         // Settle: swap the streamed raw deck for the curated (ranked, voiced, price-saned) order,
         // keeping only cards the user hasn't already swiped past.
         deck = Self.settledDeck(priced, keepingUndecidedFrom: deck)
         loadState = .loaded
+        curationRefiningOvertime = false
         // If nothing streamed (a successful but empty gather), the stream never navigated us — land
         // on Curate anyway so the empty state shows, matching the pre-streaming behavior.
         if route != .curate { route = .curate }
         // Note: the refinement conversation is reset by `enterPlan` (a new mission) and the
         // screenshot hook, NOT here — clearing it on every (re)load would race a refinement that
         // arrived while an earlier load was still settling.
+    }
+
+    /// Arms the settle watchdog for `task`: if the load is still ``LoadState/refining`` after
+    /// ``curationSettleWindow`` seconds, downgrade the "Curating your picks…" spinner to the quiet,
+    /// non-blocking "still personalizing" status so a usable deck is never sat behind an indefinite
+    /// spinner (#57). No-ops if the deck settled, failed, or the user moved to another mission first.
+    private func startSettleWatchdog(for task: ShoppingTask) {
+        settleWatchdog?.cancel()
+        let window = curationSettleWindow
+        settleWatchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(window))
+            guard let self, !Task.isCancelled,
+                  self.selectedTask?.id == task.id, self.loadState == .refining else { return }
+            self.curationRefiningOvertime = true
+        }
+    }
+
+    /// Runs the curation settle bounded by ``curationSettleDeadline``. Returns the curated deck, or
+    /// `nil` if the curator's ranking/voice didn't finish in time — so the caller settles with the
+    /// streamed deterministic deck instead of holding the user behind a hung model turn (#57).
+    ///
+    /// Mirrors the gather safety net's abandon-on-deadline shape (#54): the curate runs in an
+    /// unstructured task raced against a deadline; on timeout the task is cancelled and its result
+    /// dropped (it never mutates the model — it only yields to the race), so a runaway on-device turn
+    /// can't block the settle.
+    private func curateBounded(_ products: [Product], for task: ShoppingTask) async -> CuratedDeck? {
+        let curator = self.curator
+        let taste = self.activeTaste
+        let recipient = self.activeRecipientRef
+        enum SettleEnd { case done(CuratedDeck); case timedOut }
+        let (signals, continuation) = AsyncStream.makeStream(of: SettleEnd.self)
+        let curateTask = Task { @MainActor in
+            let deck = await CrumbTrace.measure("curate", summarize: {
+                "in=\(products.count) deck=\($0.products.count) tier=\($0.tier.traceLabel)"
+            }) {
+                await curator.curate(products, for: taste, mission: task, refinement: nil, recipient: recipient)
+            }
+            continuation.yield(.done(deck))
+        }
+        let deadlineTask = Task { @MainActor in
+            do { try await Task.sleep(for: .seconds(curationSettleDeadline)); continuation.yield(.timedOut) }
+            catch { /* cancelled because curation finished first — no deadline signal */ }
+        }
+        var end: SettleEnd = .timedOut
+        for await signal in signals { end = signal; break }
+        deadlineTask.cancel()
+        if case .done(let deck) = end { return deck }
+        curateTask.cancel()   // abandon the runaway curation (cooperative); its result is dropped
+        CrumbTrace.emit(stage: "curate", elapsedMillis: Int(curationSettleDeadline * 1000),
+                        summary: "settle deadline — fell back to streamed deck")
+        return nil
     }
 
     /// Swaps the streamed raw deck for the curated one at "settle" time: returns the curated (ranked,
