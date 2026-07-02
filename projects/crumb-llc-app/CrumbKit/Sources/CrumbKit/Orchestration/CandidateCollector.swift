@@ -88,7 +88,8 @@ public enum GatherToolSupport {
             products,
             matching: RuleBasedRelevanceGate.keywords(for: mission),
             core: RuleBasedRelevanceGate.coreTerms(for: mission),
-            floor: 0
+            floor: 0,
+            excludePets: !RuleBasedRelevanceGate.missionMentionsPets(mission)
         )
     }
 
