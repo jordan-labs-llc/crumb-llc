@@ -190,7 +190,10 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
                 title: title,
                 subtitle: cleanedSubtitle(draft.subtitle, goal: trimmedGoal),
                 note: cleanedNote(draft.note, parts: [title], goal: trimmedGoal),
-                parts: [(label: title, query: RuleBasedMissionPlanner.clean(query: trimmedGoal))]
+                parts: [(label: title, query: RuleBasedMissionPlanner.clean(query: trimmedGoal))],
+                // No usable parts survived, so this is the single generic query — honor the model's
+                // altitude call for framing (it still said shoppable).
+                isSingleItem: draft.isSingleItem
             )
             return PlannedMission(task: task, tier: tier, decline: nil)
         }
@@ -201,7 +204,9 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
             title: title,
             subtitle: cleanedSubtitle(draft.subtitle, goal: trimmedGoal),
             note: cleanedNote(draft.note, parts: parts.map(\.label), goal: trimmedGoal),
-            parts: parts
+            parts: parts,
+            // The model's altitude judgment — the same flag that collapsed to one part above.
+            isSingleItem: draft.isSingleItem
         )
         return PlannedMission(task: task, tier: tier, decline: nil)
     }

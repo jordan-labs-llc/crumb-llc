@@ -46,7 +46,7 @@ struct CurateView: View {
                 .padding(.bottom, CrumbMetrics.Space.s)
         }
         .safeAreaInset(edge: .bottom) {
-            KitTray(items: model.kit) { model.openCart() }
+            KitTray(items: model.kit, isSingleProduct: model.isSingleProductMission) { model.openCart() }
                 .padding(.horizontal, CrumbMetrics.Space.l)
                 .padding(.bottom, CrumbMetrics.Space.s)
         }
@@ -98,7 +98,7 @@ struct CurateView: View {
             .zIndex(isTop ? 1 : 0)
             .accessibilityElement(children: .combine)
             .accessibilityActions {
-                Button("Add to kit") { decide(accept: true, product: entry.product) }
+                Button(addActionTitle) { decide(accept: true, product: entry.product) }
                 Button("Skip") { decide(accept: false, product: entry.product) }
             }
     }
@@ -167,13 +167,19 @@ struct CurateView: View {
                 accept: false
             )
             decisionButton(
-                title: "Add to kit",
+                title: addActionTitle,
                 systemImage: "checkmark",
                 tint: CrumbColor.pine,
                 accept: true
             )
         }
         .disabled(model.deck.isEmpty)
+    }
+
+    /// "Add to shortlist" for a direct single-product search (the deck is options to compare),
+    /// "Add to kit" for a multi-part mission (#56).
+    private var addActionTitle: String {
+        model.isSingleProductMission ? "Add to shortlist" : "Add to kit"
     }
 
     private func decisionButton(

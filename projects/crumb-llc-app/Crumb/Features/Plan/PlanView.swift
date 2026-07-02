@@ -198,7 +198,9 @@ struct PlanView: View {
             HStack(spacing: CrumbMetrics.Space.s) {
                 Image(systemName: "sparkles")
                     .foregroundStyle(CrumbColor.ochre)
-                Text("Happy with the plan? I'll go find the pieces.")
+                Text(model.isSingleProductMission
+                    ? "This is what I'll shop for. I'll go find your options."
+                    : "Happy with the plan? I'll go find the pieces.")
                     .font(CrumbType.callout)
                     .foregroundStyle(CrumbColor.ink2)
                 Spacer(minLength: 0)
@@ -262,15 +264,24 @@ struct PlanView: View {
 
     // MARK: CTA
 
+    /// The commit CTA label — kit assembly vs a direct single-product search (#56), each with a
+    /// scanning variant.
+    private var ctaTitle: String {
+        if model.isSingleProductMission {
+            return model.isScanning ? "Finding options…" : "Find my options"
+        }
+        return model.isScanning ? "Gathering picks…" : "Curate my kit"
+    }
+
     private func curateCTA(accent: Color) -> some View {
         Button {
             model.startCurating()
         } label: {
             HStack {
                 Spacer()
-                Text(model.isScanning ? "Gathering picks…" : "Curate my kit")
+                Text(ctaTitle)
                     .font(CrumbType.headline)
-                Image(systemName: "rectangle.stack")
+                Image(systemName: model.isSingleProductMission ? "magnifyingglass" : "rectangle.stack")
                 Spacer()
             }
             .foregroundStyle(.white)
