@@ -33,10 +33,13 @@ struct MissionPlannerTests {
         for goal in ["premium jasmine tea", "a cast iron skillet", "wool beanie", "gooseneck kettle"] {
             #expect(RuleBasedMissionPlanner.isSingleItem(goal: goal), "\(goal) should be single-item")
         }
-        // Outfitting a space or activity — a multi-part kit.
+        // Outfitting a space or activity, or a "gear/equipment" goal — a multi-part kit.
         for goal in [
             "set up my pour-over corner", "pack me for a rainy weekend hike",
             "make my desk feel calm", "cozy reading nook", "everything for a new nursery",
+            // #65: "<X> gear/equipment/supplies" is a complete kit, not a single item.
+            "buying premium lacrosse gear", "premium lacrosse gear", "ski equipment",
+            "camping gear", "art supplies", "travel essentials",
         ] {
             #expect(!RuleBasedMissionPlanner.isSingleItem(goal: goal), "\(goal) should be a kit")
         }
