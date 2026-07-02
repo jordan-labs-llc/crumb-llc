@@ -28,6 +28,14 @@ public struct AppleFoundationMissionOrchestrator: MissionOrchestrator {
     /// bounded on the Profile so the multi-turn transcript can't overflow the 4096-token window.
     static let maxResponseTokens = 512
 
+    /// Time-to-first-pick may sit at zero this long before the deterministic floor is launched
+    /// alongside the still-running model turn (#54). Floor P50 is 1–3s and a cooperative model's
+    /// first tool call lands ~3s, so this never preempts a healthy loop but bounds the worst case.
+    static let firstPickWatchdogSeconds: Double = 8
+    /// The model turn is abandoned after this long — generous headroom over healthy loop lengths,
+    /// capping the observed 44–66s guardrail-trip pathology.
+    static let turnDeadlineSeconds: Double = 45
+
     public func gather(
         for mission: ShoppingTask,
         floor: Int,
@@ -38,39 +46,48 @@ public struct AppleFoundationMissionOrchestrator: MissionOrchestrator {
         let device = SystemLanguageModel.default
         guard case .available = device.availability else {
             // No model — the mandatory deterministic floor, streaming through the same collector.
+            // (Flag-off / no-model / CI path stays exactly as before: the floor IS the path, no net.)
             return await deterministic.gather(for: mission, floor: floor, using: ucp, gate: gate, into: collector)
         }
 
-        do {
-            // The tools write into the *injected* collector, so its `picks` stream feeds the UI while
-            // the model is still driving the loop.
+        // The deterministic floor, streaming into the *same* collector — the net launches this on
+        // the watchdog and for the pool-below-floor / empty-pool convergence, at most once.
+        let floorGather: @Sendable () async -> GatheredCandidates? = {
+            await deterministic.gather(for: mission, floor: floor, using: ucp, gate: gate, into: collector)
+        }
+        // The single agentic model turn. Build the session INSIDE the closure so a non-Sendable
+        // session never crosses the Task boundary — only Sendable inputs (mission/ucp/collector/model)
+        // are captured. The tools write into the injected collector, feeding the UI's picks stream.
+        let turn: @Sendable () async throws -> Void = {
             let tools: [any Tool] = [
                 CatalogSearchTool(ucp: ucp, mission: mission, collector: collector),
                 FindSimilarTool(ucp: ucp, mission: mission, collector: collector),
             ]
             let session = Self.makeSession(mission: mission, tools: tools, model: device)
-            // The model drives: it calls the tools during this turn; the collector holds the pool,
-            // so the returned text is ignored.
             _ = try await session.respond(to: Self.gatherPrompt(for: mission))
-        } catch {
-            Self.log.error("Agentic gather threw, using deterministic floor: \(error.localizedDescription, privacy: .public)")
-            return await deterministic.gather(for: mission, floor: floor, using: ucp, gate: gate, into: collector)
         }
 
-        var pool = await collector.products
+        let net = GatherSafetyNet(
+            watchdogSeconds: Self.firstPickWatchdogSeconds,
+            deadlineSeconds: Self.turnDeadlineSeconds,
+            onWatchdogFired: { _ in
+                CrumbTrace.emit(stage: "gather.watchdog",
+                                elapsedMillis: Int(Self.firstPickWatchdogSeconds * 1000),
+                                summary: "pool=0 floor=launched")
+            },
+            onDeadlineFired: { count in
+                CrumbTrace.emit(stage: "gather.deadline",
+                                elapsedMillis: Int(Self.turnDeadlineSeconds * 1000),
+                                summary: "turn=cancelled pool=\(count)")
+            }
+        )
 
-        // Safety floor: if the model gathered fewer than the floor, union with the deterministic
-        // gather (streaming its extra picks through the same collector) so the agentic deck is never
-        // thinner than the floor pipeline would have produced.
-        if pool.count < floor, let floorGather = await deterministic.gather(for: mission, floor: floor, using: ucp, gate: gate, into: collector) {
-            pool = Self.mergeDedup(pool, floorGather.products)
-        }
-
-        // If the model gathered nothing usable at all, fall through to the floor entirely.
-        guard !pool.isEmpty else {
-            return await deterministic.gather(for: mission, floor: floor, using: ucp, gate: gate, into: collector)
-        }
-        return GatheredCandidates(products: pool, usedAgent: true)
+        return await net.run(
+            floor: floor,
+            turn: turn,
+            poolSnapshot: { await collector.products },
+            floorGather: floorGather
+        )
     }
 
     // MARK: Session
