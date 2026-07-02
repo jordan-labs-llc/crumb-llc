@@ -41,7 +41,8 @@ extension ShoppingTask {
             curatorNote: curatorNote,
             accentHex: accentHex,
             candidateIDs: candidateIDs,
-            searchQueries: searchQueries
+            searchQueries: searchQueries,
+            isSingleItem: isSingleItem
         )
     }
 }

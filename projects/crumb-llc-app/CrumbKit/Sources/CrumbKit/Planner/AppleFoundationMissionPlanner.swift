@@ -201,6 +201,28 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
             return PlannedMission(task: task, tier: tier, decline: nil)
         }
 
+        // Direct product/category floor (#84): when the user's own goal is a short product query,
+        // reconcile away model drift into accessories or setup language. If the model kept an on-goal
+        // part, keep that single part; if it only returned equipment/vessels, fall back to the user's
+        // exact product query so "premium jasmine tea" cannot become "teapot".
+        if let direct = directProductOverride(parts: parts, goal: trimmedGoal) {
+            let task = RuleBasedMissionPlanner.makeTask(
+                goal: trimmedGoal,
+                title: direct.useGoalDefaults
+                    ? RuleBasedMissionPlanner.title(from: trimmedGoal)
+                    : cleanedTitle(draft.title, goal: trimmedGoal),
+                subtitle: direct.useGoalDefaults
+                    ? RuleBasedMissionPlanner.defaultSubtitle
+                    : cleanedSubtitle(draft.subtitle, goal: trimmedGoal),
+                note: direct.useGoalDefaults
+                    ? RuleBasedMissionPlanner.curatorNote(forParts: direct.parts.map(\.label))
+                    : cleanedNote(draft.note, parts: direct.parts.map(\.label), goal: trimmedGoal),
+                parts: direct.parts,
+                isSingleItem: true
+            )
+            return PlannedMission(task: task, tier: tier, decline: nil)
+        }
+
         guard !parts.isEmpty else {
             // The model said "shoppable" but gave nothing usable — fall back to the single
             // generic query, while keeping the (proven) model tier in the report.
@@ -250,6 +272,66 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
         }
         return out
     }
+
+    static func directProductOverride(
+        parts: [(label: String, query: String)],
+        goal: String
+    ) -> (parts: [(label: String, query: String)], useGoalDefaults: Bool)? {
+        let goalQuery = RuleBasedMissionPlanner.clean(query: goal)
+        guard RuleBasedMissionPlanner.isSingleItem(goal: goalQuery), !goalQuery.isEmpty else { return nil }
+        let title = RuleBasedMissionPlanner.title(from: goalQuery)
+        for part in parts {
+            guard !hasAccessoryDrift(part.label + " " + part.query, goal: goalQuery) else { continue }
+            let labelOK = preservesDirectProductText(part.label, goal: goalQuery)
+            let queryOK = preservesDirectProductText(part.query, goal: goalQuery)
+            if labelOK {
+                return (
+                    parts: [(label: part.label, query: queryOK ? part.query : goalQuery)],
+                    useGoalDefaults: !queryOK
+                )
+            }
+            if queryOK {
+                return (parts: [(label: title, query: part.query)], useGoalDefaults: true)
+            }
+        }
+        return (parts: [(label: title, query: goalQuery)], useGoalDefaults: true)
+    }
+
+    static func preservesDirectProduct(_ part: (label: String, query: String), goal: String) -> Bool {
+        let partText = part.label + " " + part.query
+        guard !hasAccessoryDrift(partText, goal: goal) else { return false }
+        return preservesDirectProductText(partText, goal: goal)
+    }
+
+    private static func preservesDirectProductText(_ text: String, goal: String) -> Bool {
+        let goalTokens = Set(RuleBasedRelevanceGate.orderedTokens(goal)
+            .filter { !RuleBasedRelevanceGate.genericQualifiers.contains($0) })
+        guard !goalTokens.isEmpty else { return false }
+        let textTokens = RuleBasedRelevanceGate.tokens(text)
+        let core = RuleBasedRelevanceGate.distinctiveTerms(in: goal)
+        let requiredOverlap = core.isEmpty ? goalTokens : core
+        return !textTokens.isDisjoint(with: requiredOverlap)
+    }
+
+    private static func hasAccessoryDrift(_ text: String, goal: String) -> Bool {
+        let goalTokens = Set(RuleBasedRelevanceGate.orderedTokens(goal)
+            .filter { !RuleBasedRelevanceGate.genericQualifiers.contains($0) })
+        let words = rawWords(text)
+        let driftWords = accessoryDriftWords.subtracting(goalTokens)
+        return !words.isDisjoint(with: driftWords)
+    }
+
+    private static func rawWords(_ text: String) -> Set<String> {
+        Set(text.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init))
+    }
+
+    private static let accessoryDriftWords: Set<String> = [
+        "brewer", "brewers", "caddy", "caddies", "canister", "canisters", "cup", "cups",
+        "equipment", "gear", "infuser", "infusers", "kettle", "kettles", "kit", "kits",
+        "mug", "mugs", "pitcher", "pitchers", "pot", "pots", "scoop", "scoops", "server",
+        "servers", "set", "sets", "setup", "spoon", "spoons", "strainer", "strainers",
+        "teapot", "teapots", "vessel", "vessels", "whisk", "whisks",
+    ]
 
     private static func cleanedTitle(_ raw: String, goal: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
