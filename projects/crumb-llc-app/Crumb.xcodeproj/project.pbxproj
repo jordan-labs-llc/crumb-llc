@@ -61,6 +61,7 @@
 		CA296C5901D22F2EDA0A98F4 /* CrumbKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5B27FEEA6954F68CEA3048D1 /* CrumbKit */; };
 		CAC6DAEB3BC490937FFA1751 /* TitleHygieneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D99D4F9F0DC47E8279877F /* TitleHygieneTests.swift */; };
 		CF1F4947BCB58FF53179E71A /* LiveUCPClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4553F448163F30B2353AFBA /* LiveUCPClientTests.swift */; };
+		D829F76AF3FBF6D4FF1248BB /* LacrosseGearJourneyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8DB076BFA27F346C20E3744 /* LacrosseGearJourneyTests.swift */; };
 		D94CF92CC4FA821A481A9062 /* CrumbKit in Frameworks */ = {isa = PBXBuildFile; productRef = ECEC8D61420FB33F67060AD5 /* CrumbKit */; };
 		D9829C2E08E5EF574A388F24 /* HistoryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7B4DECD197D4080D8485B61 /* HistoryDetailView.swift */; };
 		E1B764FDE7B67246468DA913 /* CuratorFloorMissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9396FCE2238CD5AEE0A09B67 /* CuratorFloorMissionTests.swift */; };
@@ -146,6 +147,7 @@
 		CC7ECC2C0E9B4003FBB011A0 /* CrumbTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CrumbTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CFE8A88BB1C7340314D1DE3C /* SiriHandoffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiriHandoffView.swift; sourceTree = "<group>"; };
 		D0F3D5A8552124AB50E0BF6D /* CartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartView.swift; sourceTree = "<group>"; };
+		D8DB076BFA27F346C20E3744 /* LacrosseGearJourneyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LacrosseGearJourneyTests.swift; sourceTree = "<group>"; };
 		DDE470E7CC6F0666823F5C4A /* PriceBandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PriceBandTests.swift; sourceTree = "<group>"; };
 		E138427809827F842B00492D /* CurateKitIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurateKitIntent.swift; sourceTree = "<group>"; };
 		E2636664F2FF6491635448E6 /* CuratorNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CuratorNote.swift; sourceTree = "<group>"; };
@@ -393,6 +395,7 @@
 			children = (
 				F614DD6F8A672D44B5BAF770 /* CrumbUITests.swift */,
 				794427C2191C234D54235EFB /* JasmineTeaJourneyTests.swift */,
+				D8DB076BFA27F346C20E3744 /* LacrosseGearJourneyTests.swift */,
 			);
 			path = CrumbUITests;
 			sourceTree = "<group>";
@@ -691,6 +694,7 @@
 			files = (
 				8A22D99E08AD2E8D980D1D34 /* CrumbUITests.swift in Sources */,
 				6842170135B15F74FF78438D /* JasmineTeaJourneyTests.swift in Sources */,
+				D829F76AF3FBF6D4FF1248BB /* LacrosseGearJourneyTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -18,7 +18,8 @@ public struct RuleBasedRelevanceGate: RelevanceGate {
             products,
             matching: Self.keywords(for: mission),
             core: Self.coreTerms(for: mission),
-            floor: floor
+            floor: floor,
+            excludePets: !Self.missionMentionsPets(mission)
         )
     }
 
@@ -73,7 +74,15 @@ public struct RuleBasedRelevanceGate: RelevanceGate {
     /// so a genuinely varied deck (a lacrosse kit spanning stick/gloves/pads) is never over-trimmed.
     ///
     /// Pure and model-free: same inputs always produce the same kept set.
-    public static func keep(_ products: [Product], matching keywords: Set<String>, core: Set<String>, floor: Int) -> [Product] {
+    ///
+    /// `excludePets` is the negative floor for a mission about human equipment: when set, any product
+    /// whose title, description, or merchant domain clearly reads as a *pet* product is dropped up
+    /// front and never tops the deck back up as filler — so a "Lacrosse Dog Collar" (which shares
+    /// "lacrosse") or a lacrosse stick sold by `3poochescollars.com` can't ride keyword overlap into a
+    /// player-gear kit (#64). It is only ever set when the mission itself doesn't mention pets (see
+    /// ``missionMentionsPets(_:)``), so a genuine "new collar for the dog" mission is untouched.
+    public static func keep(_ products: [Product], matching keywords: Set<String>, core: Set<String>, floor: Int, excludePets: Bool = false) -> [Product] {
+        let products = excludePets ? products.filter { !looksLikePetProduct($0) } : products
         guard !core.isEmpty else { return keep(products, matching: keywords, floor: floor) }
         let floor = max(0, floor)
         let onCore = products.filter { isRelevant($0, keywords: core) }
@@ -112,6 +121,64 @@ public struct RuleBasedRelevanceGate: RelevanceGate {
         // ("jasmine") are the distinctive signal a candidate must share.
         return Set(ordered.dropLast())
     }
+
+    // MARK: - Pet / novelty negative floor (#64)
+
+    /// Whether the mission is itself about pets — the guard that keeps the pet negative filter from
+    /// touching a genuine "a new collar for the dog" mission. True when any of the mission's concrete
+    /// shopping signal (queries, plan, title, subtitle) names an animal or pet-supply concept. Pure.
+    ///
+    /// Deliberately *broad* (it errs toward "yes, this is a pet mission" and so toward keeping pet
+    /// products): a false positive here only means we don't apply the negative filter, which is the
+    /// safe direction — far better than silently dropping the very products a pet mission is for.
+    public static func missionMentionsPets(_ mission: ShoppingTask) -> Bool {
+        let text = (mission.searchQueries + mission.plan + [mission.title, mission.subtitle])
+            .joined(separator: " ")
+        return !tokens(text).isDisjoint(with: petMissionWords)
+    }
+
+    /// Whether a product clearly reads as a *pet* product — matched on its title/description tokens or
+    /// its merchant domain. Used only as a negative floor for non-pet missions (see
+    /// ``missionMentionsPets(_:)``), so it can be conservative: it catches the obvious offenders (a
+    /// "Lacrosse Dog Collar", a stick sold by `3poochescollars.com`) without reaching for ambiguous
+    /// words like a shirt "collar" that also mean something to human gear. Pure.
+    public static func looksLikePetProduct(_ product: Product) -> Bool {
+        if !tokens(product.name + " " + product.rationale).isDisjoint(with: petProductWords) {
+            return true
+        }
+        // The domain is the only tell for a pet-shop product with a human-sounding title
+        // ("Hot Pink/Black Lacrosse Sticks" from 3poochescollars.com). Match distinctive pet
+        // substrings, not tokens — a domain like "3poochescollars" doesn't split into "pooch".
+        let domain = (product.shop.id + " " + product.shop.name).lowercased()
+        return petDomainMarkers.contains { domain.contains($0) }
+    }
+
+    /// Pet/animal words that mark a **mission** as pet-oriented. Broader than ``petProductWords`` —
+    /// it includes ambiguous supply words ("collar", "leash", "crate") because here they only widen
+    /// the safe "leave pet products alone" case. Pure data.
+    static let petMissionWords: Set<String> = [
+        "dog", "dogs", "doggy", "doggie", "puppy", "puppies", "pooch", "pooches", "canine",
+        "cat", "cats", "kitten", "kittens", "kitty", "feline", "pet", "pets",
+        "leash", "leashes", "collar", "collars", "harness", "crate", "kennel", "aquarium",
+        "hamster", "rabbit", "bunny", "parrot", "terrarium", "paw", "paws",
+    ]
+
+    /// Pet words distinctive enough to mark a **product** as pet-only from its title/description, even
+    /// for a non-pet mission — kept tight (no bare "cat", which collides with the CAT footwear brand;
+    /// no "collar", which is also a shirt part) so it never drops real human gear. Pure data.
+    static let petProductWords: Set<String> = [
+        "dog", "dogs", "doggy", "doggie", "puppy", "puppies", "pooch", "pooches", "canine",
+        "kitten", "kittens", "kitty", "feline", "pet", "pets", "leash", "leashes",
+    ]
+
+    /// Distinctive substrings that mark a merchant **domain** as a pet shop — matched as substrings
+    /// (not tokens) so a run-together domain like `3poochescollars` still resolves, and chosen to be
+    /// specific enough not to fire on sports brands ("bulldoglacrosse" is caught by neither because
+    /// there is no bare "dog" marker here). Pure data.
+    static let petDomainMarkers: [String] = [
+        "pooch", "puppy", "poodle", "kitten", "petco", "petsmart", "petstore", "petsuppl",
+        "petboutique", "dogcollar", "dogleash", "pawprint",
+    ]
 
     /// A product is on-topic when its name or merchant description shares at least one significant
     /// word with the mission's keywords. (At gate time — before the curator voices the deck —

@@ -233,4 +233,82 @@ struct RelevanceGateTests {
         #expect(kept.contains { $0.id == "s1" })     // on-topic stick kept
         #expect(!kept.contains { $0.id == "row" })   // off-topic rower dropped
     }
+
+    // MARK: Pet / novelty negative floor (#64 — lacrosse deck reached checkout with dog collars)
+
+    /// Builds a product whose merchant domain is `domain` (live results carry the seller domain as
+    /// both the shop id and the pretty name).
+    private func product(_ id: String, _ name: String, desc: String = "", domain: String) -> Product {
+        Product(
+            id: id, name: name, shop: Shop(id: domain, name: domain), price: 50, rating: 0, reviews: 0,
+            rationale: desc, symbol: "bag", gradient: SeedData.Gradient.pine,
+            variants: [Variant(id: "\(id).v", title: "Standard", price: 50, checkoutURL: nil)]
+        )
+    }
+
+    @Test("looksLikePetProduct catches a pet title, a pet domain, and spares real gear")
+    func looksLikePet() {
+        // Title tell: "dog" in the name.
+        #expect(RuleBasedRelevanceGate.looksLikePetProduct(
+            product("c1", "Lacrosse Dog Collar", desc: "for your pup", domain: "gearfrost.com")))
+        // Domain tell only: a human-sounding title from a pet shop.
+        #expect(RuleBasedRelevanceGate.looksLikePetProduct(
+            product("c2", "Hot Pink/Black Lacrosse Sticks", desc: "", domain: "3poochescollars.com")))
+        // Real player gear from a lacrosse brand — no false positive (no bare "dog" domain marker).
+        #expect(!RuleBasedRelevanceGate.looksLikePetProduct(
+            product("g1", "Buffalo Lacrosse Premium Player Package", desc: "complete kit", domain: "bulldoglacrosse.com")))
+    }
+
+    @Test("missionMentionsPets is true for a pet mission and false for a player-gear mission")
+    func missionPetIntent() {
+        let petMission = ShoppingTask(
+            id: "goal.dog", title: "A new collar for Rex", subtitle: "", plan: ["Dog collar"],
+            curatorNote: "", accentHex: 0, candidateIDs: [], searchQueries: ["dog collar"]
+        )
+        #expect(RuleBasedRelevanceGate.missionMentionsPets(petMission))
+        #expect(!RuleBasedRelevanceGate.missionMentionsPets(lacrosse))
+    }
+
+    @Test("Gate drops pet/novelty products from a lacrosse deck, by title and by domain")
+    func gateDropsPetProducts() async {
+        var deck = (1...8).map {
+            product("lax.\($0)", "Lacrosse Player Package \($0)", desc: "complete lacrosse gear")
+        }
+        deck.append(product("dog1", "Lacrosse Dog Collar", desc: "matching dog bow tie", domain: "bowtie-expressions.com"))
+        deck.append(product("dog2", "Hot Pink/Black Lacrosse Sticks", desc: "", domain: "3poochescollars.com"))
+        deck.append(product("dog3", "Lacrosse Sport Pattern Print Dog Collar", desc: "", domain: "gearfrost.com"))
+
+        let kept = await RuleBasedRelevanceGate().filter(deck, for: lacrosse, floor: 8)
+        #expect(!kept.contains { $0.id == "dog1" })   // pet title
+        #expect(!kept.contains { $0.id == "dog2" })   // pet domain only
+        #expect(!kept.contains { $0.id == "dog3" })   // pet title
+        #expect(kept.count == 8)                       // every real gear item survives
+    }
+
+    @Test("A genuine pet mission keeps its pet products — the negative filter never fires")
+    func petMissionKeepsPetProducts() async {
+        let petMission = ShoppingTask(
+            id: "goal.dog", title: "Gear up the new puppy", subtitle: "", plan: ["Dog collar", "Leash", "Dog bed"],
+            curatorNote: "", accentHex: 0, candidateIDs: [],
+            searchQueries: ["dog collar", "dog leash", "dog bed"]
+        )
+        let deck = [
+            product("p1", "Reflective Dog Collar", desc: "padded dog collar", domain: "3poochescollars.com"),
+            product("p2", "Nylon Dog Leash", desc: "6ft dog leash", domain: "petsmart.com"),
+            product("p3", "Orthopedic Dog Bed", desc: "memory foam dog bed", domain: "chewy.com"),
+        ]
+        let kept = await RuleBasedRelevanceGate().filter(deck, for: petMission, floor: 3)
+        #expect(kept.count == 3)   // nothing dropped: the mission is about pets
+    }
+
+    @Test("Tool-time onTopic drops pet products for a non-pet mission but keeps real gear")
+    func onTopicDropsPets() {
+        let batch = [
+            product("s1", "Carbon Lacrosse Stick", desc: "attack shaft", domain: "laxgear.com"),
+            product("d1", "Lacrosse Dog Collar", desc: "dog collar", domain: "bowtie-expressions.com"),
+            product("d2", "Hot Pink Lacrosse Sticks", desc: "", domain: "3poochescollars.com"),
+        ]
+        let kept = GatherToolSupport.onTopic(batch, for: lacrosse)
+        #expect(kept.map(\.id) == ["s1"])   // only the real stick survives
+    }
 }
