@@ -279,6 +279,18 @@ final class AppModel {
     var isRefining: Bool { loadState == .refining }
     /// `true` when the load failed outright (distinct from a successful empty result).
     var loadFailed: Bool { loadState == .failed }
+    /// Queryable UI-test state for the Curate screen. The root screen id stays stable
+    /// (`CurateScreen`); this hidden probe carries the more precise settle state (#32).
+    var curateStateAccessibilityIdentifier: String {
+        switch loadState {
+        case .idle: "curateState.idle"
+        case .loading: "curateState.loading"
+        case .refining:
+            curationRefiningOvertime ? "curateState.refining.overtime" : "curateState.refining"
+        case .loaded: "curateState.loaded"
+        case .failed: "curateState.failed"
+        }
+    }
 
     // MARK: Overlay state
 
