@@ -38,6 +38,10 @@ struct RootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: model.route)
+        // Load every descendant `AsyncImage` (deck cards, kit-tray + cart thumbnails) through one
+        // cache-backed URLSession so re-showing an already-seen product photo — swiping the deck back
+        // and forth — is served from the URLCache instead of re-downloaded (#43 item 1).
+        .asyncImageURLSession(CrumbImageCache.session)
         // Wake the (scale-to-zero) broker while the user gets oriented, so the first live
         // mission usually lands warm. No-op on the mock.
         .task { await model.warmUpCatalog() }
