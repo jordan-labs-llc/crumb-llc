@@ -131,6 +131,12 @@ final class LacrosseGearJourneyTests: XCTestCase {
             snap("07-cart")
             // #64 contract: the checkoutable cart must contain no pet/novelty product.
             assertNoPetProducts("cart")
+            // #67 note: the cart's kit-readiness panel (`kitCompletenessWarning` / `kitReady`) only
+            // renders for a *complete-kit* mission. Whether "premium lacrosse gear" reaches Cart as a
+            // kit or a single-item shortlist depends on the on-device planner's decomposition, which
+            // is non-deterministic on the sim — so this live journey doesn't hard-assert the panel.
+            // #67's guard is validated deterministically by KitCompletenessCartUITests (a seed kit
+            // mission) and the KitCompleteness/AppModel unit tests.
             var cont = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'continue.'")).firstMatch
             if !cont.exists {
                 cont = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Continue to'")).firstMatch

@@ -384,6 +384,18 @@ final class AppModel {
     /// compare instead of kit assembly (#56). Derived from the planner's `isSingleItem` signal.
     var isSingleProductMission: Bool { selectedTask?.isSingleItem ?? false }
 
+    /// The kit-completeness read for the current mission's cart, or `nil` when it doesn't apply — a
+    /// single-product shortlist (#60) or a mission without a real multi-part checklist. Drives the
+    /// Cart's readiness panel: for a complete-kit mission it says which plan categories the kit still
+    /// misses before checkout, so a partial cart is never framed as a finished kit (#67).
+    var kitCompleteness: KitCompleteness? {
+        guard !isSingleProductMission, let plan = selectedTask?.plan else { return nil }
+        let checklist = KitCompleteness.assess(plan: plan, items: currentCart.items.map(\.product))
+        // Only a genuine multi-part kit gets a completeness panel; a one-item checklist isn't a "kit".
+        guard checklist.requiredCount >= 2 else { return nil }
+        return checklist
+    }
+
     func isInKit(_ product: Product) -> Bool {
         kit.contains { $0.product.id == product.id }
     }
