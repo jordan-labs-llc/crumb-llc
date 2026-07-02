@@ -1131,6 +1131,10 @@ final class AppModel {
     /// live decks, where off-topic noise actually appears, get trimmed.
     static let relevanceFloor = 8
 
+    /// The deterministic, model-free curator used to order the *streamed* pre-settle deck with the
+    /// mission-aware floor (#58) — the trustworthy ranking shown before curation settles.
+    static let streamFloor = RuleBasedCurator()
+
     /// Fans the mission's `searchQueries` out to the catalog **in parallel**, dedupes the
     /// union by product id, and hands it to the curator for one ranked deck.
     ///
@@ -1174,6 +1178,11 @@ final class AppModel {
                 }
                 let wasEmpty = self.deck.isEmpty
                 self.deck.append(contentsOf: voicedFresh)
+                // Order the streamed floor with the same mission-aware rank the settle uses (#58): for a
+                // premium-tea search this leads with credible specialty picks and sinks bulk / sample /
+                // sachet listings, instead of showing whatever order the live searches returned in —
+                // model-free, so it's the trustworthy floor even before curation settles.
+                self.deck = Self.streamFloor.rank(self.deck, for: self.activeTaste, mission: task)
                 self.candidates = self.deck
                 if wasEmpty {
                     // First pick: the deck is now actionable. Navigate to Curate and flip out of the

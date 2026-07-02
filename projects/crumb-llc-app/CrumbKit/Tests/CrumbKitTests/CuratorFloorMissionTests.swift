@@ -46,11 +46,14 @@ struct CuratorFloorMissionTests {
 
     // MARK: Owner voice — the core off-topic fix
 
-    @Test("Owner floor anchors to the mission and drops an off-topic default leaning (#33)")
+    @Test("Owner floor names concrete tea-quality signals and drops an off-topic default leaning (#33/#58)")
     func ownerReadsOnTopic() {
         let line = curator.rationale(for: Self.teaCard(), profile: Self.defaultTaste,
                                      recipient: nil, mission: Self.teaMission)
-        #expect(line.contains("Premium jasmine tea"))    // on-topic: names the mission
+        // #58: the generic "A steady pick for …" floor is replaced by concrete quality copy — the
+        // loose-leaf card reads as a genuine premium pick, not just an echo of the mission title.
+        #expect(line.lowercased().contains("loose-leaf"))
+        #expect(line.lowercased().contains("premium"))
         #expect(!line.lowercased().contains("merino"))   // the off-topic leaning is gone
         #expect(!line.lowercased().contains("synthetic"))
     }
@@ -89,7 +92,7 @@ struct CuratorFloorMissionTests {
     func giftReadsOnTopic() {
         let line = curator.rationale(for: Self.teaCard(), profile: Self.defaultTaste,
                                      recipient: Self.mom, mission: Self.teaMission)
-        #expect(line.contains("Premium jasmine tea"))    // on-topic
+        #expect(line.lowercased().contains("premium"))   // #58: concrete quality signal, on-topic
         #expect(line.contains("Mom"))                    // still a gift for Mom
         #expect(!line.lowercased().contains("merino"))   // no off-topic leaning
     }
@@ -134,7 +137,7 @@ struct CuratorFloorMissionTests {
         let rule = RuleBasedCurator()
         let owner = af.rationale(for: Self.teaCard(), profile: Self.defaultTaste, recipient: nil, mission: Self.teaMission)
         #expect(owner == rule.rationale(for: Self.teaCard(), profile: Self.defaultTaste, recipient: nil, mission: Self.teaMission))
-        #expect(owner.contains("Premium jasmine tea"))
+        #expect(owner.lowercased().contains("premium"))   // #58: concrete quality voice reaches the live floor
         #expect(!owner.lowercased().contains("merino"))
         // And the gift path too.
         let gift = af.rationale(for: Self.teaCard(), profile: Self.defaultTaste, recipient: Self.mom, mission: Self.teaMission)

@@ -63,12 +63,15 @@ public extension UCPClient {
     /// gather and `AppModel`'s refinement search, so they behave identically.
     func searchUnion(_ queries: [String]) async -> [Product]? {
         // `try?` keeps a failed query from cancelling its siblings; a failure surfaces as `nil`.
-        let batches: [[Product]?] = await withTaskGroup(of: [Product]?.self) { group in
-            for query in queries {
-                group.addTask { try? await self.searchCatalog(query, placements: [.organic]) }
+        // Batches are slotted back by query index (not task-completion order) so the union — and thus
+        // the deck built from it — is deterministic regardless of which search returns first. Mirrors
+        // the indexed task group in ``AppleFoundationCurator/mapRankChunks``.
+        let batches: [[Product]?] = await withTaskGroup(of: (Int, [Product]?).self) { group in
+            for (index, query) in queries.enumerated() {
+                group.addTask { (index, try? await self.searchCatalog(query, placements: [.organic])) }
             }
-            var collected: [[Product]?] = []
-            for await batch in group { collected.append(batch) }
+            var collected = [[Product]?](repeating: nil, count: queries.count)
+            for await (index, batch) in group { collected[index] = batch }
             return collected
         }
         let succeeded = batches.compactMap { $0 }
