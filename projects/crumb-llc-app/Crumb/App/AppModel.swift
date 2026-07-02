@@ -567,11 +567,23 @@ final class AppModel {
         enterPlan(with: task)
     }
 
-    /// Screenshot hook: deal a mission's deck, shortlist a few cards, and open the Cart — so the
-    /// cart's framing (kit vs single-product shortlist, #56) can be captured headlessly.
+    /// Screenshot hook: land on the Cart with a few shortlisted items across distinct shops, so the
+    /// cart framing (kit grouping vs single-product compare-and-buy, #56/#60) captures headlessly.
+    /// Seeds the kit directly from seed products — no live gather — so it never waits on the model.
     func presentCartForScreenshot(missionID: String) async {
-        await presentCurateForScreenshot(missionID: missionID)
-        for product in deck.prefix(3) { accept(product) }
+        var task = missions.first { $0.id == missionID } ?? SeedData.hike
+        if ProcessInfo.processInfo.environment["CRUMB_SINGLE"] == "1" { task = task.settingSingleItem(true) }
+        selectedTask = task
+        curatorTier = nil
+        clearRefinement()
+        // Pick the first few products from distinct shops so the cart shows a real multi-shop spread.
+        var chosen: [Product] = []
+        var shops = Set<Shop.ID>()
+        for product in SeedData.coffeeProducts where shops.insert(product.shop.id).inserted {
+            chosen.append(product)
+            if chosen.count == 3 { break }
+        }
+        kit = chosen.map(KitItem.init(product:))
         openCart()
     }
 
@@ -1267,5 +1279,14 @@ final class AppModel {
         let cart = currentCart
         let url = try? await ucp.checkoutHandoff(for: shop, in: cart)
         handoff = Handoff(shop: shop, url: url, items: cart.items(for: shop))
+    }
+
+    /// Hands off a **single** shortlisted product — the "Buy this" action in the single-product
+    /// compare-and-buy cart (#60). Resolves the handoff against a one-item cart so the user checks
+    /// out exactly that product, even if another shortlisted option happens to share its shop.
+    func beginHandoff(for item: KitItem) async {
+        let oneItemCart = Cart(items: [item])
+        let url = try? await ucp.checkoutHandoff(for: item.product.shop, in: oneItemCart)
+        handoff = Handoff(shop: item.product.shop, url: url, items: [item])
     }
 }

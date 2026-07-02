@@ -271,6 +271,26 @@ struct CrumbTests {
         #expect(handoff?.items.count == 1)
     }
 
+    @Test("Single-item handoff checks out exactly one product, even when options share a shop (#60)")
+    @MainActor
+    func singleItemHandoffIsolatesOneProduct() async throws {
+        // Both fake products live in the same shop; the per-shop handoff would take both, but the
+        // single-product "Buy this" must carry only the one the user chose.
+        let model = AppModel(ucp: FakeUCP(byQuery: [:]), curator: RuleBasedCurator())
+        model.accept(Self.fakeProduct("a"))
+        model.accept(Self.fakeProduct("b"))
+        #expect(model.currentCart.items(for: Shop(id: "s", name: "Shop")).count == 2)
+
+        let itemA = try #require(model.kit.first { $0.product.id == "a" })
+        await model.beginHandoff(for: itemA)
+
+        let handoff = try #require(model.handoff)
+        #expect(handoff.items.count == 1)
+        #expect(handoff.items.first?.product.id == "a")
+        #expect(handoff.shop.id == "s")
+        #expect(handoff.url == nil)   // FakeUCP resolves no link — still presents honestly
+    }
+
     // MARK: - Conversational refinement
 
     @Test("A refinement reworks the deck in place, preserving the kit")
