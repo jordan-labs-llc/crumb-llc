@@ -275,6 +275,84 @@ struct MissionPlannerTests {
         #expect(task?.searchQueries == ["premium jasmine tea"])   // the core item only, no accessories
     }
 
+    @Test("Direct product goals override model drift into teaware accessories (#84)")
+    func reconcileDirectProductOverridesAccessoryDrift() {
+        let draft = MissionDraft(
+            isShoppable: true, isSingleItem: false,
+            title: "Premium jasmine tea",
+            subtitle: "Three vessels",
+            note: "You'll find three vessels for a steady tea ritual.",
+            parts: [
+                PlanPartDraft(label: "Teapot", query: "glass teapot"),
+                PlanPartDraft(label: "Tea strainer", query: "tea strainer"),
+            ],
+            decline: ""
+        )
+        let task = AppleFoundationMissionPlanner.mission(from: draft, goal: "premium jasmine tea", tier: .onDevice).task
+
+        #expect(task?.isSingleItem == true)
+        #expect(task?.plan == ["Premium jasmine tea"])
+        #expect(task?.searchQueries == ["premium jasmine tea"])
+        #expect(task?.subtitle == RuleBasedMissionPlanner.defaultSubtitle)
+        #expect(task?.curatorNote.localizedCaseInsensitiveContains("vessels") == false)
+    }
+
+    @Test("Direct product goals keep a visible core label even when the model query is on-goal (#84)")
+    func reconcileDirectProductRepairsGenericVisibleLabel() {
+        let draft = MissionDraft(
+            isShoppable: true, isSingleItem: true,
+            title: "premium jasmine tea",
+            subtitle: "a quiet moment with leaves",
+            note: "A single leaf, steady and enduring.",
+            parts: [PlanPartDraft(label: "tea leaves", query: "premium jasmine tea")],
+            decline: ""
+        )
+        let task = AppleFoundationMissionPlanner.mission(from: draft, goal: "premium jasmine tea", tier: .onDevice).task
+
+        #expect(task?.plan == ["Premium jasmine tea"])
+        #expect(task?.searchQueries == ["premium jasmine tea"])
+        #expect(task?.subtitle == RuleBasedMissionPlanner.defaultSubtitle)
+        #expect(task?.curatorNote.localizedCaseInsensitiveContains("leaf") == false)
+    }
+
+    @Test("Direct product override covers tea and beverage categories without blocking setup queries (#84)")
+    func reconcileDirectProductOverrideExamples() {
+        let jasminePearls = MissionDraft(
+            isShoppable: true, isSingleItem: false,
+            title: "Jasmine pearls", subtitle: "", note: "",
+            parts: [PlanPartDraft(label: "Pearl tea infuser", query: "tea infuser")],
+            decline: ""
+        )
+        let pearlsTask = AppleFoundationMissionPlanner.mission(from: jasminePearls, goal: "jasmine pearls", tier: .onDevice).task
+        #expect(pearlsTask?.plan == ["Jasmine pearls"])
+        #expect(pearlsTask?.searchQueries == ["jasmine pearls"])
+        #expect(pearlsTask?.isSingleItem == true)
+
+        let matchaPowder = MissionDraft(
+            isShoppable: true, isSingleItem: false,
+            title: "Matcha powder", subtitle: "", note: "",
+            parts: [PlanPartDraft(label: "Matcha whisk", query: "matcha whisk")],
+            decline: ""
+        )
+        let matchaTask = AppleFoundationMissionPlanner.mission(from: matchaPowder, goal: "matcha powder", tier: .onDevice).task
+        #expect(matchaTask?.plan == ["Matcha powder"])
+        #expect(matchaTask?.searchQueries == ["matcha powder"])
+        #expect(matchaTask?.isSingleItem == true)
+
+        let setup = MissionDraft(
+            isShoppable: true, isSingleItem: false,
+            title: "Tea brewing setup", subtitle: "", note: "",
+            parts: [
+                PlanPartDraft(label: "Teapot", query: "teapot"),
+                PlanPartDraft(label: "Infuser", query: "tea infuser"),
+            ],
+            decline: ""
+        )
+        let setupTask = AppleFoundationMissionPlanner.mission(from: setup, goal: "tea brewing setup", tier: .onDevice).task
+        #expect(setupTask?.isSingleItem == false)
+        #expect(setupTask?.plan == ["Teapot", "Infuser"])
+    }
+
     @Test("A broad draft keeps its several complementary parts")
     func reconcileBroadKeepsParts() {
         let draft = MissionDraft(
