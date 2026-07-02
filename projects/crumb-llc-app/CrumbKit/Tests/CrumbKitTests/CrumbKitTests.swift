@@ -30,6 +30,23 @@ struct CrumbKitTests {
         }
     }
 
+    @Test("Cart.priceRange spans the cheapest and dearest option; nil when empty (#60)")
+    func cartPriceRange() {
+        #expect(Cart(items: []).priceRange == nil)
+
+        let product = SeedData.hikeProducts[0]
+        let items = [Decimal(31), Decimal(24), Decimal(28)].enumerated().map { index, price in
+            KitItem(product: product, variant: Variant(id: "v\(index)", title: "V", price: price))
+        }
+        let range = Cart(items: items).priceRange
+        #expect(range?.min == Decimal(24))
+        #expect(range?.max == Decimal(31))
+
+        // A single option collapses to a point range (min == max), so the UI shows one price.
+        let single = Cart(items: [items[0]]).priceRange
+        #expect(single?.min == single?.max)
+    }
+
     @Test("Cart subtotal and per-shop grouping are correct")
     func cartGrouping() async throws {
         let client = MockUCPClient()

@@ -15,6 +15,16 @@ public struct Cart: Sendable, Codable, Hashable {
         items.reduce(0) { $0 + $1.variant.price }
     }
 
+    /// The lowest and highest variant price in the cart, or `nil` when empty. The single-product
+    /// compare-and-buy cart (#60) shows this range instead of a subtotal — summing alternatives the
+    /// user will pick *one* of would be misleading.
+    public var priceRange: (min: Decimal, max: Decimal)? {
+        guard let first = items.first?.variant.price else { return nil }
+        return items.dropFirst().reduce((min: first, max: first)) { acc, item in
+            (min: Swift.min(acc.min, item.variant.price), max: Swift.max(acc.max, item.variant.price))
+        }
+    }
+
     /// The distinct shops represented in the cart, in first-seen order. Checkout hands
     /// off per shop, so the UI groups by these.
     public var shops: [Shop] {

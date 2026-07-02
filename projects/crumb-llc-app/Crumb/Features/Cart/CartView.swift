@@ -16,7 +16,14 @@ struct CartView: View {
         }
     }
 
+    @ViewBuilder
     private var content: some View {
+        // A direct single-product search shows its shortlisted alternatives to compare and buy one;
+        // a multi-part kit stays grouped by shop for its per-shop handoff (#60).
+        if model.isSingleProductMission { singleContent } else { groupedContent }
+    }
+
+    private var groupedContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CrumbMetrics.Space.l) {
                 header
@@ -28,6 +35,36 @@ struct CartView: View {
                         subtotal: cart.subtotal(for: shop),
                         onRemove: { model.removeFromKit($0) },
                         onContinue: { Task { await model.beginHandoff(for: shop) } }
+                    )
+                }
+
+                handoffNote
+            }
+            .padding(.horizontal, CrumbMetrics.Space.xl)
+            .padding(.vertical, CrumbMetrics.Space.l)
+        }
+        .safeAreaInset(edge: .bottom) { totalBar }
+        .accessibilityIdentifier("CartScreen")
+    }
+
+    /// The single-product cart: a flat list of the shortlisted options, each with its own "Buy this"
+    /// handoff, so the user knowingly picks one instead of being handed a surprise multi-shop kit.
+    private var singleContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: CrumbMetrics.Space.l) {
+                header
+
+                Text("These are alternatives — pick the one you want and check out at its shop.")
+                    .font(CrumbType.callout)
+                    .foregroundStyle(CrumbColor.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("compareHint")
+
+                ForEach(cart.items) { item in
+                    CompareCard(
+                        item: item,
+                        onBuy: { Task { await model.beginHandoff(for: item) } },
+                        onRemove: { model.removeFromKit(item) }
                     )
                 }
 
@@ -69,10 +106,12 @@ struct CartView: View {
     private var totalBar: some View {
         HStack {
             VStack(alignment: .leading, spacing: 0) {
-                Text(model.isSingleProductMission ? "Shortlist subtotal" : "Kit subtotal")
+                // Single-product: a price *range* over the alternatives — summing options the user
+                // will pick one of would be misleading. Kit: the real subtotal of everything.
+                Text(model.isSingleProductMission ? "^[\(cart.items.count) option](inflect: true)" : "Kit subtotal")
                     .font(CrumbType.caption)
                     .foregroundStyle(CrumbColor.ink2)
-                Text(cart.subtotal, format: .currency(code: "USD"))
+                Text(model.isSingleProductMission ? priceRangeText : cart.subtotal.formatted(.currency(code: "USD")))
                     .font(CrumbType.title2)
                     .foregroundStyle(CrumbColor.ink)
                     .monospacedDigit()
@@ -86,6 +125,14 @@ struct CartView: View {
         .padding(.vertical, CrumbMetrics.Space.m)
         .background(.ultraThinMaterial)
         .accessibilityElement(children: .combine)
+    }
+
+    /// The shortlist's price spread, e.g. "$24.00–$31.00" (or a single price when they match).
+    private var priceRangeText: String {
+        guard let range = cart.priceRange else { return "" }
+        let low = range.min.formatted(.currency(code: "USD"))
+        guard range.min != range.max else { return low }
+        return "\(low)–\(range.max.formatted(.currency(code: "USD")))"
     }
 
     private var emptyState: some View {
@@ -191,5 +238,80 @@ struct CartLine: View {
             .accessibilityLabel("Remove \(item.product.name)")
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// One shortlisted option in the single-product cart (#60): the product, its shop + rating + price,
+/// a prominent "Buy this at {shop}" handoff, and a remove control — so the user compares the
+/// alternatives inline and knowingly checks out one, instead of a surprise multi-merchant kit.
+struct CompareCard: View {
+    let item: KitItem
+    let onBuy: () -> Void
+    let onRemove: () -> Void
+
+    private var product: Product { item.product }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CrumbMetrics.Space.m) {
+            HStack(spacing: CrumbMetrics.Space.m) {
+                ProductThumbnail(product: product, size: 56, cornerRadius: 12, glyphSize: 22)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(TitleHygiene.display(for: product.name))
+                        .font(CrumbType.headline)
+                        .foregroundStyle(CrumbColor.ink)
+                        .lineLimit(2)
+                        .accessibilityLabel(product.name)
+                    HStack(spacing: CrumbMetrics.Space.xs) {
+                        Image(systemName: "storefront")
+                            .font(.caption2)
+                            .foregroundStyle(CrumbColor.ink3)
+                            .accessibilityHidden(true)
+                        Text(product.shop.name)
+                            .font(CrumbType.caption)
+                            .foregroundStyle(CrumbColor.ink2)
+                        // Seed products carry ratings; live catalog products read 0 and stay quiet.
+                        if product.rating > 0 {
+                            Text("· ★ " + product.rating.formatted(.number.precision(.fractionLength(1))))
+                                .font(CrumbType.caption)
+                                .foregroundStyle(CrumbColor.ink2)
+                        }
+                    }
+                }
+
+                Spacer(minLength: CrumbMetrics.Space.s)
+
+                VStack(alignment: .trailing, spacing: CrumbMetrics.Space.xs) {
+                    Text(item.variant.price, format: .currency(code: "USD"))
+                        .font(CrumbType.headline)
+                        .foregroundStyle(CrumbColor.ink)
+                        .monospacedDigit()
+                    Button(action: onRemove) {
+                        Image(systemName: "minus.circle")
+                            .foregroundStyle(CrumbColor.ink3)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Remove \(product.name)")
+                }
+            }
+
+            Button(action: onBuy) {
+                HStack {
+                    Spacer()
+                    Text("Buy this at \(product.shop.name)")
+                        .font(CrumbType.headline)
+                    Image(systemName: "arrow.up.right")
+                    Spacer()
+                }
+                .foregroundStyle(.white)
+                .padding(.vertical, CrumbMetrics.Space.m)
+                .background(CrumbColor.pine, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.tile, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("buy.\(product.id)")
+            .accessibilityHint("Hands off to \(product.shop.name)'s secure checkout for this item")
+        }
+        .crumbCard()
+        .accessibilityElement(children: .contain)
     }
 }
