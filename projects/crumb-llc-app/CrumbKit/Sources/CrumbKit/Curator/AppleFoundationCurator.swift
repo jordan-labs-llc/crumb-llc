@@ -87,8 +87,10 @@ public struct AppleFoundationCurator: CuratorEngine {
         recipient: RecipientRef?
     ) async -> CuratedDeck {
         // The deterministic order: the input we hand the model, the order of the
-        // reconciliation tail, and the whole-deck fallback when no tier ranks.
-        let baseline = await rule.rank(products, for: profile)
+        // reconciliation tail, and the whole-deck fallback when no tier ranks. Mission-aware (#58)
+        // so a premium-tea search leads the baseline (and thus the reconcile tail + fallback) with
+        // credible specialty picks rather than a generic or budget listing.
+        let baseline = rule.rank(products, for: profile, mission: mission)
         guard !baseline.isEmpty else { return CuratedDeck(products: [], tier: .onDevice) }
 
         // Tier 1 — Private Cloud Compute. Gated behind `CRUMB_PCC_ENABLED` because *merely

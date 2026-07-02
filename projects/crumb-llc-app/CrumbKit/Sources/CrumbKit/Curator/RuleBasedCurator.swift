@@ -30,6 +30,14 @@ public struct RuleBasedCurator: CuratorEngine {
     }
 
     public func rank(_ products: [Product], for profile: TasteProfile) async -> [Product] {
+        rank(products, for: profile, mission: nil)
+    }
+
+    /// Mission-aware ranking (#58): the base profile-fit sort, plus a category-aware adjustment for
+    /// tea missions (``TeaCuration``) so a "premium jasmine tea" search leads with credible specialty
+    /// picks and pushes sachets / samples / bulk / implausibly-cheap listings down. `mission == nil`
+    /// (and every non-tea mission) reproduces the base sort byte-for-byte, so nothing else shifts.
+    public func rank(_ products: [Product], for profile: TasteProfile, mission: ShoppingTask?) -> [Product] {
         // Stable, deterministic sort: higher score first, ties broken by id so the order
         // never wobbles between runs.
         struct Scored {
@@ -37,7 +45,8 @@ public struct RuleBasedCurator: CuratorEngine {
             let score: Double
         }
         let scored: [Scored] = products.map { product in
-            Scored(product: product, score: score(product, for: profile))
+            let categoryAdjustment = mission.map { TeaCuration.scoreAdjustment(product, mission: $0) } ?? 0
+            return Scored(product: product, score: score(product, for: profile) + categoryAdjustment)
         }
         let ranked = scored.sorted { lhs, rhs in
             lhs.score == rhs.score
@@ -84,12 +93,22 @@ public struct RuleBasedCurator: CuratorEngine {
             return profile.leanings.first { missionMentions(keyword(from: $0), in: mission) }
         }()
 
+        // #58: for a tea mission with no fitting leaning to name, speak concrete tea-quality voice
+        // (premium pick / value / sample / sachets) instead of the generic "A steady pick for …"
+        // floor — the trust signal a discerning tea buyer is owed. A fitting leaning still wins (its
+        // named nod is preserved below), and seed voice is always kept verbatim.
+        let teaLine: String? = {
+            guard leaning == nil, let mission else { return nil }
+            return TeaCuration.rationale(product, mission: mission)
+        }()
+
         guard let recipient else {
             // Owner voice. A rationale that already echoes a leaning is our own seed voice — it
             // reads as Crumb, so keep it verbatim. Otherwise it's the raw merchant blurb of a live
             // catalog item: never pass that off as the curator's "why this is you" (#22) — speak a
             // short curator line instead, honest about carrying no invented facts.
             if echoesLeaning { return product.rationale }
+            if let teaLine { return teaLine }
             return ownerFloor(mission: mission, leaning: leaning)
         }
 
@@ -99,6 +118,7 @@ public struct RuleBasedCurator: CuratorEngine {
         if echoesLeaning {
             return "\(product.rationale) A gift for \(name)."
         }
+        if let teaLine { return "\(teaLine) A gift for \(name)." }
         return giftFloor(name: name, mission: mission, leaning: leaning)
     }
 
