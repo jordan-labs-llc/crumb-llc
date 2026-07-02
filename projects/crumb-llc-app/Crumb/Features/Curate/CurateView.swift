@@ -21,10 +21,17 @@ struct CurateView: View {
                 activityBanner("Reworking the deck…", id: "reworkingBanner")
             } else if model.isRecurating {
                 activityBanner("Re-reading your taste…", id: "recuratingBanner")
-            } else if model.isScanning {
+            } else if model.isRefining {
                 // Streaming: raw picks are on screen while the gather finishes and the curator ranks
-                // + voices them (they settle in place when done).
-                activityBanner("Curating your picks…", id: "gatheringBanner")
+                // + voices them (they settle in place when done). Once the settle runs past its
+                // window we downgrade the spinner to a quiet, non-blocking status so a usable deck is
+                // never sat behind an indefinite "still thinking" spinner (#57).
+                if model.curationRefiningOvertime {
+                    statusBanner("Showing your picks — still personalizing as more arrive.",
+                                 id: "refiningBanner")
+                } else {
+                    activityBanner("Curating your picks…", id: "gatheringBanner")
+                }
             }
             if let note = model.refinementFallbackNote ?? model.curatorFallbackNote {
                 fallbackNote(note)
@@ -213,6 +220,26 @@ struct CurateView: View {
     private func activityBanner(_ message: String, id: String) -> some View {
         HStack(spacing: CrumbMetrics.Space.s) {
             ProgressView().controlSize(.small)
+            Text(message)
+                .font(CrumbType.caption)
+                .foregroundStyle(CrumbColor.ink2)
+            Spacer(minLength: 0)
+        }
+        .padding(CrumbMetrics.Space.m)
+        .background(CrumbColor.pineSoft, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(message)
+        .accessibilityIdentifier(id)
+    }
+
+    /// A **non-blocking** status banner — a quiet sparkles icon instead of a spinner — for when the
+    /// deck is already usable and only background personalization is still catching up (#57). It
+    /// reads as "you can act now", not "please wait", which is the whole point of the downgrade.
+    private func statusBanner(_ message: String, id: String) -> some View {
+        HStack(spacing: CrumbMetrics.Space.s) {
+            Image(systemName: "sparkles")
+                .foregroundStyle(CrumbColor.ochre)
+                .accessibilityHidden(true)
             Text(message)
                 .font(CrumbType.caption)
                 .foregroundStyle(CrumbColor.ink2)

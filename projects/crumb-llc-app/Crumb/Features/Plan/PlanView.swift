@@ -208,7 +208,10 @@ struct PlanView: View {
             .padding(CrumbMetrics.Space.m)
             .accessibilityElement(children: .combine)
 
-        case .loading:
+        // `.refining` means the first pick already streamed and we've navigated to Curate, so this
+        // Plan row isn't on screen for it — but the switch must stay exhaustive, and "still working"
+        // is the honest read if it ever is briefly visible during the transition.
+        case .loading, .refining:
             HStack(spacing: CrumbMetrics.Space.m) {
                 ProgressView()
                     .controlSize(.small)

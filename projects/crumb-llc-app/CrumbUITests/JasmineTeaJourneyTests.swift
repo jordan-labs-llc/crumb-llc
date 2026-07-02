@@ -97,14 +97,24 @@ final class JasmineTeaJourneyTests: XCTestCase {
         // ---- Step 3: Curate swipe deck (live catalog search + curation) ----
         if el("CurateScreen").waitForExistence(timeout: 90) {
             snap("04-curate-first")
-            // The deck streams raw picks first (merchant blurbs), then *settles* into the ranked,
-            // curator-voiced order once gather + curation finish — the "Curating your picks…"
-            // shimmer (`gatheringBanner`) is up until then. Wait for it to clear so the captured
-            // cards show the curator's per-card voice, not the transient raw catalog description.
+            // #57: once CurateScreen is the accessibility root, the Plan loading surface must be
+            // gone — the two states should never be exposed at once.
+            XCTAssertFalse(app.staticTexts["Scanning shops for the right pieces…"].exists,
+                           "#57: Plan's loading scan row is still exposed after CurateScreen appeared")
+            // The deck streams raw picks first, then *settles* into the ranked, curator-voiced order.
+            // The blocking "Curating your picks…" spinner (`gatheringBanner`) must NOT linger over an
+            // actionable deck: within the settle window it either clears (settled) or downgrades to
+            // the quiet, non-blocking `refiningBanner` (#57). Wait out that window, then assert.
+            let deckReady = app.buttons["addButton"].waitForExistence(timeout: 30)
+            XCTAssertTrue(deckReady, "deck never became actionable")
+            // Poll until the blocking spinner is gone (bounded well above the 12s downgrade window).
             let gathering = el("gatheringBanner")
-            let settleDeadline = Date().addingTimeInterval(75)
-            while gathering.exists && Date() < settleDeadline { usleep(300_000) }
+            let bannerDeadline = Date().addingTimeInterval(30)
+            while gathering.exists && Date() < bannerDeadline { usleep(300_000) }
             snap("04-curate-settled")
+            // #57 core contract: no long-lived blocking spinner over a usable deck.
+            XCTAssertFalse(app.buttons["addButton"].exists && el("gatheringBanner").exists,
+                           "#57: `gatheringBanner` spinner still shown while the deck is actionable")
             // #24 regression guard: the deck controls must carry their OWN ids, not the screen
             // container's — before the fix addButton/skipButton both reported "CurateScreen".
             XCTAssertTrue(app.buttons["addButton"].waitForExistence(timeout: 20),
