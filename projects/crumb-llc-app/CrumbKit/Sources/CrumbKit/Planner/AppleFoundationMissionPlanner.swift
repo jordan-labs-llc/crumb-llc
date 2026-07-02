@@ -181,6 +181,25 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
         // model obeying the instruction. A broad goal keeps its (already capped) complementary parts.
         let cleaned = cleanParts(draft.parts)
         let parts = draft.isSingleItem ? Array(cleaned.prefix(1)) : cleaned
+
+        // Sports player-kit floor (#68): a recognized sport-gear goal is a multi-part safety/fit kit,
+        // never one product. When the model under-decomposes it — single-item framing, or fewer than
+        // two parts — reconcile to the deterministic player-kit expansion (with its stated, editable
+        // assumption) so a high-school lacrosse kit reaches the deck as a real kit, not a lone stick.
+        // Only fires for a recognized sport, so every other goal keeps the model's own decomposition.
+        if let kit = RuleBasedMissionPlanner.sportsKit(for: trimmedGoal),
+           draft.isSingleItem || parts.count < 2 {
+            let task = RuleBasedMissionPlanner.makeTask(
+                goal: trimmedGoal,
+                title: cleanedTitle(draft.title, goal: trimmedGoal),
+                subtitle: cleanedSubtitle(draft.subtitle, goal: trimmedGoal),
+                note: kit.note,
+                parts: kit.parts,
+                isSingleItem: false
+            )
+            return PlannedMission(task: task, tier: tier, decline: nil)
+        }
+
         guard !parts.isEmpty else {
             // The model said "shoppable" but gave nothing usable — fall back to the single
             // generic query, while keeping the (proven) model tier in the report.

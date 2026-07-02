@@ -28,6 +28,21 @@ public struct RuleBasedMissionPlanner: MissionPlanner {
         guard isShoppable(trimmed) else {
             return PlannedMission(task: nil, tier: .ruleBased(reason), decline: declineMessage)
         }
+        // Sports player-kit expansion (#68): a recognized sport-gear goal decomposes into the
+        // concrete safety/fit parts a player needs, with a stated default assumption the user can
+        // edit on the plan screen — never a single generic query that reads as one product.
+        if let kit = sportsKit(for: trimmed) {
+            let task = makeTask(
+                goal: trimmed,
+                title: self.title(from: trimmed),
+                subtitle: defaultSubtitle,
+                note: kit.note,
+                parts: kit.parts,
+                isSingleItem: false
+            )
+            return PlannedMission(task: task, tier: .ruleBased(reason), decline: nil)
+        }
+
         let title = self.title(from: trimmed)
         let task = makeTask(
             goal: trimmed,
@@ -39,6 +54,58 @@ public struct RuleBasedMissionPlanner: MissionPlanner {
         )
         return PlannedMission(task: task, tier: .ruleBased(reason), decline: nil)
     }
+
+    // MARK: - Sports player-kit expansion (#68)
+
+    /// A deterministic sport player-kit decomposition: when a goal reads as shopping for a
+    /// recognized sport's **gear/kit** (not a single piece), expand it into the concrete
+    /// safety/fit parts a player needs, plus a stated default assumption (e.g. high-school field
+    /// player) the user can revise by editing the plan. Returns `nil` for any non-sports-kit goal,
+    /// so every other mission is untouched. Pure — unit-tested.
+    ///
+    /// Only fires when the goal carries a **kit/gear intent** ("lacrosse gear", "lacrosse
+    /// equipment", "lacrosse kit"), so a single-item goal like "lacrosse stick" or "lacrosse ball"
+    /// is left to the normal single-query path.
+    static func sportsKit(for goal: String) -> (note: String, parts: [(label: String, query: String)])? {
+        let lowered = clean(query: goal).lowercased()
+        guard !lowered.isEmpty, mentionsKitIntent(lowered) else { return nil }
+        for kit in sportsKits where lowered.contains(kit.term) {
+            return (note: kit.assumption, parts: kit.parts)
+        }
+        return nil
+    }
+
+    /// Whether the goal expresses a *kit* intent (a set of complementary things) rather than one
+    /// item — the gate that keeps "lacrosse stick" (a single piece) out of the kit expansion.
+    static func mentionsKitIntent(_ loweredGoal: String) -> Bool {
+        let cues = ["gear", "equipment", "kit", "supplies", "essentials", "loadout", "set up", "outfit"]
+        return cues.contains { loweredGoal.contains($0) }
+    }
+
+    private struct SportKit {
+        let term: String
+        let assumption: String
+        let parts: [(label: String, query: String)]
+    }
+
+    /// The recognized sports and their default player kits. Deliberately small and extensible —
+    /// lacrosse is the validated scenario (#68); more sports slot in as their category lists are
+    /// confirmed. Each kit is capped at ``maxParts`` and leads with the safety/fit-critical pieces.
+    private static let sportsKits: [SportKit] = [
+        SportKit(
+            term: "lacrosse",
+            assumption: "Assuming a high-school field player. Reword or trim any part if this is for "
+                + "a goalie or girls' lacrosse — then I'll go find each piece.",
+            parts: [
+                (label: "Lacrosse stick", query: "lacrosse stick complete"),
+                (label: "Helmet", query: "lacrosse helmet"),
+                (label: "Gloves", query: "lacrosse gloves"),
+                (label: "Shoulder pads", query: "lacrosse shoulder pads"),
+                (label: "Arm pads", query: "lacrosse arm pads"),
+                (label: "Cleats", query: "lacrosse cleats"),
+            ]
+        ),
+    ]
 
     /// A deterministic single-item judgment for the no-model floor — the floor makes every goal one
     /// part, so part count can't tell a lone product from an under-decomposed kit; this reads the

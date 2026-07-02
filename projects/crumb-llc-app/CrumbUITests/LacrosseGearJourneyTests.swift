@@ -89,7 +89,15 @@ final class LacrosseGearJourneyTests: XCTestCase {
 
         // ---- Plan editor ----
         if el("PlanScreen").waitForExistence(timeout: 60) {
+            usleep(600_000)
             snap("03-plan")
+            // #68 contract: "premium lacrosse gear" is a player kit, not one product — the plan must
+            // be framed as a kit (the "Curate my kit" CTA), not the single-item "Find my options".
+            // The planner (rule floor, or the model reconciled to the sports-kit floor when it
+            // under-decomposes) expands it into concrete safety/fit parts.
+            XCTAssertTrue(app.buttons["Curate my kit"].waitForExistence(timeout: 12)
+                          || el("curateButton").label.localizedCaseInsensitiveContains("kit"),
+                          "#68: lacrosse gear should plan as a kit ('Curate my kit'), not a single-item search")
             let curate = el("curateButton")
             let curateByID = curate.waitForExistence(timeout: 12)
             waitTap(curateByID ? curate : app.buttons["Curate my kit"], 12, "curateButton")

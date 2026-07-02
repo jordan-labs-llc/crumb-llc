@@ -123,6 +123,67 @@ struct MissionPlannerTests {
         )
     }
 
+    // MARK: Sports player-kit expansion (#68)
+
+    @Test("A lacrosse gear goal expands into a multi-part player kit with a stated assumption")
+    func sportsKitExpandsLacrosse() async {
+        let planned = await RuleBasedMissionPlanner().plan(goal: "buying premium lacrosse gear",
+                                                           profile: SeedData.defaultTasteProfile)
+        let task = planned.task
+        #expect(task?.isSingleItem == false)                       // a kit, not a lone product
+        #expect((task?.plan.count ?? 0) >= 4)                      // several concrete gear parts
+        #expect(task?.plan.contains("Helmet") == true)
+        #expect(task?.plan.contains("Gloves") == true)
+        // Search queries are lacrosse-specific so the broker finds real player gear.
+        #expect(task?.searchQueries.contains("lacrosse helmet") == true)
+        // The curator note states the editable default assumption.
+        #expect(task?.curatorNote.localizedCaseInsensitiveContains("field player") == true)
+    }
+
+    @Test("sportsKit fires on a gear/kit intent but not on a single-piece goal")
+    func sportsKitGating() {
+        #expect(RuleBasedMissionPlanner.sportsKit(for: "premium lacrosse gear") != nil)
+        #expect(RuleBasedMissionPlanner.sportsKit(for: "high school lacrosse equipment") != nil)
+        // A single piece — no kit intent — is left to the normal single-query path.
+        #expect(RuleBasedMissionPlanner.sportsKit(for: "lacrosse stick") == nil)
+        #expect(RuleBasedMissionPlanner.sportsKit(for: "lacrosse ball") == nil)
+        // A non-sports goal is untouched.
+        #expect(RuleBasedMissionPlanner.sportsKit(for: "premium jasmine tea") == nil)
+    }
+
+    @Test("The model planner reconciles an under-decomposed lacrosse draft to the player-kit floor (#68)")
+    func reconcileUnderDecomposedSportsKit() {
+        // The observed live failure: the model framed "premium lacrosse gear" as a single "stick".
+        let draft = MissionDraft(
+            isShoppable: true, isSingleItem: true, title: "Premium lacrosse gear",
+            subtitle: "For the season", note: "A steady pick.",
+            parts: [PlanPartDraft(label: "Lacrosse stick", query: "lacrosse stick")],
+            decline: ""
+        )
+        let task = AppleFoundationMissionPlanner.mission(from: draft, goal: "buying premium lacrosse gear", tier: .onDevice).task
+        #expect(task?.isSingleItem == false)                       // reconciled to a kit
+        #expect((task?.plan.count ?? 0) >= 4)                      // real safety/fit parts
+        #expect(task?.plan.contains("Helmet") == true)
+        #expect(task?.curatorNote.localizedCaseInsensitiveContains("field player") == true)
+    }
+
+    @Test("A model draft that already decomposes a kit well is left as the model wrote it")
+    func reconcileKeepsGoodModelKit() {
+        // Two solid parts, kit framing — no under-decomposition, so no sports-kit override.
+        let draft = MissionDraft(
+            isShoppable: true, isSingleItem: false, title: "Lacrosse gear",
+            subtitle: "", note: "Model note.",
+            parts: [
+                PlanPartDraft(label: "Attack shaft", query: "lacrosse attack shaft"),
+                PlanPartDraft(label: "Head", query: "lacrosse head"),
+            ],
+            decline: ""
+        )
+        let task = AppleFoundationMissionPlanner.mission(from: draft, goal: "lacrosse gear", tier: .onDevice).task
+        #expect(task?.plan == ["Attack shaft", "Head"])            // the model's own decomposition
+        #expect(task?.curatorNote == "Model note.")
+    }
+
     // MARK: Reconcile (the pure fold of a model draft → mission)
 
     @Test("A full valid draft folds into a clean, searchable mission")
