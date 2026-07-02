@@ -129,7 +129,7 @@ public struct AppleFoundationCurator: CuratorEngine {
     /// ``RefinementClause``), so the model honors it holistically rather than us post-processing its
     /// order. `model` is whichever tier proved available; `deepReasoning` lifts both phases to
     /// `.reasoningLevel(.deep)` for the server tier.
-    private func rankAndVoice<M: LanguageModel>(
+    private func rankAndVoice<M: LanguageModel & ContextWindowProviding>(
         _ baseline: [Product],
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
@@ -154,7 +154,7 @@ public struct AppleFoundationCurator: CuratorEngine {
     ///
     /// Throws only when the model truly can't rank (every first-level chunk call fails) — the same
     /// tier-probe contract as the old single call, so the caller still cascades to the floor.
-    private func modelRankedOrder<M: LanguageModel>(
+    private func modelRankedOrder<M: LanguageModel & ContextWindowProviding>(
         _ baseline: [Product],
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
@@ -164,8 +164,9 @@ public struct AppleFoundationCurator: CuratorEngine {
         deepReasoning: Bool
     ) async throws -> [Product] {
         // Cap what we consider so a huge live deck doesn't spawn unbounded chunk calls; products
-        // past the cap keep their deterministic order via the reconciliation tail.
-        let head = Array(baseline.prefix(Self.rankDeckCap))
+        // past the cap keep their deterministic order via the reconciliation tail. The cap is
+        // derived from the model's real context window (#37) — larger on newer hardware.
+        let head = Array(baseline.prefix(TokenBudget(model: model).rankDeckCap))
         let ordered = try await tournamentRank(head, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning)
         return Self.reconcile(modelIDs: ordered.map(\.id), candidates: baseline)
     }
@@ -175,7 +176,7 @@ public struct AppleFoundationCurator: CuratorEngine {
     /// each promoted, and the promoted field ranked again — until it fits one chunk. A chunk whose
     /// call fails keeps its deterministic input order; a transient failure in a *reduce* round keeps
     /// the promoted order rather than discarding partial work. Only an all-fail first split throws.
-    private func tournamentRank<M: LanguageModel>(
+    private func tournamentRank<M: LanguageModel & ContextWindowProviding>(
         _ pool: [Product],
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
@@ -184,12 +185,15 @@ public struct AppleFoundationCurator: CuratorEngine {
         model: M,
         deepReasoning: Bool
     ) async throws -> [Product] {
-        guard pool.count > Self.rankChunkSize else {
+        // Chunk/advance sizes are derived from the model's real context window (#37): a bigger window
+        // ranks bigger chunks, so a full deck converges in fewer model calls.
+        let budget = TokenBudget(model: model)
+        guard pool.count > budget.rankChunkSize else {
             return try await rankOnce(pool, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning)
         }
-        let chunks = Self.chunked(pool, size: Self.rankChunkSize)
+        let chunks = Self.chunked(pool, size: budget.rankChunkSize)
         let ranked = try await mapRankChunks(chunks, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning)
-        let (winners, losers) = Self.advance(ranked, keep: Self.rankAdvancePerChunk)
+        let (winners, losers) = Self.advance(ranked, keep: budget.rankAdvancePerChunk)
         let top = (try? await tournamentRank(winners, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning)) ?? winners
         return top + losers
     }
@@ -197,7 +201,7 @@ public struct AppleFoundationCurator: CuratorEngine {
     /// Ranks the chunks concurrently. A chunk whose call fails keeps its deterministic input order,
     /// so one transient failure doesn't sink the rank; but if EVERY chunk fails the model can't rank
     /// at all → throw so ``curate(_:for:mission:refinement:recipient:)`` falls back to the floor.
-    private func mapRankChunks<M: LanguageModel>(
+    private func mapRankChunks<M: LanguageModel & ContextWindowProviding>(
         _ chunks: [[Product]],
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
@@ -225,7 +229,7 @@ public struct AppleFoundationCurator: CuratorEngine {
     /// ordered best-first, reconciled so every product is present exactly once even if the model
     /// omits or repeats an id. Throws when the call fails or (for a multi-item set) returns no usable
     /// ids. The response bound + context policy live on the session profile (see ``rankSession``).
-    private func rankOnce<M: LanguageModel>(
+    private func rankOnce<M: LanguageModel & ContextWindowProviding>(
         _ products: [Product],
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
@@ -290,7 +294,7 @@ public struct AppleFoundationCurator: CuratorEngine {
     /// failure just keeps that card's rule-based rationale. Each card gets its own fresh session
     /// (no shared transcript — products must not bleed into one another's voice), built from the
     /// same voice profile. Never throws.
-    private func voiceAll<M: LanguageModel>(
+    private func voiceAll<M: LanguageModel & ContextWindowProviding>(
         _ products: [Product],
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
@@ -350,37 +354,25 @@ public struct AppleFoundationCurator: CuratorEngine {
 
     // MARK: Sessions (dynamic instructions + profile)
 
-    /// How many candidates we actually send to the model to rank. A guard rail on context and
-    /// latency for the on-device 3B model; products past the cap keep their deterministic
-    /// order via the reconciliation tail (see ``reconcile(modelIDs:candidates:)``).
-    static let rankDeckCap = 25
-
-    /// Map-reduce ranking (see ``modelRankedOrder``): the largest set sent to the model in one
-    /// ranking call. Small enough to stay well under the on-device 4096-token context — a whole-deck
-    /// call overflowed it and dropped the deck to the deterministic floor; a chunk this size ranks
-    /// reliably (proven on the sim).
-    static let rankChunkSize = 6
-    /// How many of each ranked chunk advance to the next tournament round. Strictly less than
-    /// ``rankChunkSize`` so the promoted field always shrinks and the tournament converges; 2 keeps a
-    /// strong chunk's runner-up in contention rather than crowning only its winner.
-    static let rankAdvancePerChunk = 2
-
-    /// Curator tuning — chosen per phase. Ranking is a judgment task that wants a stable order, so
-    /// it runs cooler; voicing is short creative copy, so it runs warmer. The response bounds keep
-    /// each generation well under the 4096-token window (see ``CrumbContext``) without truncating a
-    /// real ID list or a two-sentence rationale.
+    /// The deck cap, ranking chunk/advance sizes, and per-phase response bounds are no longer fixed
+    /// constants: they're derived from the live model's real context window via ``TokenBudget`` (#37),
+    /// reproducing the historical hand-tuned values (deck 25 / chunk 6 / advance 2 / rank 512 /
+    /// voice 200) on a 4096-token device and scaling up on a larger window. See ``modelRankedOrder``,
+    /// ``tournamentRank``, and the session builders below.
+    ///
+    /// Curator temperatures stay fixed — chosen per phase, independent of the window. Ranking is a
+    /// judgment task that wants a stable order, so it runs cooler; voicing is short creative copy, so
+    /// it runs warmer.
     ///
     /// `.reasoningLevel` is applied ONLY on the deep-reasoning (Private Cloud Compute) tier: the
     /// on-device `SystemLanguageModel` does not support reasoning and *throws* if a level is set, so
     /// the on-device profile omits it and leans on temperature alone (learned at runtime on the sim).
     static let rankTemperature = 0.45
     static let voiceTemperature = 0.7
-    static let rankMaxResponseTokens = 512
-    static let voiceMaxResponseTokens = 200
 
     /// Builds the ranking session: ``CuratorRankInstructions`` in a profile that selects the tier's
     /// model and declares the ranking tuning + context policy.
-    static func rankSession<M: LanguageModel>(
+    static func rankSession<M: LanguageModel & ContextWindowProviding>(
         profile: TasteProfile,
         mission: ShoppingTask,
         refinement: RefinementContext?,
@@ -392,7 +384,7 @@ public struct AppleFoundationCurator: CuratorEngine {
         let base = LanguageModelSession.Profile { instructions }
             .model(model)
             .temperature(rankTemperature)
-            .maximumResponseTokens(rankMaxResponseTokens)
+            .maximumResponseTokens(TokenBudget(model: model).rankMaxResponseTokens)
             .historyTransform { CrumbContext.trimmed($0) }
             .transcriptErrorHandlingPolicy(.revertTranscript)
         // Reasoning is a server-tier capability only — adding it on-device throws.
@@ -404,7 +396,7 @@ public struct AppleFoundationCurator: CuratorEngine {
 
     /// Builds a per-product voice session: ``CuratorVoiceInstructions`` in a profile that selects
     /// the tier's model and declares the voice tuning + context policy.
-    static func voiceSession<M: LanguageModel>(
+    static func voiceSession<M: LanguageModel & ContextWindowProviding>(
         profile: TasteProfile,
         mission: ShoppingTask,
         refinement: RefinementContext?,
@@ -416,7 +408,7 @@ public struct AppleFoundationCurator: CuratorEngine {
         let base = LanguageModelSession.Profile { instructions }
             .model(model)
             .temperature(voiceTemperature)
-            .maximumResponseTokens(voiceMaxResponseTokens)
+            .maximumResponseTokens(TokenBudget(model: model).voiceMaxResponseTokens)
             .historyTransform { CrumbContext.trimmed($0) }
             .transcriptErrorHandlingPolicy(.revertTranscript)
         // Reasoning is a server-tier capability only — adding it on-device throws.

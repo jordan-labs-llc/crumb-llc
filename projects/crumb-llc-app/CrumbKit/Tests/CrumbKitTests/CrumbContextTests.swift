@@ -57,7 +57,9 @@ struct CrumbContextTests {
     @Test("Default history turns is the documented budget")
     func defaultBudget() {
         #expect(CrumbContext.defaultHistoryTurns == 8)
-        #expect(CrumbContext.onDeviceContextTokens == 4096)
+        // The window fallback is the documented floor (#37) — the only surviving 4096 constant.
+        #expect(CrumbContext.onDeviceContextTokens == TokenBudget.fallbackContextWindow)
+        #expect(TokenBudget.fallbackContextWindow == 4096)
         #expect(CrumbContext.defaultToolTurns == 4)
     }
 
