@@ -25,6 +25,57 @@ struct MissionPlannerTests {
         #expect(planned.tier.fallbackNote == nil)
     }
 
+    // MARK: Single-product mode (#56)
+
+    @Test("isSingleItem: a concrete product goal is single; outfitting a space/activity is a kit")
+    func isSingleItemHeuristic() {
+        // Single specific products.
+        for goal in ["premium jasmine tea", "a cast iron skillet", "wool beanie", "gooseneck kettle"] {
+            #expect(RuleBasedMissionPlanner.isSingleItem(goal: goal), "\(goal) should be single-item")
+        }
+        // Outfitting a space or activity — a multi-part kit.
+        for goal in [
+            "set up my pour-over corner", "pack me for a rainy weekend hike",
+            "make my desk feel calm", "cozy reading nook", "everything for a new nursery",
+        ] {
+            #expect(!RuleBasedMissionPlanner.isSingleItem(goal: goal), "\(goal) should be a kit")
+        }
+    }
+
+    @Test("The rule-based floor tags a single-product goal, and leaves a kit goal untagged")
+    func ruleBasedSetsSingleItem() async {
+        let profile = SeedData.defaultTasteProfile
+        let single = await RuleBasedMissionPlanner().plan(goal: "premium jasmine tea", profile: profile)
+        #expect(single.task?.isSingleItem == true)
+        let kit = await RuleBasedMissionPlanner().plan(goal: "set up my pour-over corner", profile: profile)
+        #expect(kit.task?.isSingleItem == false)
+    }
+
+    @Test("Seed missions are multi-part kits, never single-product")
+    func seedMissionsAreKits() {
+        for task in SeedData.missions {
+            #expect(!task.isSingleItem, "\(task.id) should default to kit framing")
+        }
+    }
+
+    @Test("ShoppingTask round-trips isSingleItem, and legacy snapshots without the key decode as false")
+    func shoppingTaskCodableBackCompat() throws {
+        let task = RuleBasedMissionPlanner.makeTask(
+            goal: "premium jasmine tea", title: "Premium Jasmine Tea", subtitle: "s", note: "n",
+            parts: [(label: "Premium Jasmine Tea", query: "premium jasmine tea")], isSingleItem: true
+        )
+        let roundTripped = try JSONDecoder().decode(ShoppingTask.self, from: JSONEncoder().encode(task))
+        #expect(roundTripped.isSingleItem == true)
+        #expect(roundTripped == task)
+
+        // A snapshot persisted before the field existed omits the key entirely → decodes as false.
+        let legacy = """
+        {"id":"goal.x","title":"X","subtitle":"s","plan":["X"],"curatorNote":"n","accentHex":1,"candidateIDs":[],"searchQueries":["x"]}
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(ShoppingTask.self, from: legacy)
+        #expect(decoded.isSingleItem == false)
+    }
+
     @Test("An empty or too-short goal is not shoppable and carries a decline message")
     func ruleBasedEmptyDeclines() async {
         for goal in ["", "   ", "x"] {

@@ -356,6 +356,11 @@ final class AppModel {
 
     var accentHex: UInt32 { selectedTask?.accentHex ?? 0x1C4B43 }
 
+    /// True when the current mission is a direct single-product search (e.g. `premium jasmine tea`)
+    /// rather than a multi-part kit — the journey then frames Plan/Curate/Cart as shortlist-and-
+    /// compare instead of kit assembly (#56). Derived from the planner's `isSingleItem` signal.
+    var isSingleProductMission: Bool { selectedTask?.isSingleItem ?? false }
+
     func isInKit(_ product: Product) -> Bool {
         kit.contains { $0.product.id == product.id }
     }
@@ -532,7 +537,10 @@ final class AppModel {
     /// Curate, bypassing onboarding and the Plan step. `simctl` can't tap, so headless deep
     /// screens are reached this way (driven by `CRUMB_SCREENSHOT` in `CrumbApp`/`RootView`).
     func presentCurateForScreenshot(missionID: String) async {
-        let task = missions.first { $0.id == missionID } ?? SeedData.hike
+        var task = missions.first { $0.id == missionID } ?? SeedData.hike
+        // `CRUMB_SINGLE=1` flips a seed mission into single-product framing so the shortlist copy
+        // (#56) can be captured headlessly — the mock catalog has no tea, so we reuse a seed deck.
+        if ProcessInfo.processInfo.environment["CRUMB_SINGLE"] == "1" { task = task.settingSingleItem(true) }
         selectedTask = task
         kit.removeAll()
         candidates = []
@@ -554,8 +562,17 @@ final class AppModel {
     /// rich multi-part plan), so the plan-editor surface can be captured headlessly. The live
     /// composer can't be typed into via `simctl`; this stands in for a freshly planned mission.
     func presentPlanForScreenshot(missionID: String) {
-        let task = missions.first { $0.id == missionID } ?? SeedData.hike
+        var task = missions.first { $0.id == missionID } ?? SeedData.hike
+        if ProcessInfo.processInfo.environment["CRUMB_SINGLE"] == "1" { task = task.settingSingleItem(true) }
         enterPlan(with: task)
+    }
+
+    /// Screenshot hook: deal a mission's deck, shortlist a few cards, and open the Cart — so the
+    /// cart's framing (kit vs single-product shortlist, #56) can be captured headlessly.
+    func presentCartForScreenshot(missionID: String) async {
+        await presentCurateForScreenshot(missionID: missionID)
+        for product in deck.prefix(3) { accept(product) }
+        openCart()
     }
 
     /// Screenshot hook: deal a mission's deck then run a canned `refinement` through the (sim's

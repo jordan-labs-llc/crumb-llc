@@ -9,6 +9,9 @@ import CrumbKit
 /// `accessibilityReduceMotion`.
 struct KitTray: View {
     let items: [KitItem]
+    /// When true the mission is a direct single-product search, so the tray reads as a shortlist to
+    /// compare rather than a kit to assemble (#56).
+    var isSingleProduct: Bool = false
     /// Called when the tray is tapped to open the cart.
     let onOpen: () -> Void
 
@@ -79,7 +82,7 @@ struct KitTray: View {
 
     private var summary: some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(items.isEmpty ? "Your kit" : "^[\(items.count) item](inflect: true)")
+            Text(titleLine)
                 .font(CrumbType.pill)
                 .foregroundStyle(.white)
             Text(secondaryLine)
@@ -100,8 +103,17 @@ struct KitTray: View {
         }
     }
 
+    /// Empty: an invitation; filled: a live count. Shortlist wording for a single-product search,
+    /// kit wording otherwise (#56).
+    private var titleLine: String {
+        if items.isEmpty { return isSingleProduct ? "Your shortlist" : "Your kit" }
+        return isSingleProduct
+            ? "^[\(items.count) option](inflect: true)"
+            : "^[\(items.count) item](inflect: true)"
+    }
+
     private var secondaryLine: String {
-        if items.isEmpty { return "Swipe right to add" }
+        if items.isEmpty { return isSingleProduct ? "Swipe right to shortlist" : "Swipe right to add" }
         let shops = shopCount == 1 ? "1 shop" : "\(shopCount) shops"
         return shops
     }
@@ -117,9 +129,13 @@ struct KitTray: View {
     }
 
     private var accessibilityLabel: String {
-        guard !items.isEmpty else { return "Your kit is empty" }
+        guard !items.isEmpty else { return isSingleProduct ? "Your shortlist is empty" : "Your kit is empty" }
         let price = subtotal.formatted(.currency(code: "USD"))
         let shops = shopCount == 1 ? "1 shop" : "\(shopCount) shops"
+        if isSingleProduct {
+            let count = items.count == 1 ? "1 option" : "\(items.count) options"
+            return "Shortlist, \(count) from \(shops), subtotal \(price)"
+        }
         let count = items.count == 1 ? "1 item" : "\(items.count) items"
         return "Kit, \(count) from \(shops), subtotal \(price)"
     }

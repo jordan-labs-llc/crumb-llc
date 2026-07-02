@@ -38,6 +38,7 @@ struct RootView: View {
             let mission = env["CRUMB_MISSION"] ?? "coffee"
             switch env["CRUMB_SCREENSHOT"] {
             case "curate": await model.presentCurateForScreenshot(missionID: mission)
+            case "cart": await model.presentCartForScreenshot(missionID: mission)
             case "kit": await model.presentFullKitForScreenshot(missionID: mission)
             case "plan": model.presentPlanForScreenshot(missionID: mission)
             case "refine":

@@ -42,10 +42,12 @@ struct CartView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: CrumbMetrics.Space.xs) {
-            Text("Your kit")
+            Text(model.isSingleProductMission ? "Your shortlist" : "Your kit")
                 .font(CrumbType.title)
                 .foregroundStyle(CrumbColor.ink)
-            Text("^[\(cart.items.count) item](inflect: true) · ^[\(cart.shops.count) shop](inflect: true)")
+            Text(model.isSingleProductMission
+                ? "Comparing ^[\(cart.items.count) option](inflect: true) · ^[\(cart.shops.count) shop](inflect: true)"
+                : "^[\(cart.items.count) item](inflect: true) · ^[\(cart.shops.count) shop](inflect: true)")
                 .font(CrumbType.callout)
                 .foregroundStyle(CrumbColor.ink2)
         }
@@ -67,7 +69,7 @@ struct CartView: View {
     private var totalBar: some View {
         HStack {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Kit subtotal")
+                Text(model.isSingleProductMission ? "Shortlist subtotal" : "Kit subtotal")
                     .font(CrumbType.caption)
                     .foregroundStyle(CrumbColor.ink2)
                 Text(cart.subtotal, format: .currency(code: "USD"))
@@ -76,7 +78,7 @@ struct CartView: View {
                     .monospacedDigit()
             }
             Spacer()
-            Text("Continue per shop above")
+            Text(model.isSingleProductMission ? "Pick one to check out" : "Continue per shop above")
                 .font(CrumbType.caption)
                 .foregroundStyle(CrumbColor.ink3)
         }

@@ -34,9 +34,32 @@ public struct RuleBasedMissionPlanner: MissionPlanner {
             title: title,
             subtitle: defaultSubtitle,
             note: curatorNote(forParts: [title]),
-            parts: [(label: title, query: clean(query: trimmed))]
+            parts: [(label: title, query: clean(query: trimmed))],
+            isSingleItem: isSingleItem(goal: trimmed)
         )
         return PlannedMission(task: task, tier: .ruleBased(reason), decline: nil)
+    }
+
+    /// A deterministic single-item judgment for the no-model floor — the floor makes every goal one
+    /// part, so part count can't tell a lone product from an under-decomposed kit; this reads the
+    /// goal text instead. It mirrors the model's altitude guide (see ``AppleFoundationMissionPlanner``
+    /// `isSingleItem` @Guide): outfitting a *space* or *activity* is a kit; a short concrete noun
+    /// phrase is one product. Pure — unit-tested. The model path uses the model's own judgment.
+    static func isSingleItem(goal: String) -> Bool {
+        let lowered = clean(query: goal).lowercased()
+        guard !lowered.isEmpty else { return false }
+        // Cues that the goal outfits a space/activity rather than naming one product.
+        let kitCues = [
+            "set up", "setup", "set-up", "pack ", "outfit", "build ", "make my", "make me",
+            "make the", "plan ", "prep ", "prepare", "stock ", "everything for", "essentials for",
+            "gear for", "kit ", " kit", "corner", "nook", "station", "trip", "weekend", "getaway",
+            "office", "desk", "kitchen", "nursery", "wardrobe", "closet", "for a ", "for my ",
+            "for the ", "for our ",
+        ]
+        if kitCues.contains(where: lowered.contains) { return false }
+        // Otherwise a short, concrete noun phrase reads as one product to buy.
+        let wordCount = lowered.split(whereSeparator: \.isWhitespace).count
+        return wordCount <= 5
     }
 
     // MARK: - Shared pure helpers (used by AppleFoundationMissionPlanner too)
@@ -134,7 +157,8 @@ public struct RuleBasedMissionPlanner: MissionPlanner {
         title: String,
         subtitle: String,
         note: String,
-        parts: [(label: String, query: String)]
+        parts: [(label: String, query: String)],
+        isSingleItem: Bool = false
     ) -> ShoppingTask {
         ShoppingTask(
             id: missionID(for: goal),
@@ -144,7 +168,8 @@ public struct RuleBasedMissionPlanner: MissionPlanner {
             curatorNote: note,
             accentHex: accentHex(for: goal),
             candidateIDs: [],
-            searchQueries: parts.map(\.query)
+            searchQueries: parts.map(\.query),
+            isSingleItem: isSingleItem
         )
     }
 }
