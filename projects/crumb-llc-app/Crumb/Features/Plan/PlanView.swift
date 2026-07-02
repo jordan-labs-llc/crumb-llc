@@ -54,13 +54,18 @@ struct PlanView: View {
 
     private func header(for task: ShoppingTask) -> some View {
         VStack(alignment: .leading, spacing: CrumbMetrics.Space.xs) {
+            // Long generated titles must wrap down the page, never truncate or ride up into the
+            // header — `fixedSize` lets the text take all the vertical room it needs (#66).
             Text(task.title)
                 .font(CrumbType.title)
                 .foregroundStyle(CrumbColor.ink)
+                .fixedSize(horizontal: false, vertical: true)
             Text(task.subtitle)
                 .font(CrumbType.callout)
                 .foregroundStyle(CrumbColor.ink2)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: Editable parts
