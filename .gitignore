@@ -5,6 +5,9 @@
 Icon
 
 # ---- Xcode ----
+# The .xcodeproj is GENERATED from project.yml by XcodeGen. Never commit it.
+#   brew install xcodegen && projects/crumb-llc-app/scripts/bootstrap.sh
+*.xcodeproj/
 xcuserdata/
 *.xcuserstate
 *.xcuserdatad

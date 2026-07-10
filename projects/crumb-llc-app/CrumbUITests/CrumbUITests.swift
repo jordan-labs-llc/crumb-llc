@@ -1,6 +1,6 @@
 import XCTest
 
-/// One UI smoke test: the app launches and lands on the Missions screen.
+/// One UI smoke test: a clean install launches into onboarding and exposes its primary actions.
 final class CrumbUITests: XCTestCase {
 
     override func setUp() {
@@ -8,15 +8,14 @@ final class CrumbUITests: XCTestCase {
     }
 
     @MainActor
-    func testLaunchesToMissions() {
+    func testCleanInstallLaunchesToOnboarding() {
         let app = XCUIApplication()
+        app.launchEnvironment["CRUMB_SCREENSHOT"] = "onboarding"
         app.launch()
 
-        // The Missions greeting is the landing copy on first screen.
-        let greeting = app.staticTexts["What are we shopping for?"]
-        XCTAssertTrue(
-            greeting.waitForExistence(timeout: 15),
-            "Expected the app to launch onto the Missions screen."
-        )
+        XCTAssertTrue(app.buttons["onboardingSkip"].waitForExistence(timeout: 20),
+                      "A clean install did not reach onboarding.")
+        XCTAssertTrue(app.buttons["onboardingNext"].exists,
+                      "Onboarding launched without its primary next action.")
     }
 }

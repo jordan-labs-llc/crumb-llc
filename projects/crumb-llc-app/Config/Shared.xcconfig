@@ -1,0 +1,32 @@
+// Shared.xcconfig
+// Settings common to every configuration of the Crumb project.
+// Wired in via `configFiles:` in project.yml; XcodeGen attaches it at the project level.
+//
+// PRECEDENCE: an inline build setting in the generated project.pbxproj beats a value set
+// here. project.yml's `settings.base` becomes inline settings — so anything defined in
+// this file must NOT also appear in `settings.base`, or this file is silently ignored.
+//
+// Deployment targets are NOT here: XcodeGen owns them via `options.deploymentTarget`,
+// because it needs them to compute supported destinations.
+
+// ---- Signing -------------------------------------------------------------
+// Team ID for Jordan Labs, LLC. Not a secret: it ships inside every .ipa.
+DEVELOPMENT_TEAM = 8DAZP53668
+CODE_SIGN_STYLE = Automatic
+
+// Deliberately NOT setting CODE_SIGN_IDENTITY. Automatic signing resolves
+// "Apple Development" for debug builds and "Apple Distribution" for archives.
+// Pinning it (e.g. to the legacy "iPhone Developer") breaks TestFlight archives.
+//
+// Signing is ENABLED. It was previously disabled project-wide via
+// CODE_SIGNING_ALLOWED=NO / CODE_SIGNING_REQUIRED=NO in project.yml, which makes it
+// impossible to produce a distributable archive. CI that has no signing certificate
+// should opt out per-invocation instead:
+//   xcodebuild ... CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+
+// ---- Versioning ----------------------------------------------------------
+// MARKETING_VERSION is the user-visible version (CFBundleShortVersionString).
+// CURRENT_PROJECT_VERSION is the build number (CFBundleVersion) and must be unique and
+// strictly increasing for every upload to App Store Connect. Bump it before each archive.
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
