@@ -70,7 +70,13 @@ xcodebuild -scheme Crumb -destination 'platform=iOS Simulator,name=iPhone 17' bu
 xcodebuild -scheme Crumb -destination 'platform=visionOS Simulator,name=Apple Vision Pro' build
 ```
 
-The app launches to **Missions** with seed tasks (or a free-text goal). Tap one → **Plan**
+For internal TestFlight, use the tested release workflow in
+[`docs/testflight.md`](docs/testflight.md). `scripts/testflight.sh preflight` runs the complete
+scheme on an iOS 27 simulator; `archive` creates and validates the signed iOS archive; `upload`
+uses the internal-only export policy.
+
+On a clean install, the app launches to **Onboarding**, then **Missions** with seed tasks (or a
+free-text goal). Tap one → **Plan**
 (curator note + editable parts list) → **Curate** (swipe the deck; the **KitTray** fills;
 talk back to refine) → **Cart** (grouped by shop, "Continue to {shop}" per merchant). The
 header opens **Taste Profile**, **Recipients**, and **History**. The "Ask with Siri" row

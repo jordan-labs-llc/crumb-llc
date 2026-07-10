@@ -10,8 +10,10 @@
 *.entitlements text
 *.strings  text
 
-# Xcode project files — merge carefully, mark as generated for diffs.
-*.pbxproj  text -diff merge=union linguist-generated=true
+# Xcode project files are GENERATED from project.yml by XcodeGen and are not tracked
+# (see .gitignore). No merge driver is declared for *.pbxproj on purpose: `merge=union`
+# concatenates both sides of a conflict, which silently produces duplicate objects and a
+# corrupt project file. If a .pbxproj is ever committed again, let conflicts fail loudly.
 project.yml text
 
 # Docs / config

@@ -1,0 +1,10 @@
+// Release.xcconfig
+#include "Shared.xcconfig"
+
+SWIFT_OPTIMIZATION_LEVEL = -O
+SWIFT_COMPILATION_MODE = wholemodule
+ONLY_ACTIVE_ARCH = NO
+VALIDATE_PRODUCT = YES
+
+// dSYMs are required for symbolicated TestFlight/Organizer crash reports.
+DEBUG_INFORMATION_FORMAT = dwarf-with-dsym
