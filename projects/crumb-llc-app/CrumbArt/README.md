@@ -10,7 +10,7 @@ The app links the `CrumbArt` library product (iOS / macOS / visionOS):
 | Symbol | Used by | What it is |
 | --- | --- | --- |
 | `CrumbMark` / `CrumbGlyph` | everything | The brand atom: a torn, faceted "crumb" silhouette filled warm with a toasted crust and a hard break-facet. |
-| `CrumbAppIcon` | the icon exporter | The icon composition — a warm crumb on a pine ground with a breadcrumb-fleck trail. `.iOS` is full-bleed; `.macOS` is the inset squircle. |
+| `CrumbAppIcon` | the icon exporter | The guided-path composition — two warm torn pieces separated by a winding pine path. `.iOS` is full-bleed; `.macOS` is the inset squircle; visionOS receives three native layers. |
 | `CrumbBadge` | `AppHeader`, `OnboardingView` | The in-app wordmark mark — the icon in miniature (replaces the old `leaf.circle.fill`). |
 | `ProductArt` | `ProductCard` | Refined product-card art: a multi-stop ground, seeded topographic contours, a frosted focal glyph, and a quiet crumb watermark. Also the loading/failure fallback behind live product photos. |
 | `CrumbHeroArt` | `OnboardingView` | The onboarding hero band — a diminishing breadcrumb trail leading into a kit. |
@@ -22,14 +22,15 @@ depth shades), because the render tools can't link the app target.
 
 ## Tools (macOS, run from `projects/crumb-llc-app/`)
 
-**App icon → `Assets.xcassets/AppIcon.appiconset`** (iOS 1024 + macOS 512 @1x/@2x):
+**App icons → `Assets.xcassets`** (iOS 1024, macOS 512 @1x/@2x, and layered visionOS):
 
 ```sh
 swift run --package-path CrumbArt crumb-art-render
 ```
 
-It rasterizes `CrumbAppIcon` with `ImageRenderer`, writes the PNGs, and rewrites
-`Contents.json`. Re-run `xcodegen generate` only if the catalog *membership* changed.
+It rasterizes `CrumbAppIcon` and `CrumbVisionIconLayer` with `ImageRenderer`, writes the
+PNGs, and rewrites the asset manifests. Re-run `xcodegen generate` only if the catalog
+*membership* changed.
 
 **Marketing cards** from captured screenshots:
 

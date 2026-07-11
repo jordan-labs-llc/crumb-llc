@@ -49,6 +49,8 @@ struct Render {
             print("✓ \(slot.filename)  \(cg.width)×\(cg.height)px")
         }
 
+        writeVisionIcon(nextTo: outDir)
+
         writeContents(into: outDir)
         print("✓ Contents.json updated")
         print("Done. Re-run `xcodegen generate` if the asset catalog membership changed.")
@@ -60,8 +62,64 @@ struct Render {
             .frame(width: pointSize, height: pointSize)
         let renderer = ImageRenderer(content: view)
         renderer.scale = scale
-        renderer.isOpaque = false
+        renderer.isOpaque = style == .iOS
         return renderer.cgImage
+    }
+
+    @MainActor
+    static func renderVisionLayer(_ kind: CrumbVisionIconLayer.Kind) -> CGImage? {
+        let renderer = ImageRenderer(content: CrumbVisionIconLayer(kind: kind))
+        renderer.scale = 1
+        renderer.isOpaque = kind == .back
+        return renderer.cgImage
+    }
+
+    @MainActor
+    static func writeVisionIcon(nextTo appIconDir: URL) {
+        let stack = appIconDir.deletingLastPathComponent()
+            .appendingPathComponent("AppIcon.solidimagestack")
+        let layers: [(String, CrumbVisionIconLayer.Kind)] = [
+            ("Front", .right),
+            ("Middle", .left),
+            ("Back", .back),
+        ]
+        let fm = FileManager.default
+
+        for (name, kind) in layers {
+            let content = stack
+                .appendingPathComponent("\(name).solidimagestacklayer")
+                .appendingPathComponent("Content.imageset")
+            try? fm.createDirectory(at: content, withIntermediateDirectories: true)
+            if let image = renderVisionLayer(kind) {
+                _ = writePNG(image, to: content.appendingPathComponent("\(name).png"))
+            }
+            let imageJSON = """
+            {
+              "images" : [{ "filename" : "\(name).png", "idiom" : "vision", "scale" : "2x" }],
+              "info" : { "author" : "xcode", "version" : 1 }
+            }
+            """
+            try? imageJSON.data(using: .utf8)?.write(to: content.appendingPathComponent("Contents.json"))
+            let layerJSON = """
+            { "info" : { "author" : "xcode", "version" : 1 } }
+            """
+            try? layerJSON.data(using: .utf8)?.write(
+                to: content.deletingLastPathComponent().appendingPathComponent("Contents.json")
+            )
+        }
+
+        let stackJSON = """
+        {
+          "info" : { "author" : "xcode", "version" : 1 },
+          "layers" : [
+            { "filename" : "Front.solidimagestacklayer" },
+            { "filename" : "Middle.solidimagestacklayer" },
+            { "filename" : "Back.solidimagestacklayer" }
+          ]
+        }
+        """
+        try? stackJSON.data(using: .utf8)?.write(to: stack.appendingPathComponent("Contents.json"))
+        print("✓ visionOS AppIcon.solidimagestack")
     }
 
     static func writePNG(_ image: CGImage, to url: URL) -> Bool {
