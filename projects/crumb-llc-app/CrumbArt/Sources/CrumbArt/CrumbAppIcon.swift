@@ -1,12 +1,96 @@
 import SwiftUI
 
-/// The Crumb app icon: a single warm ``CrumbGlyph`` resting on a deep pine ground, lit from
-/// the top, with a faint breadcrumb trail of dots curving up to it — the play on the name.
+/// Crumb's guided-path mark, selected from the app-icon concept exploration.
 ///
-/// One composition drives both platforms:
-///   • ``Style/iOS`` — full-bleed square; the system masks the corners.
-///   • ``Style/macOS`` — content inset and clipped to the continuous "squircle" with a
-///     transparent margin, the way a native macOS icon sits on the desktop.
+/// Two torn pieces almost meet, while the pine negative space between them forms a winding
+/// path. The silhouette keeps the warmth of the original crumb but connects it to Crumb's
+/// core promise: guiding someone from an open-ended mission to a considered choice.
+public struct CrumbPathMark: View {
+    public enum Layer { case complete, left, right }
+
+    var layer: Layer
+
+    public init(layer: Layer = .complete) {
+        self.layer = layer
+    }
+
+    public var body: some View {
+        ZStack {
+            if layer != .right {
+                CrumbPathHalf(side: .left)
+                    .fill(fill)
+            }
+            if layer != .left {
+                CrumbPathHalf(side: .right)
+                    .fill(fill)
+            }
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .accessibilityHidden(true)
+    }
+
+    private var fill: LinearGradient {
+        LinearGradient(
+            colors: [ArtPalette.crumbLit, ArtPalette.ochre],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+}
+
+private struct CrumbPathHalf: Shape {
+    enum Side { case left, right }
+    let side: Side
+
+    func path(in rect: CGRect) -> Path {
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: rect.minX + x * rect.width, y: rect.minY + y * rect.height)
+        }
+
+        var path = Path()
+        switch side {
+        case .left:
+            path.move(to: point(0.49, 0.08))
+            path.addLine(to: point(0.34, 0.06))
+            path.addCurve(to: point(0.08, 0.38),
+                          control1: point(0.20, 0.10), control2: point(0.10, 0.23))
+            path.addLine(to: point(0.06, 0.55))
+            path.addCurve(to: point(0.34, 0.88),
+                          control1: point(0.10, 0.74), control2: point(0.20, 0.84))
+            path.addLine(to: point(0.43, 0.90))
+            path.addCurve(to: point(0.53, 0.64),
+                          control1: point(0.51, 0.80), control2: point(0.56, 0.70))
+            path.addCurve(to: point(0.36, 0.46),
+                          control1: point(0.51, 0.58), control2: point(0.36, 0.55))
+            path.addCurve(to: point(0.50, 0.22),
+                          control1: point(0.36, 0.38), control2: point(0.50, 0.30))
+            path.addCurve(to: point(0.49, 0.08),
+                          control1: point(0.50, 0.16), control2: point(0.49, 0.12))
+        case .right:
+            path.move(to: point(0.61, 0.08))
+            path.addCurve(to: point(0.94, 0.39),
+                          control1: point(0.77, 0.09), control2: point(0.90, 0.23))
+            path.addLine(to: point(0.96, 0.52))
+            path.addCurve(to: point(0.70, 0.85),
+                          control1: point(0.92, 0.70), control2: point(0.84, 0.80))
+            path.addCurve(to: point(0.53, 0.91),
+                          control1: point(0.64, 0.89), control2: point(0.58, 0.91))
+            path.addCurve(to: point(0.62, 0.64),
+                          control1: point(0.62, 0.80), control2: point(0.65, 0.70))
+            path.addCurve(to: point(0.45, 0.46),
+                          control1: point(0.60, 0.58), control2: point(0.45, 0.55))
+            path.addCurve(to: point(0.58, 0.22),
+                          control1: point(0.45, 0.38), control2: point(0.57, 0.30))
+            path.addCurve(to: point(0.61, 0.08),
+                          control1: point(0.59, 0.16), control2: point(0.60, 0.12))
+        }
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// Platform composition for the guided-path mark.
+/// iOS is full bleed, while macOS supplies its own transparent icon margin.
 public struct CrumbAppIcon: View {
     public enum Style { case iOS, macOS }
 
@@ -19,88 +103,34 @@ public struct CrumbAppIcon: View {
     public var body: some View {
         GeometryReader { geo in
             let side = min(geo.size.width, geo.size.height)
-            content(side: side)
-                .frame(width: side, height: side)
+            let margin = style == .macOS ? side * 0.085 : 0
+            let inner = side - margin * 2
+            let corner = inner * 0.2237
+
+            ZStack {
+                iconGround
+                CrumbPathMark()
+                    .frame(width: inner * (style == .macOS ? 0.76 : 0.72),
+                           height: inner * (style == .macOS ? 0.76 : 0.72))
+            }
+            .frame(width: inner, height: inner)
+            .clipShape(RoundedRectangle(cornerRadius: style == .macOS ? corner : 0,
+                                        style: .continuous))
+            .padding(margin)
         }
         .aspectRatio(1, contentMode: .fit)
     }
 
-    @ViewBuilder
-    private func content(side: CGFloat) -> some View {
-        let margin = style == .macOS ? side * 0.085 : 0
-        let inner = side - margin * 2
-        let corner = inner * 0.2237  // Apple's superellipse corner ratio
-
-        ZStack {
-            ground(side: inner)
-            trail(side: inner)
-            CrumbGlyph()
-                .frame(width: inner * 0.52, height: inner * 0.52)
-                .shadow(color: ArtPalette.pineDeep.opacity(0.45),
-                        radius: inner * 0.035, x: 0, y: inner * 0.02)
-                .offset(y: -inner * 0.015)
-        }
-        .frame(width: inner, height: inner)
-        .clipShape(RoundedRectangle(cornerRadius: style == .macOS ? corner : 0,
-                                    style: .continuous))
-        .padding(margin)
-    }
-
-    /// Deep pine ground with a top-light glow and a soft corner vignette for depth.
-    private func ground(side: CGFloat) -> some View {
-        ZStack {
-            LinearGradient(
-                colors: [ArtPalette.pineLift, ArtPalette.pine, ArtPalette.pineDeep],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            RadialGradient(
-                colors: [Color.white.opacity(0.10), .clear],
-                center: UnitPoint(x: 0.5, y: 0.28),
-                startRadius: 0,
-                endRadius: side * 0.62
-            )
-            RadialGradient(
-                colors: [.clear, ArtPalette.pineDeep.opacity(0.45)],
-                center: .center,
-                startRadius: side * 0.34,
-                endRadius: side * 0.78
-            )
-        }
-    }
-
-    /// A breadcrumb trail: three warm flecks that look like bits broken off the crumb,
-    /// curving down toward the lower-left — the play on the name.
-    private func trail(side: CGFloat) -> some View {
-        // x, y (unit), diameter, warmth (0 = shade … 1 = lit)
-        let flecks: [(CGFloat, CGFloat, CGFloat, Double)] = [
-            (0.30, 0.78, 0.052, 0.9),
-            (0.23, 0.85, 0.034, 0.6),
-            (0.165, 0.90, 0.022, 0.4),
-        ]
-        return ZStack {
-            ForEach(Array(flecks.enumerated()), id: \.offset) { _, d in
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [ArtPalette.crumbLit, ArtPalette.ochre],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: d.2 * side, height: d.2 * side)
-                    .opacity(0.45 + d.3 * 0.5)
-                    .shadow(color: ArtPalette.pineDeep.opacity(0.4),
-                            radius: d.2 * side * 0.2, x: 0, y: d.2 * side * 0.12)
-                    .position(x: d.0 * side, y: d.1 * side)
-            }
-        }
-        .frame(width: side, height: side)
+    private var iconGround: some View {
+        LinearGradient(
+            colors: [ArtPalette.pineLift, ArtPalette.pine, ArtPalette.pineDeep],
+            startPoint: .top,
+            endPoint: .bottom
+        )
     }
 }
 
-/// The in-app brand badge: the icon in miniature — a warm crumb on a pine disc — that
-/// replaces the old `leaf.circle.fill` wordmark so the in-app mark and the home-screen
-/// icon read as one brand.
+/// A miniature of the app mark used beside Crumb's in-app wordmark.
 public struct CrumbBadge: View {
     var size: CGFloat
 
@@ -118,13 +148,38 @@ public struct CrumbBadge: View {
                         endPoint: .bottom
                     )
                 )
-                .overlay(
-                    Circle().strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
-                )
-            CrumbGlyph(showsEdge: false, showsSpeckles: size >= 22)
-                .frame(width: size * 0.56, height: size * 0.56)
+            CrumbPathMark()
+                .frame(width: size * 0.66, height: size * 0.66)
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
+    }
+}
+
+/// Individual visionOS icon layers. The system supplies the circular mask, depth, and shadow.
+public struct CrumbVisionIconLayer: View {
+    public enum Kind { case back, left, right }
+
+    var kind: Kind
+
+    public init(kind: Kind) {
+        self.kind = kind
+    }
+
+    public var body: some View {
+        ZStack {
+            if kind == .back {
+                LinearGradient(
+                    colors: [ArtPalette.pineLift, ArtPalette.pineDeep],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            } else {
+                Color.clear
+                CrumbPathMark(layer: kind == .left ? .left : .right)
+                    .frame(width: 680, height: 680)
+            }
+        }
+        .frame(width: 1024, height: 1024)
     }
 }

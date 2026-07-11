@@ -145,9 +145,10 @@ compliance question in the App Store Connect web UI — same outcome, one extra 
 **Slow processing.** Builds have been observed stuck in *Processing* for multiple days in
 2026. Upload earlier than you think you need to.
 
-**visionOS app icon.** `Assets.xcassets/AppIcon.appiconset` currently carries a 1024pt iOS
-icon and two macOS sizes. visionOS needs a layered `.solidimagestack`. The visionOS archive
-will fail validation until that exists.
+**visionOS app icon.** `Assets.xcassets/AppIcon.solidimagestack` contains the layered
+visionOS treatment generated alongside the iOS and macOS icons by `crumb-art-render`.
+Keep the stack and renderer in sync when changing the icon; a flat iOS image is not a
+substitute for the visionOS layers.
 
 **Internal-only means internal-only.** `Config/ExportOptions-TestFlight.plist` sets
 `testFlightInternalTestingOnly = true`. Apple marks those builds as internal; they cannot be added
