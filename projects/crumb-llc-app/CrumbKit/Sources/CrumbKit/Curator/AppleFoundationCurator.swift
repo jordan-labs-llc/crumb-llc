@@ -125,7 +125,7 @@ public struct AppleFoundationCurator: CuratorEngine {
     // MARK: Rank, then voice
 
     /// The tier's whole job: model-rank the deck (the **probe** — throws if the tier is
-    /// unusable, so the caller cascades), then voice every card best-effort over that order.
+    /// unusable, so the caller cascades), then spend model voice on the visible cards first.
     /// `refinement`, when present, threads the user's "make it cheaper / warmer / …" ask plus the
     /// running conversation into both the ranking and the voice instructions (via
     /// ``RefinementClause``), so the model honors it holistically rather than us post-processing its
@@ -141,7 +141,7 @@ public struct AppleFoundationCurator: CuratorEngine {
         deepReasoning: Bool
     ) async throws -> [Product] {
         let ordered = try await modelRankedOrder(baseline, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning)
-        return await voiceAll(ordered, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning)
+        return await voiceVisibleCards(ordered, profile, mission, refinement, recipient, model: model, deepReasoning: deepReasoning)
     }
 
     /// Orders the deck best-fit-first with the model, then reconciles into a total order.
@@ -292,11 +292,17 @@ public struct AppleFoundationCurator: CuratorEngine {
         return (winners, losers)
     }
 
-    /// Voices every card best-effort: the tier is already proven by ranking, so a per-product
-    /// failure just keeps that card's rule-based rationale. Each card gets its own fresh session
-    /// (no shared transcript — products must not bleed into one another's voice), built from the
-    /// same voice profile. Never throws.
-    private func voiceAll<M: LanguageModel & ContextWindowProviding>(
+    /// The swipe deck only renders three cards at once. On a cold on-device model, voicing the
+    /// whole tail before settling can keep those visible cards on the deterministic floor for a
+    /// minute-plus. Voice the visible cards best-effort and leave the tail on the mission-aware
+    /// deterministic voice so the first actionable deck settles quickly (#32).
+    static let eagerlyVoicedCardCount = 3
+
+    /// Voices the visible cards best-effort: the tier is already proven by ranking, so a per-product
+    /// failure just keeps that card's rule-based rationale. Each voiced card gets its own fresh
+    /// session (no shared transcript — products must not bleed into one another's voice), built from
+    /// the same voice profile. Never throws.
+    private func voiceVisibleCards<M: LanguageModel & ContextWindowProviding>(
         _ products: [Product],
         _ profile: TasteProfile,
         _ mission: ShoppingTask,
@@ -305,9 +311,12 @@ public struct AppleFoundationCurator: CuratorEngine {
         model: M,
         deepReasoning: Bool
     ) async -> [Product] {
-        var out = products
+        var out = products.map {
+            $0.withRationale(rule.rationale(for: $0, profile: profile, recipient: recipient, mission: mission))
+        }
+        let visible = products.indices.prefix(Self.eagerlyVoicedCardCount)
         await withTaskGroup(of: (Int, String?).self) { group in
-            for index in products.indices {
+            for index in visible {
                 group.addTask {
                     let session = Self.voiceSession(profile: profile, mission: mission, refinement: refinement, recipient: recipient, model: model, deepReasoning: deepReasoning)
                     let text = try? await Self.voice(for: products[index], session)

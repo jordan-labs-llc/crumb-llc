@@ -112,16 +112,19 @@ final class JasmineTeaJourneyTests: XCTestCase {
             XCTAssertFalse(app.staticTexts["Scanning shops for the right pieces…"].exists,
                            "#57: Plan's loading scan row is still exposed after CurateScreen appeared")
             // The deck streams raw picks first, then *settles* into the ranked, curator-voiced order.
-            // The blocking "Curating your picks…" spinner (`gatheringBanner`) must NOT linger over an
-            // actionable deck: within the settle window it either clears (settled) or downgrades to
-            // the quiet, non-blocking `refiningBanner` (#57). Wait out that window, then assert.
+            // Wait for the explicit state probe so the journey can distinguish settled from
+            // still-refining without relying on the banner hierarchy (#32).
             let deckReady = app.buttons["addButton"].waitForExistence(timeout: 30)
             XCTAssertTrue(deckReady, "deck never became actionable")
-            // Poll until the blocking spinner is gone (bounded well above the 12s downgrade window).
-            let gathering = el("gatheringBanner")
-            let bannerDeadline = Date().addingTimeInterval(30)
-            while gathering.exists && Date() < bannerDeadline { usleep(300_000) }
+            let settled = el("curateState.loaded")
+            let nonBlockingRefine = el("curateState.refining.overtime")
+            let stateDeadline = Date().addingTimeInterval(75)
+            while !settled.exists && !nonBlockingRefine.exists && Date() < stateDeadline {
+                usleep(300_000)
+            }
             snap("04-curate-settled")
+            XCTAssertTrue(settled.exists || nonBlockingRefine.exists,
+                          "#32: curate state never became settled or non-blocking refining")
             // #57 core contract: no long-lived blocking spinner over a usable deck.
             XCTAssertFalse(app.buttons["addButton"].exists && el("gatheringBanner").exists,
                            "#57: `gatheringBanner` spinner still shown while the deck is actionable")

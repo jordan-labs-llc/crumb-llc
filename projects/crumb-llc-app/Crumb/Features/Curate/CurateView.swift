@@ -17,6 +17,7 @@ struct CurateView: View {
 
     var body: some View {
         VStack(spacing: CrumbMetrics.Space.l) {
+            curateStateProbe
             if model.isReworking {
                 activityBanner("Reworking the deck…", id: "reworkingBanner")
             } else if model.isRecurating {
@@ -66,6 +67,14 @@ struct CurateView: View {
     }
 
     // MARK: Deck
+
+    private var curateStateProbe: some View {
+        Color.clear
+            .frame(width: 1, height: 1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Curate state")
+            .accessibilityIdentifier(model.curateStateAccessibilityIdentifier)
+    }
 
     private var deck: some View {
         ZStack {
