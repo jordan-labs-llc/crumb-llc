@@ -12,7 +12,6 @@ import Foundation
 ///   always-available path is a **per-shop handoff** (`checkoutHandoff`) that opens each
 ///   merchant's own secure checkout via its `continue_url`.
 ///
-/// Everything in this scaffold is backed by ``MockUCPClient`` — no network, no keys.
 public protocol UCPClient: Sendable {
     /// Maps to UCP `search_catalog` over the Global Catalog.
     func searchCatalog(_ query: String, placements: [Placement]) async throws -> [Product]
@@ -43,8 +42,36 @@ public extension UCPClient {
 
 /// Errors surfaced by ``UCPClient`` implementations.
 public enum UCPError: Error, Sendable, Equatable {
+    /// The shipping app has no live broker configuration. This is deliberately an error instead of
+    /// silently substituting seed data: a missing secret must never masquerade as a successful
+    /// Shopify search with zero results.
+    case brokerNotConfigured
     /// No product matched the requested id.
     case productNotFound(Product.ID)
     /// The shop has no items in the cart, so no handoff can be produced.
     case emptyShopHandoff(Shop.ID)
+}
+
+/// Fail-closed client used by a normal app launch when `Secrets.plist` is absent or invalid.
+///
+/// Mock data is still available to explicit screenshot/test fixtures, but the user-facing app must
+/// never claim to have searched shops when it did not contact the broker.
+public struct UnconfiguredUCPClient: UCPClient {
+    public init() {}
+
+    public func searchCatalog(_ query: String, placements: [Placement]) async throws -> [Product] {
+        throw UCPError.brokerNotConfigured
+    }
+
+    public func product(id: Product.ID) async throws -> Product {
+        throw UCPError.brokerNotConfigured
+    }
+
+    public func assembleCart(_ items: [KitItem]) async throws -> Cart {
+        Cart(items: items)
+    }
+
+    public func checkoutHandoff(for shop: Shop, in cart: Cart) async throws -> URL {
+        throw UCPError.brokerNotConfigured
+    }
 }

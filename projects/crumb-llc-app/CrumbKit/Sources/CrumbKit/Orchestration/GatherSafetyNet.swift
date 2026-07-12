@@ -87,6 +87,12 @@ struct GatherSafetyNet {
         // Converge: the agent pool, topped up to `floor` when short, the full floor when empty.
         // Every floor want funnels through the same latch, so it runs at most once whoever asks.
         var pool = await poolSnapshot()
+        // A thrown tool call means at least one agent-selected catalog request failed. Even when
+        // earlier calls happened to fill the pool, run the deterministic mission queries once so a
+        // partial broker outage cannot be mistaken for a complete agentic gather.
+        if end == .threw, let topUp = await latch.run(floorGather) {
+            pool = Self.mergeDedup(pool, topUp.products)
+        }
         if pool.count < floor, let topUp = await latch.run(floorGather) {
             pool = Self.mergeDedup(pool, topUp.products)
         }

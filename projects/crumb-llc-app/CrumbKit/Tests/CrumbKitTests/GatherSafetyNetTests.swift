@@ -81,6 +81,53 @@ struct GatherSafetyNetTests {
         #expect(result?.usedAgent == false)
     }
 
+    @Test("A tool failure after enough agent picks still runs and merges the deterministic floor")
+    func throwAfterFullPoolStillRunsFloor() async {
+        let fake = Fake(floorProducts: floorPicks)
+        let net = GatherSafetyNet(watchdogSeconds: 5.0, deadlineSeconds: 5.0)
+        let result = await net.run(
+            floor: 1,
+            turn: {
+                await fake.addAgent(self.agentPicks)
+                throw UCPError.brokerNotConfigured
+            },
+            poolSnapshot: { await fake.snapshot() },
+            floorGather: { await fake.runFloor() }
+        )
+        #expect(await fake.floorRuns == 1)
+        #expect(result?.products.count == agentPicks.count + floorPicks.count)
+        #expect(result?.usedAgent == false)
+    }
+
+    @Test("An immediate tool failure and failed deterministic floor is a total outage")
+    func immediateThrowAndFailedFloorReturnsNil() async {
+        let fake = Fake(floorProducts: [])
+        let net = GatherSafetyNet(watchdogSeconds: 5.0, deadlineSeconds: 5.0)
+        let result = await net.run(
+            floor: 1,
+            turn: { throw UCPError.brokerNotConfigured },
+            poolSnapshot: { await fake.snapshot() },
+            floorGather: { await fake.runFloor() }
+        )
+        #expect(result == nil)
+        #expect(await fake.floorRuns == 1)
+    }
+
+    @Test("A successful empty agent turn and successful empty floor remains an empty success")
+    func successfulEmptyRemainsEmptySuccess() async {
+        let fake = Fake(floorProducts: [])
+        let net = GatherSafetyNet(watchdogSeconds: 5.0, deadlineSeconds: 5.0)
+        let result = await net.run(
+            floor: 0,
+            turn: {},
+            poolSnapshot: { await fake.snapshot() },
+            floorGather: { GatheredCandidates(products: [], usedAgent: false) }
+        )
+        #expect(result?.products.isEmpty == true)
+        #expect(result?.usedAgent == false)
+        #expect(await fake.floorRuns == 0)
+    }
+
     @Test("A runaway turn is abandoned at the deadline; the gather returns bounded, not on the zombie")
     func deadlineAbandonsRunawayTurn() async {
         let fake = Fake(floorProducts: floorPicks)
