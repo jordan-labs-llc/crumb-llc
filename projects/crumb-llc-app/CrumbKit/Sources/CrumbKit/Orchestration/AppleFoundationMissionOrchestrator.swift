@@ -156,7 +156,9 @@ struct CatalogSearchTool: Tool {
     func call(arguments: Arguments) async throws -> String {
         let query = GatherToolSupport.cleanedQuery(arguments.query)
         guard !query.isEmpty else { return "Empty query — provide a few keyword terms." }
-        let raw = (try? await ucp.searchCatalog(query, placements: [.organic])) ?? []
+        // Preserve transport/configuration failures. Turning them into an empty success prevents
+        // the safety net from recognizing a total broker outage and produces a misleading empty deck.
+        let raw = try await ucp.searchCatalog(query, placements: [.organic])
         let kept = GatherToolSupport.onTopic(raw, for: mission)
         await collector.add(kept)
         let total = await collector.count
@@ -183,7 +185,7 @@ struct FindSimilarTool: Tool {
     func call(arguments: Arguments) async throws -> String {
         let query = GatherToolSupport.cleanedQuery(arguments.descriptor)
         guard !query.isEmpty else { return "Empty descriptor — describe the kind of product." }
-        let raw = (try? await ucp.searchCatalog(query, placements: [.organic])) ?? []
+        let raw = try await ucp.searchCatalog(query, placements: [.organic])
         let kept = GatherToolSupport.onTopic(raw, for: mission)
         await collector.add(kept)
         let total = await collector.count

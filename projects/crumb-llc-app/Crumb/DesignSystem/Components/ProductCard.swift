@@ -21,6 +21,7 @@ struct ProductCard: View {
         )
         .crumbShadow(.lifted)
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("productCard")
         .accessibilityLabel(accessibilitySummary)
     }
 

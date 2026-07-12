@@ -4,15 +4,14 @@ import XCTest
 /// (no CRUMB_SCREENSHOT, so the real UCP catalog + curator are used — the mock has no tea).
 ///
 /// At every step it captures a full-screen screenshot attachment and a text dump of the
-/// accessibility tree, so the run doubles as an accessibility audit. Nothing hard-fails:
-/// continueAfterFailure is on and each step probes with waitForExistence, so we always walk
-/// as far as the app allows and record exactly where (and how) it breaks.
+/// accessibility tree, so the run doubles as an accessibility audit. This is a strict live journey:
+/// a missing screen or an empty/non-jasmine deck fails instead of producing a diagnostic-only pass.
 final class JasmineTeaJourneyTests: XCTestCase {
 
     var app: XCUIApplication!
 
     override func setUp() {
-        continueAfterFailure = true
+        continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["CRUMB_UITEST"] = "1"   // no CRUMB_SCREENSHOT -> live broker
     }
@@ -63,18 +62,17 @@ final class JasmineTeaJourneyTests: XCTestCase {
 
         // ---- Step 1: Missions / composer ----
         let greeting = app.staticTexts["What are we shopping for?"]
-        _ = greeting.waitForExistence(timeout: 15)
+        XCTAssertTrue(greeting.waitForExistence(timeout: 15), "Missions composer never appeared")
         snap("01-missions")
 
         let field = el("composerField")
-        if waitTap(field, 10, "composerField") {
-            field.typeText("premium jasmine tea")
-            snap("02-goal-typed")
-        }
+        XCTAssertTrue(waitTap(field, 10, "composerField"), "composer field is unavailable")
+        field.typeText("premium jasmine tea")
+        snap("02-goal-typed")
 
         // Dismiss keyboard if present, then plan.
         if app.keyboards.buttons["Return"].exists { /* leave; submitLabel is .go */ }
-        waitTap(app.buttons["planButton"], 5, "planButton")
+        XCTAssertTrue(waitTap(app.buttons["planButton"], 5, "planButton"), "plan button is unavailable")
 
         // ---- Step 2: Plan editor (live planner: network + on-device model / fallback) ----
         let planScreen = el("PlanScreen")
@@ -99,9 +97,11 @@ final class JasmineTeaJourneyTests: XCTestCase {
             XCTAssertTrue(curateByID, "curateButton is not queryable by id — #24 a11y-id clobbering regressed")
             waitTap(curateByID ? curate : app.buttons["Curate my kit"], 12, "curateButton")
         } else if app.staticTexts["composerDecline"].exists || el("composerDecline").exists {
-            snap("03-plan-declined"); return
+            snap("03-plan-declined")
+            XCTFail("premium jasmine tea was incorrectly declined")
         } else {
-            snap("03-plan-timeout"); return
+            snap("03-plan-timeout")
+            XCTFail("Plan screen never appeared")
         }
 
         // ---- Step 3: Curate swipe deck (live catalog search + curation) ----
@@ -122,6 +122,12 @@ final class JasmineTeaJourneyTests: XCTestCase {
             let bannerDeadline = Date().addingTimeInterval(30)
             while gathering.exists && Date() < bannerDeadline { usleep(300_000) }
             snap("04-curate-settled")
+            let productCard = el("productCard")
+            XCTAssertTrue(productCard.waitForExistence(timeout: 10), "no settled product card is visible")
+            XCTAssertTrue(
+                productCard.label.localizedCaseInsensitiveContains("jasmine"),
+                "the settled Shopify product card is not a jasmine result: \(productCard.label)"
+            )
             // #57 core contract: no long-lived blocking spinner over a usable deck.
             XCTAssertFalse(app.buttons["addButton"].exists && el("gatheringBanner").exists,
                            "#57: `gatheringBanner` spinner still shown while the deck is actionable")

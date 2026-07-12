@@ -11,8 +11,8 @@ import os
 /// dependency** so Siri / Shortcuts can route into the app (see `CurateKitIntent`).
 ///
 /// The client is chosen from `Secrets.plist`: if `CRUMB_API_BASE_URL` is set, the app
-/// talks to the live broker (`crumb-llc-api`); otherwise it runs entirely on
-/// ``MockUCPClient`` (no network, no keys) — which is the default for the scaffold.
+/// talks to the live broker (`crumb-llc-api`). A normal launch without that configuration fails
+/// closed through ``UnconfiguredUCPClient``; only explicit screenshot fixtures use mock catalog data.
 @main
 struct CrumbApp: App {
     private static let log = Logger(subsystem: "llc.crumb.Crumb", category: "Persistence")
@@ -21,7 +21,7 @@ struct CrumbApp: App {
 
     init() {
         let config = UCPConfig.load()
-        var ucp: any UCPClient = LiveUCPClient(config: config) ?? MockUCPClient()
+        var ucp: any UCPClient = LiveUCPClient(config: config) ?? UnconfiguredUCPClient()
         #if DEBUG
         // Screenshots run on the mock catalog so the deck is the deterministic seed set
         // (no network, no live-curator variance) — which also exercises the synthesized
@@ -32,7 +32,7 @@ struct CrumbApp: App {
         #endif
         // The Apple Foundation Models curator is the "real" voice; it self-degrades to the
         // rule-based engine (and reports why) when no model tier is usable, so it's safe to
-        // always inject — mirroring LiveUCPClient ?? MockUCPClient for the catalog.
+        // always inject — mirroring the live/fail-closed catalog choice above.
         // The taste extractor is the input twin: it parses a free-text self-description, and
         // self-degrades to `nil` (manual capture) when no model is available.
         // The Apple Foundation Models mission planner decomposes a free-text goal into a plan;
