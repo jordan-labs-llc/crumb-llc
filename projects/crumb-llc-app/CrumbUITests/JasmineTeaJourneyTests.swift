@@ -151,22 +151,19 @@ final class JasmineTeaJourneyTests: XCTestCase {
 
         if el("CartScreen").waitForExistence(timeout: 15) {
             snap("07-cart")
-            var cont = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'continue.'")).firstMatch
-            if !cont.exists {
-                cont = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Continue to'")).firstMatch
-            }
-            waitTap(cont, 10, "continueButton")
+            let start = app.buttons["startCheckoutButton"]
+            waitTap(start, 10, "startCheckoutButton")
         } else {
             snap("07-cart-timeout"); return
         }
 
-        // ---- Step 5: Checkout handoff sheet (do NOT tap continue -> external URL) ----
-        if app.buttons["handoffContinue"].waitForExistence(timeout: 15) {
-            snap("08-handoff")
-        } else if el("handoffUnavailable").exists {
-            snap("08-handoff-unavailable")
+        // ---- Step 5: UCP checkout workflow (do NOT continue -> external merchant URL) ----
+        if el("CheckoutWorkflow").waitForExistence(timeout: 15) {
+            snap("08-checkout-workflow")
+        } else if app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH 'checkoutUnsupported.'")).firstMatch.exists {
+            snap("08-checkout-unsupported")
         } else {
-            snap("08-handoff-missing")
+            snap("08-checkout-missing")
         }
         snap("09-final")
     }

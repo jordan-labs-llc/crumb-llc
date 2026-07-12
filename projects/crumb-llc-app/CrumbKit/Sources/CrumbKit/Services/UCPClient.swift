@@ -23,6 +23,29 @@ public protocol UCPClient: Sendable {
     /// Assembles a (cross-merchant) cart. Real impl: Universal Cart (early access).
     func assembleCart(_ items: [KitItem]) async throws -> Cart
 
+    /// Creates one merchant-scoped UCP checkout containing all supplied items.
+    func createCheckout(
+        for shop: Shop,
+        items: [KitItem],
+        idempotencyKey: String
+    ) async throws -> CheckoutSession
+
+    func getCheckout(id: String) async throws -> CheckoutSession
+
+    func updateCheckout(
+        id: String,
+        update: CheckoutUpdateCommand,
+        idempotencyKey: String
+    ) async throws -> CheckoutSession
+
+    func completeCheckout(
+        id: String,
+        authorization: CheckoutCompletionAuthorization,
+        idempotencyKey: String
+    ) async throws -> CheckoutSession
+
+    func discardCheckout(id: String) async throws
+
     /// Returns the per-shop checkout handoff URL (UCP `continue_url`).
     func checkoutHandoff(for shop: Shop, in cart: Cart) async throws -> URL
 
@@ -39,6 +62,39 @@ public extension UCPClient {
     /// Default: nothing to warm. ``MockUCPClient`` and test doubles inherit this no-op so
     /// only ``LiveUCPClient`` actually pings.
     func warmUp() async {}
+
+    /// Keeps existing catalog-only conformers source compatible.
+    func createCheckout(
+        for shop: Shop,
+        items: [KitItem],
+        idempotencyKey: String
+    ) async throws -> CheckoutSession {
+        throw UCPError.checkoutUnsupported(shop.id)
+    }
+
+    func getCheckout(id: String) async throws -> CheckoutSession {
+        throw UCPError.checkoutUnsupported(id)
+    }
+
+    func updateCheckout(
+        id: String,
+        update: CheckoutUpdateCommand,
+        idempotencyKey: String
+    ) async throws -> CheckoutSession {
+        throw UCPError.checkoutUnsupported(id)
+    }
+
+    func completeCheckout(
+        id: String,
+        authorization: CheckoutCompletionAuthorization,
+        idempotencyKey: String
+    ) async throws -> CheckoutSession {
+        throw UCPError.checkoutUnsupported(id)
+    }
+
+    func discardCheckout(id: String) async throws {
+        throw UCPError.checkoutUnsupported(id)
+    }
 }
 
 /// Errors surfaced by ``UCPClient`` implementations.
@@ -47,4 +103,14 @@ public enum UCPError: Error, Sendable, Equatable {
     case productNotFound(Product.ID)
     /// The shop has no items in the cart, so no handoff can be produced.
     case emptyShopHandoff(Shop.ID)
+    case emptyCheckout(Shop.ID)
+    case checkoutUnsupported(Shop.ID)
+    case checkoutPreparationFailed(Shop.ID, String)
+    case invalidContinueURL
+    case checkoutNotFound(String)
+    case invalidCheckoutUpdate(String)
+    case checkoutExpired(String)
+    case invalidCheckoutState(String)
+    case paymentFailed(String)
+    case idempotencyConflict(String)
 }

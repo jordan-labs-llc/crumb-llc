@@ -145,22 +145,18 @@ final class LacrosseGearJourneyTests: XCTestCase {
             // is non-deterministic on the sim — so this live journey doesn't hard-assert the panel.
             // #67's guard is validated deterministically by KitCompletenessCartUITests (a seed kit
             // mission) and the KitCompleteness/AppModel unit tests.
-            var cont = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'continue.'")).firstMatch
-            if !cont.exists {
-                cont = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Continue to'")).firstMatch
-            }
-            waitTap(cont, 10, "continueButton")
+            waitTap(app.buttons["startCheckoutButton"], 10, "startCheckoutButton")
         } else {
             snap("07-cart-timeout"); return
         }
 
-        // ---- Checkout handoff sheet (do NOT tap continue -> external URL) ----
-        if app.buttons["handoffContinue"].waitForExistence(timeout: 15) {
-            snap("08-handoff")
+        // ---- Checkout workflow (do NOT tap continue -> external URL) ----
+        if el("CheckoutWorkflow").waitForExistence(timeout: 15) {
+            snap("08-checkout-workflow")
             // #64 contract: the first handoff must not be for a pet/novelty product.
             assertNoPetProducts("checkout handoff")
         } else {
-            snap("08-handoff-missing")
+            snap("08-checkout-missing")
         }
         snap("09-final")
     }

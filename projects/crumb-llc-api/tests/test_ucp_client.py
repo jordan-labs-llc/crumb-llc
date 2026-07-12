@@ -110,8 +110,7 @@ def test_search_builds_jsonrpc_with_bearer_and_profile() -> None:
     assert params["name"] == "search_catalog"
     assert params["arguments"]["catalog"]["query"] == "crewneck"
     assert (
-        params["arguments"]["meta"]["ucp-agent"]["profile"]
-        == "https://p.example/.well-known/ucp"
+        params["arguments"]["meta"]["ucp-agent"]["profile"] == "https://p.example/.well-known/ucp"
     )
     # And the structured content flows back.
     assert structured["products"][0]["title"] == "Organic Crewneck"
@@ -162,3 +161,31 @@ def test_profile_advertises_catalog_search_only() -> None:
     assert "dev.ucp.shopping.catalog.search" in caps
     assert "dev.ucp.shopping.checkout" not in caps
     assert profile["ucp"]["id"] == "https://broker.example/.well-known/ucp"
+
+
+def test_profile_advertises_checkout_consumer_capability_when_enabled() -> None:
+    configured = Settings(
+        ucp_version="2026-04-08",
+        checkout_merchants_json='{"shop-1":"https://shop.example"}',
+    )
+    profile = build_profile(configured, profile_url="https://broker.example/.well-known/ucp")
+    checkout = profile["ucp"]["capabilities"]["dev.ucp.shopping.checkout"][0]
+    assert checkout["version"] == "2026-04-08"
+    assert checkout["schema"].startswith("https://ucp.dev/")
+    assert "services" not in profile["ucp"]  # Crumb is a consumer, not checkout provider.
+    assert "payment_handlers" not in profile["ucp"]
+    assert "payment" not in profile
+
+
+def test_malformed_registry_does_not_enable_or_advertise_checkout() -> None:
+    configured = Settings(
+        checkout_merchants_json=(
+            '{"path":"https://shop.example/path",'
+            '"credentials":"https://user:pass@shop.example",'
+            '"http":"http://shop.example"}'
+        )
+    )
+    assert configured.checkout_merchants == {}
+    assert configured.checkout_enabled is False
+    profile = build_profile(configured)
+    assert "dev.ucp.shopping.checkout" not in profile["ucp"]["capabilities"]

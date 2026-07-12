@@ -1,8 +1,8 @@
 import SwiftUI
 import CrumbKit
 
-/// The Cart: the kit grouped by shop, with a per-shop "Continue to {shop}" handoff —
-/// honest to what's GA today (no unified one-tap checkout).
+/// The Cart: the kit grouped by shop, with one action that prepares independent merchant
+/// checkouts. Crumb never implies that separate shops form one atomic order.
 struct CartView: View {
     @Environment(AppModel.self) private var model
 
@@ -40,8 +40,7 @@ struct CartView: View {
                         shop: shop,
                         items: cart.items(for: shop),
                         subtotal: cart.subtotal(for: shop),
-                        onRemove: { model.removeFromKit($0) },
-                        onContinue: { Task { await model.beginHandoff(for: shop) } }
+                        onRemove: { model.removeFromKit($0) }
                     )
                 }
 
@@ -70,7 +69,7 @@ struct CartView: View {
                 ForEach(cart.items) { item in
                     CompareCard(
                         item: item,
-                        onBuy: { Task { await model.beginHandoff(for: item) } },
+                        onBuy: { Task { await model.startCheckoutWorkflow(for: item) } },
                         onRemove: { model.removeFromKit(item) }
                     )
                 }
@@ -101,8 +100,8 @@ struct CartView: View {
         HStack(alignment: .top, spacing: CrumbMetrics.Space.s) {
             Image(systemName: "lock.shield")
                 .foregroundStyle(CrumbColor.ink3)
-            Text("Checkout hands off to each shop's own secure checkout. You'll confirm "
-                + "payment with the merchant — Crumb never sees your card.")
+            Text("Each shop creates and confirms its own order. You may need to complete "
+                + "more than one checkout, and Crumb never sees your card.")
                 .font(CrumbType.caption)
                 .foregroundStyle(CrumbColor.ink3)
                 .fixedSize(horizontal: false, vertical: true)
@@ -124,9 +123,26 @@ struct CartView: View {
                     .monospacedDigit()
             }
             Spacer()
-            Text(model.isSingleProductMission ? "Pick one to check out" : "Continue per shop above")
-                .font(CrumbType.caption)
-                .foregroundStyle(CrumbColor.ink3)
+            if model.isSingleProductMission {
+                Text("Pick one to check out")
+                    .font(CrumbType.caption)
+                    .foregroundStyle(CrumbColor.ink3)
+            } else {
+                Button {
+                    Task { await model.startCheckoutWorkflow() }
+                } label: {
+                    Text(cart.shops.count == 1 ? "Start checkout" : "Start \(cart.shops.count) checkouts")
+                        .font(CrumbType.headline)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, CrumbMetrics.Space.l)
+                        .padding(.vertical, CrumbMetrics.Space.m)
+                        .background(CrumbColor.pine, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(model.checkoutWorkflow != nil)
+                .accessibilityIdentifier("startCheckoutButton")
+                .accessibilityHint("Prepares a separate checkout for each shop")
+            }
         }
         .padding(.horizontal, CrumbMetrics.Space.xl)
         .padding(.vertical, CrumbMetrics.Space.m)
@@ -232,7 +248,6 @@ struct ShopGroup: View {
     let items: [KitItem]
     let subtotal: Decimal
     let onRemove: (KitItem) -> Void
-    let onContinue: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: CrumbMetrics.Space.m) {
@@ -253,21 +268,6 @@ struct ShopGroup: View {
                 CartLine(item: item, onRemove: { onRemove(item) })
             }
 
-            Button(action: onContinue) {
-                HStack {
-                    Spacer()
-                    Text("Continue to \(shop.name)")
-                        .font(CrumbType.headline)
-                    Image(systemName: "arrow.up.right")
-                    Spacer()
-                }
-                .foregroundStyle(.white)
-                .padding(.vertical, CrumbMetrics.Space.m)
-                .background(CrumbColor.pine, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.tile, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("continue.\(shop.id)")
-            .accessibilityHint("Hands off to \(shop.name)'s secure checkout")
         }
         .crumbCard()
     }
@@ -370,7 +370,7 @@ struct CompareCard: View {
             Button(action: onBuy) {
                 HStack {
                     Spacer()
-                    Text("Buy this at \(product.shop.name)")
+                    Text("Start checkout at \(product.shop.name)")
                         .font(CrumbType.headline)
                     Image(systemName: "arrow.up.right")
                     Spacer()
@@ -381,7 +381,7 @@ struct CompareCard: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("buy.\(product.id)")
-            .accessibilityHint("Hands off to \(product.shop.name)'s secure checkout for this item")
+            .accessibilityHint("Prepares a UCP checkout for only this item")
         }
         .crumbCard()
         .accessibilityElement(children: .contain)

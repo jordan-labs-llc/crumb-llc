@@ -105,8 +105,9 @@ identifier, label, and frame — use them to verify VoiceOver labels and to find
 ## 3. The journey (what "done" looks like)
 
 Expected route: **Onboarding → Missions/composer → Plan → Curate deck → Kit tray → Cart
-(per-shop) → Checkout handoff sheet.** There is **no in-app payment** — the handoff opens the
-merchant's own web checkout (the test stops at the sheet and does **not** tap continue).
+→ Checkout workflow.** Live merchants that require escalation continue on the merchant site.
+Deterministic mock sessions instead run an explicitly labeled **SANDBOX** flow in app: contact and
+shipping → authoritative review → sandbox completion. It never charges or creates a real order.
 
 Steps captured by the driver:
 
@@ -117,8 +118,11 @@ Steps captured by the driver:
 | `02-goal-typed` | composer | tap `planButton` ("Plan it") |
 | `03-plan` | plan editor | tap **Curate my kit** |
 | `04-curate-first`…`06-curate-after-adds` | curate deck | tap **Add to kit** ×N |
-| `07-cart` | cart | tap **Continue to {shop}** |
-| `08-handoff` / `09-final` | handoff sheet | (stop — do not open external URL) |
+| `07-cart` | cart | tap **Start checkout(s)** |
+| `08-checkout-workflow` / `09-final` | checkout sheet | inspect live escalation or sandbox steps |
+
+For deterministic screenshots, use `CRUMB_SCREENSHOT=sandbox-contact`, `sandbox-review`, or
+`sandbox-completed`. These force `MockUCPClient`; every stage must retain the visible SANDBOX badge.
 
 ### Gotchas that will trip an agent
 
