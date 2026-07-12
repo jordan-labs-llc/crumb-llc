@@ -29,6 +29,7 @@ build/
 
 # ---- Swift Package Manager ----
 .build/
+.evaluation/
 .swiftpm/
 Packages/
 Package.resolved

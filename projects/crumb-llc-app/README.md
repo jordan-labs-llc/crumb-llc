@@ -129,6 +129,8 @@ cd .. && xcodebuild -scheme Crumb -destination 'platform=iOS Simulator,name=iPho
 
 To drive a **full purchase journey** in the iOS 27 Simulator (capture every screen, audit
 accessibility, and file issues), follow [`docs/e2e-user-journey.md`](docs/e2e-user-journey.md).
+To measure and improve the Foundation Models mission-to-query behavior, follow the
+[`query hill-climbing runbook`](docs/query-hill-climbing.md).
 
 ## Secrets
 
