@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "promptID": "fixture-strong-v1",
+  "runs": [
+    {"caseID":"tea-premium-jasmine","runID":"run-1","isShoppable":true,"isSingleItem":true,"queries":["premium jasmine tea"]},
+    {"caseID":"tea-jasmine-merino-leak","runID":"run-1","isShoppable":true,"isSingleItem":true,"queries":["jasmine tea premium"]},
+    {"caseID":"taste-conflict-keyboard","runID":"run-1","isShoppable":true,"isSingleItem":true,"queries":["quiet mechanical keyboard"]},
+    {"caseID":"kit-lacrosse-premium","runID":"run-1","isShoppable":true,"isSingleItem":false,"queries":["complete lacrosse stick","lacrosse helmet","lacrosse gloves","lacrosse shoulder pads","lacrosse arm pads","lacrosse cleats"]},
+    {"caseID":"kit-pour-over-corner","runID":"run-1","isShoppable":true,"isSingleItem":false,"queries":["electric gooseneck kettle","burr coffee grinder","pour over coffee dripper","pour over coffee filters","coffee scale"]},
+    {"caseID":"nonshopping-question","runID":"run-1","isShoppable":false,"isSingleItem":false,"queries":[]}
+  ]
+}

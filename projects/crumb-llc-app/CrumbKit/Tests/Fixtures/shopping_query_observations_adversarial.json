@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "promptID": "fixture-adversarial-v1",
+  "runs": [
+    {"caseID":"tea-premium-jasmine","runID":"run-1","isShoppable":true,"isSingleItem":true,"queries":["premium teapot"]},
+    {"caseID":"tea-jasmine-merino-leak","runID":"run-1","isShoppable":true,"isSingleItem":true,"queries":["jasmine tea merino"]},
+    {"caseID":"taste-conflict-keyboard","runID":"run-1","isShoppable":true,"isSingleItem":true,"queries":["quiet mechanical keyboard floral fabric"]},
+    {"caseID":"kit-lacrosse-premium","runID":"run-1","isShoppable":true,"isSingleItem":false,"queries":["lacrosse","stick lacrosse","helmet lacrosse","gloves shoulder","pads arm","pads cleats"]},
+    {"caseID":"kit-pour-over-corner","runID":"run-1","isShoppable":true,"isSingleItem":false,"queries":["kettle grinder dripper filters coffee scale"]},
+    {"caseID":"nonshopping-question","runID":"run-1","isShoppable":false,"isSingleItem":false,"queries":["blue sky explanation"]}
+  ]
+}
