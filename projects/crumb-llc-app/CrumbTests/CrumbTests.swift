@@ -293,6 +293,20 @@ struct CrumbTests {
         #expect(model.kitCompleteness == nil)
     }
 
+    @Test("Committing edited direct-product plan parts preserves single-product framing (#84)")
+    func rebuiltTaskPreservesSingleProductFraming() {
+        let task = ShoppingTask(
+            id: "tea", title: "Premium jasmine tea", subtitle: "",
+            plan: ["Premium jasmine tea"], curatorNote: "", accentHex: 0,
+            candidateIDs: [], searchQueries: ["premium jasmine tea"], isSingleItem: true
+        )
+        let rebuilt = task.rebuilt(plan: ["Jasmine pearls"], searchQueries: ["jasmine pearls"])
+
+        #expect(rebuilt.isSingleItem == true)
+        #expect(rebuilt.plan == ["Jasmine pearls"])
+        #expect(rebuilt.searchQueries == ["jasmine pearls"])
+    }
+
     @Test("A total catalog outage fails without navigating away from Plan")
     @MainActor
     func streamingOutageStaysOnPlan() async {
