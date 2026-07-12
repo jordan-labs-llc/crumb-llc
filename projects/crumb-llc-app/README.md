@@ -2,8 +2,9 @@
 
 The Crumb multiplatform SwiftUI app — a task-driven personal-curator shopping agent.
 You hand over a **mission**, Crumb proposes products as a swipeable deck, accepted items
-build into a **kit** (a cross-merchant cart), and checkout **hands off per shop** to each
-merchant's own secure checkout.
+build into a **kit** (a cross-merchant cart), and Crumb prepares one UCP checkout per
+shop before handing the user to each merchant's secure checkout. Multi-store purchase
+remains a clearly disclosed sequence of independent merchant orders.
 
 The app ships a full **Apple Foundation Models seam stack** for its AI work — planning,
 curation, refinement, relevance, recap, and tool-driven search — each behind a protocol
@@ -78,7 +79,8 @@ uses the internal-only export policy.
 On a clean install, the app launches to **Onboarding**, then **Missions** with seed tasks (or a
 free-text goal). Tap one → **Plan**
 (curator note + editable parts list) → **Curate** (swipe the deck; the **KitTray** fills;
-talk back to refine) → **Cart** (grouped by shop, "Continue to {shop}" per merchant). The
+talk back to refine) → **Cart** (grouped by shop, with independent UCP preparation and
+secure handoff results for each merchant). The
 header opens **Taste Profile**, **Recipients**, and **History**. The "Ask with Siri" row
 demos the App Intents handoff that also drives `CurateKitIntent`.
 
@@ -138,10 +140,11 @@ and `CRUMB_API_KEY` (optional). Never commit `Secrets.plist`.
 
 ## Seams left open
 
-- **UCP networking scope** — `LiveUCPClient` implements the `UCPClient` protocol against the
-  real UCP Catalog APIs. Global Catalog search is GA (API key only); native in-agent checkout
-  requires Shopify opt-in and Universal Cart is early access — so **per-shop handoff** is the
-  default checkout path.
+- **UCP networking scope** — `LiveUCPClient` implements catalog discovery plus merchant-scoped
+  checkout-session preparation through the broker. Live checkout is limited to explicitly
+  registered, public unsigned merchant endpoints; unsupported merchants retain a clearly labeled
+  website fallback. Payment credentials, buyer PII, order completion, and atomic multi-store
+  checkout remain outside Crumb.
 - **Private Cloud Compute tier** — the deep-reasoning tier is compiled out behind
   `CRUMB_PCC_ENABLED`; merely constructing `PrivateCloudComputeLanguageModel` traps without the
   `com.apple.developer.private-cloud-compute` entitlement, which is not yet granted. The

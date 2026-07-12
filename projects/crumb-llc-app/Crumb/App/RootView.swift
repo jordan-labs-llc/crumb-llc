@@ -53,6 +53,9 @@ struct RootView: View {
             switch env["CRUMB_SCREENSHOT"] {
             case "curate": await model.presentCurateForScreenshot(missionID: mission)
             case "cart": await model.presentCartForScreenshot(missionID: mission)
+            case "sandbox-contact": await model.presentSandboxCheckoutForScreenshot(missionID: mission, stage: "contact")
+            case "sandbox-review": await model.presentSandboxCheckoutForScreenshot(missionID: mission, stage: "review")
+            case "sandbox-completed": await model.presentSandboxCheckoutForScreenshot(missionID: mission, stage: "completed")
             case "kit": await model.presentFullKitForScreenshot(missionID: mission)
             case "plan": model.presentPlanForScreenshot(missionID: mission)
             case "refine":
@@ -80,6 +83,10 @@ struct RootView: View {
         .sheet(item: $model.handoff) { handoff in
             CheckoutHandoffView(handoff: handoff)
                 .crumbCompactSheet()
+        }
+        .sheet(item: $model.checkoutWorkflow) { workflow in
+            CheckoutWorkflowView(workflow: workflow)
+                .crumbExpandableSheet()
         }
         .sheet(item: $model.reshopEntry) { entry in
             HistoryReshopView(entry: entry)

@@ -356,6 +356,181 @@ struct CrumbTests {
         #expect(handoff.url == nil)   // FakeUCP resolves no link — still presents honestly
     }
 
+    @Test("Multi-store checkout prepares every merchant independently")
+    @MainActor
+    func multiStoreCheckoutPreparesEveryMerchant() async throws {
+        let client = CheckoutRecordingUCP()
+        let model = AppModel(ucp: client, curator: RuleBasedCurator())
+        let products = Self.productsFromDistinctShops(count: 2)
+        #expect(products.count == 2)
+        products.forEach(model.accept)
+
+        await model.startCheckoutWorkflow()
+
+        let workflow = try #require(model.checkoutWorkflow)
+        #expect(workflow.merchants.count == 2)
+        #expect(workflow.preparedCount == 2)
+        #expect(workflow.merchants.allSatisfy { $0.state.isPrepared })
+        #expect(await client.callCount() == 2)
+    }
+
+    @Test("Merchant retry reuses its idempotency key and does not retry other shops")
+    @MainActor
+    func checkoutRetryIsTargetedAndIdempotent() async throws {
+        let products = Self.productsFromDistinctShops(count: 2)
+        let failedShop = try #require(products.first?.shop)
+        let client = CheckoutRecordingUCP(failFirstFor: failedShop.id)
+        let model = AppModel(ucp: client, curator: RuleBasedCurator())
+        products.forEach(model.accept)
+
+        await model.startCheckoutWorkflow()
+        let before = try #require(model.checkoutWorkflow)
+        let originalKey = try #require(before.merchants.first { $0.shop.id == failedShop.id }?.idempotencyKey)
+        await model.retryCheckout(for: failedShop)
+
+        let failedShopCalls = await client.calls(for: failedShop.id)
+        #expect(failedShopCalls == [originalKey, originalKey])
+        let otherShop = try #require(products.last?.shop)
+        #expect(await client.calls(for: otherShop.id).count == 1)
+        #expect(model.checkoutWorkflow?.preparedCount == 2)
+    }
+
+    @Test("Single-product checkout contains only the selected alternative")
+    @MainActor
+    func singleProductUsesOneItemCheckoutWorkflow() async throws {
+        let client = CheckoutRecordingUCP()
+        let model = AppModel(ucp: client, curator: RuleBasedCurator())
+        let product = Self.fakeProduct("selected")
+        let item = KitItem(product: product)
+
+        await model.startCheckoutWorkflow(for: item)
+
+        let workflow = try #require(model.checkoutWorkflow)
+        #expect(workflow.merchants.count == 1)
+        #expect(workflow.merchants[0].items.map(\.id) == ["selected"])
+        #expect(await client.itemIDs(for: product.shop.id) == ["selected"])
+    }
+
+    @Test("Workflow keys are fixed length and terminal sessions are not counted ready")
+    @MainActor
+    func checkoutKeysAndTerminalStateAreHonest() async throws {
+        let client = CheckoutRecordingUCP(status: .canceled)
+        let model = AppModel(ucp: client, curator: RuleBasedCurator())
+        let product = Self.fakeProduct("p")
+        await model.startCheckoutWorkflow(for: KitItem(product: product))
+
+        let merchant = try #require(model.checkoutWorkflow?.merchants.first)
+        #expect(merchant.idempotencyKey.count == 42)
+        #expect(model.checkoutWorkflow?.preparedCount == 0)
+        #expect(!merchant.state.isPrepared)
+    }
+
+    @Test("Native sandbox checkout updates, reviews, and completes without history persistence")
+    @MainActor
+    func nativeSandboxLifecycle() async throws {
+        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
+        let item = KitItem(product: SeedData.coffeeProducts[0])
+        await model.startCheckoutWorkflow(for: item)
+        let shop = item.product.shop
+        #expect(model.checkoutWorkflow?.merchants.first?.sandbox?.phase == .contact)
+
+        model.editSandboxCheckout(for: shop) {
+            $0.firstName = "Sample"; $0.lastName = "Shopper"
+            $0.email = "sample@example.invalid"; $0.street = "1 Sandbox Way"
+            $0.city = "Testville"; $0.region = "CA"; $0.postalCode = "94107"
+        }
+        await model.submitSandboxContact(for: shop)
+        #expect(model.checkoutWorkflow?.merchants.first?.sandbox?.phase == .shipping)
+        model.editSandboxCheckout(for: shop) {
+            $0.shippingSelections["shipment_1"] = "standard"
+            $0.updateKey = nil
+        }
+        await model.submitSandboxContact(for: shop)
+        #expect(model.checkoutWorkflow?.merchants.first?.sandbox?.phase == .review)
+        guard case .prepared(let reviewed) = try #require(model.checkoutWorkflow?.merchants.first?.state) else {
+            Issue.record("Expected reviewed sandbox session")
+            return
+        }
+        #expect(reviewed.fulfillmentGroups.first?.selectedOptionID != nil)
+
+        model.acknowledgeSandboxReview(for: shop, acknowledged: true)
+        await model.completeSandboxCheckout(for: shop)
+        #expect(model.checkoutWorkflow?.merchants.first?.sandbox?.phase == .completed)
+        guard case .prepared(let completed) = try #require(model.checkoutWorkflow?.merchants.first?.state) else {
+            Issue.record("Expected completed sandbox session")
+            return
+        }
+        #expect(completed.status == .completed)
+        #expect(completed.order?.id.hasPrefix("SANDBOX-") == true)
+        #expect(model.historyEntries.isEmpty)
+
+        // A second tap after completion is ignored by the phase guard.
+        await model.completeSandboxCheckout(for: shop)
+        #expect(model.checkoutWorkflow?.merchants.first?.sandbox?.phase == .completed)
+    }
+
+    @Test("Dirty shipping cannot complete until merchant totals are updated and reviewed")
+    @MainActor
+    func dirtySandboxReviewCannotComplete() async throws {
+        let client = MockUCPClient()
+        let model = AppModel(ucp: client, curator: RuleBasedCurator())
+        let item = KitItem(product: SeedData.coffeeProducts[0])
+        await model.startCheckoutWorkflow(for: item)
+        let shop = item.product.shop
+        model.mutateSandboxPayload(for: shop) {
+            $0.firstName = "Sample"; $0.lastName = "Shopper"; $0.email = "s@example.invalid"
+            $0.street = "1 Test St"; $0.city = "Town"; $0.region = "CA"; $0.postalCode = "94107"
+        }
+        await model.submitSandboxContact(for: shop)
+        #expect(model.checkoutWorkflow?.merchants.first?.sandbox?.phase == .shipping)
+        await model.completeSandboxCheckout(for: shop) // incomplete sessions cannot complete
+        model.mutateSandboxPayload(for: shop) { $0.shippingSelections["shipment_1"] = "standard" }
+        await model.submitSandboxContact(for: shop)
+        model.mutateSandboxPayload(for: shop) { $0.shippingSelections["shipment_1"] = "express" }
+        model.acknowledgeSandboxReview(for: shop, acknowledged: true)
+        #expect(model.checkoutWorkflow?.merchants.first?.sandbox?.isDirty == true)
+        #expect(model.checkoutWorkflow?.merchants.first?.sandbox?.isAcknowledged == false)
+        await model.completeSandboxCheckout(for: shop)
+        guard case .prepared(let session) = try #require(model.checkoutWorkflow?.merchants.first?.state) else { return }
+        #expect(session.status == .readyForComplete)
+        #expect(session.order == nil)
+    }
+
+    @Test("Closing checkout discards sandbox session and transient PII")
+    @MainActor
+    func closeDiscardsSandbox() async throws {
+        let client = MockUCPClient()
+        let model = AppModel(ucp: client, curator: RuleBasedCurator())
+        await model.startCheckoutWorkflow(for: KitItem(product: SeedData.coffeeProducts[0]))
+        guard case .prepared(let session) = try #require(model.checkoutWorkflow?.merchants.first?.state) else { return }
+        model.closeCheckoutWorkflow()
+        #expect(model.checkoutWorkflow == nil)
+        // Discard is best-effort asynchronous; yield until the actor-backed mock observes it.
+        for _ in 0..<20 {
+            if (try? await client.getCheckout(id: session.id)) == nil { break }
+            await Task.yield()
+        }
+        await #expect(throws: UCPError.self) { _ = try await client.getCheckout(id: session.id) }
+    }
+
+    @Test("Expired sandbox is not ready and requests a fresh session")
+    @MainActor
+    func expiredSandboxState() async throws {
+        let now = Date()
+        let client = MockUCPClient(checkoutConfiguration: .init(
+            now: now, clock: { now }, expiresImmediately: true
+        ))
+        let model = AppModel(ucp: client, curator: RuleBasedCurator())
+        await model.startCheckoutWorkflow(for: KitItem(product: SeedData.coffeeProducts[0]))
+        #expect(model.checkoutWorkflow?.merchants.first?.sandbox?.phase == .expired)
+        #expect(model.checkoutWorkflow?.preparedCount == 0)
+    }
+
+    private static func productsFromDistinctShops(count: Int) -> [Product] {
+        var seen = Set<Shop.ID>()
+        return SeedData.products.filter { seen.insert($0.shop.id).inserted }.prefix(count).map { $0 }
+    }
+
     // MARK: - Conversational refinement
 
     @Test("A refinement reworks the deck in place, preserving the kit")
@@ -1093,6 +1268,56 @@ private struct FakeUCP: UCPClient {
     func checkoutHandoff(for shop: Shop, in cart: Cart) async throws -> URL {
         throw UCPError.emptyShopHandoff(shop.id)
     }
+}
+
+private actor CheckoutRecordingUCP: UCPClient {
+    private var recorded: [(shop: Shop.ID, key: String)] = []
+    private var recordedItems: [Shop.ID: [String]] = [:]
+    private let failFirstFor: Shop.ID?
+    private let status: CheckoutStatus
+    private let unsupported: Bool
+
+    init(
+        failFirstFor: Shop.ID? = nil,
+        status: CheckoutStatus = .requiresEscalation,
+        unsupported: Bool = false
+    ) {
+        self.failFirstFor = failFirstFor
+        self.status = status
+        self.unsupported = unsupported
+    }
+
+    func searchCatalog(_ query: String, placements: [Placement]) async throws -> [Product] { [] }
+    func product(id: Product.ID) async throws -> Product { throw UCPError.productNotFound(id) }
+    func assembleCart(_ items: [KitItem]) async throws -> Cart { Cart(items: items) }
+    func checkoutHandoff(for shop: Shop, in cart: Cart) async throws -> URL {
+        URL(string: "https://merchant.example/\(cart.items.first?.id ?? "cart")")!
+    }
+
+    func createCheckout(
+        for shop: Shop, items: [KitItem], idempotencyKey: String
+    ) async throws -> CheckoutSession {
+        recorded.append((shop.id, idempotencyKey))
+        recordedItems[shop.id] = items.map(\.id)
+        if unsupported { throw UCPError.checkoutUnsupported(shop.id) }
+        if shop.id == failFirstFor, recorded.filter({ $0.shop == shop.id }).count == 1 {
+            throw CheckoutTestError.transient
+        }
+        let amount = items.reduce(0) { $0 + NSDecimalNumber(decimal: $1.variant.price * 100).intValue }
+        return CheckoutSession(
+            id: "checkout-\(shop.id)", shop: shop, status: status,
+            currency: "USD", lineItems: [], totals: [CheckoutTotal(type: "total", amount: amount)],
+            continueURL: URL(string: "https://checkout.example/\(shop.id)")
+        )
+    }
+
+    func callCount() -> Int { recorded.count }
+    func calls(for shopID: Shop.ID) -> [String] {
+        recorded.filter { $0.shop == shopID }.map(\.key)
+    }
+    func itemIDs(for shopID: Shop.ID) -> [String] { recordedItems[shopID] ?? [] }
+
+    private enum CheckoutTestError: Error { case transient }
 }
 
 /// A deterministic ``TasteExtractor`` double: stamps a "GoalSeeded" marker into the vibe so a test

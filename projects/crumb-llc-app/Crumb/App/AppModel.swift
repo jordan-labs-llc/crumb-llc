@@ -286,6 +286,12 @@ final class AppModel {
     /// When set, the per-shop checkout handoff sheet is presented.
     var handoff: Handoff?
 
+    /// The active multi-merchant checkout preparation. A workflow snapshots the kit and keeps one
+    /// stable idempotency key per merchant for its entire lifetime, including targeted retries.
+    /// This prevents a double tap (or a retry after a timeout) from creating duplicate merchant
+    /// checkouts while still allowing every shop to succeed or fail independently.
+    var checkoutWorkflow: CheckoutWorkflow?
+
     /// A per-shop checkout handoff. `url` is the resolved UCP `continue_url` (or the
     /// merchant storefront fallback); `nil` means no handoff target exists for this shop —
     /// the sheet surfaces that honestly instead of the button silently doing nothing.
@@ -294,6 +300,80 @@ final class AppModel {
         let url: URL?
         let items: [KitItem]
         var id: String { shop.id }
+    }
+
+    struct CheckoutWorkflow: Identifiable, Hashable {
+        let id: UUID
+        var merchants: [MerchantCheckout]
+
+        var isPreparing: Bool { merchants.contains { $0.state == .preparing } }
+        var preparedCount: Int { merchants.count { $0.isReady } }
+        var completedCount: Int { merchants.count { $0.sandbox?.phase == .completed } }
+    }
+
+    struct MerchantCheckout: Identifiable, Hashable {
+        let shop: Shop
+        let items: [KitItem]
+        let idempotencyKey: String
+        var state: State
+        var sandbox: SandboxCheckout?
+        var id: Shop.ID { shop.id }
+
+        var isReady: Bool {
+            guard case .prepared(let session) = state else { return false }
+            if sandbox != nil {
+                return session.status == .readyForComplete && sandbox?.isDirty == false
+            }
+            return session.status == .requiresEscalation && session.continueURL != nil
+        }
+
+        enum State: Hashable {
+            case preparing
+            case prepared(CheckoutSession)
+            case unsupported(String, fallbackURL: URL?)
+            case failed(String)
+
+            var isPrepared: Bool {
+                if case .prepared(let session) = self,
+                   session.status == .requiresEscalation,
+                   session.continueURL != nil { return true }
+                return false
+            }
+        }
+    }
+
+    struct SandboxCheckout: Hashable {
+        enum Phase: Hashable { case contact, updating, shipping, review, completing, completed, expired, failed(String) }
+        var phase: Phase = .contact
+        var firstName = ""
+        var lastName = ""
+        var email = ""
+        var phone = ""
+        var street = ""
+        var city = ""
+        var region = ""
+        var postalCode = ""
+        var country = "US"
+        var shippingSelections: [String: String] = [:]
+        var acknowledgedFingerprint: String?
+        var authoritativeFingerprint: String?
+        var updateKey: String?
+        var completionKey: String?
+
+        var fingerprint: String {
+            [firstName, lastName, email, phone, street, city, region, postalCode, country]
+                .joined(separator: "\u{1F}") + "|" + shippingSelections.sorted { $0.key < $1.key }
+                .map { "\($0.key)=\($0.value)" }.joined(separator: "&")
+        }
+        var isDirty: Bool { authoritativeFingerprint != fingerprint }
+        var isAcknowledged: Bool { acknowledgedFingerprint == fingerprint && !isDirty }
+
+        var canSubmitContact: Bool {
+            !firstName.trimmingCharacters(in: .whitespaces).isEmpty
+                && !lastName.trimmingCharacters(in: .whitespaces).isEmpty
+                && email.contains("@") && !street.isEmpty && !city.isEmpty
+                && !region.isEmpty && !postalCode.isEmpty && country.count == 2
+        }
     }
 
     // MARK: Dependencies (seams)
@@ -462,6 +542,7 @@ final class AppModel {
     /// Sets up the Plan screen for `task`: seeds the editable parts, resets the deck, and routes
     /// to Plan **without** searching yet (the search runs on "Curate my kit", after edits).
     func enterPlan(with task: ShoppingTask, recipient: Recipient? = nil) {
+        closeCheckoutWorkflow()
         selectedTask = task
         // Who this mission is for — `nil` = Yourself. Set here (not in the composer) so every entry
         // point (live composer, seed `select`, screenshot, planAgain) resolves the recipient the
@@ -624,6 +705,29 @@ final class AppModel {
         openCart()
     }
 
+    /// Deterministic native sandbox checkout stages for screenshots and accessibility inspection.
+    func presentSandboxCheckoutForScreenshot(missionID: String, stage: String) async {
+        await presentCartForScreenshot(missionID: missionID)
+        await startCheckoutWorkflow()
+        guard let shop = checkoutWorkflow?.merchants.first?.shop else { return }
+        if stage == "contact" { return }
+        editSandboxCheckout(for: shop) {
+            $0.firstName = "Sample"; $0.lastName = "Shopper"
+            $0.email = "sample@example.invalid"; $0.street = "1 Sandbox Way"
+            $0.city = "Testville"; $0.region = "CA"; $0.postalCode = "94107"; $0.country = "US"
+        }
+        await submitSandboxContact(for: shop)
+        if stage == "completed" {
+            editSandboxCheckout(for: shop) {
+                $0.shippingSelections["shipment_1"] = "standard"
+                $0.updateKey = nil
+            }
+            await submitSandboxContact(for: shop)
+            acknowledgeSandboxReview(for: shop, acknowledged: true)
+            await completeSandboxCheckout(for: shop)
+        }
+    }
+
     /// Screenshot hook: deal a mission's deck then run a canned `refinement` through the (sim's
     /// rule-based) interpreter so the reworked deck, the "Reworking…" state, and the refinement
     /// bar all render headlessly — `simctl` can inject neither taps nor keystrokes.
@@ -688,6 +792,7 @@ final class AppModel {
     }
 
     func goToMissions() {
+        closeCheckoutWorkflow()
         // Returning to the composer resets the picker to Yourself — gifting is opt-in per mission.
         composerRecipient = nil
         route = .missions
@@ -1386,6 +1491,258 @@ final class AppModel {
     }
 
     // MARK: Checkout handoff (per shop)
+
+    /// Starts one checkout-preparation workflow for the current kit. Each merchant is independent:
+    /// one unsupported or failed shop never hides checkouts that another shop prepared successfully.
+    /// A non-nil, preparing workflow is also the double-tap guard for the cart CTA.
+    func startCheckoutWorkflow() async {
+        guard checkoutWorkflow == nil, !currentCart.items.isEmpty else { return }
+
+        let cart = currentCart
+        let workflowID = UUID()
+        checkoutWorkflow = CheckoutWorkflow(
+            id: workflowID,
+            merchants: cart.shops.map { shop in
+                MerchantCheckout(
+                    shop: shop,
+                    items: cart.items(for: shop),
+                    idempotencyKey: "crumb-\(UUID().uuidString)",
+                    state: .preparing,
+                    sandbox: nil
+                )
+            }
+        )
+
+        // Prepare independently. Keep this sequential for now: it makes state transitions fully
+        // deterministic for VoiceOver and tests, while each merchant remains individually retryable.
+        for shop in cart.shops {
+            await prepareCheckout(for: shop, in: cart, workflowID: workflowID)
+        }
+    }
+
+    /// Starts the same UCP workflow for exactly one shortlisted alternative. This preserves the
+    /// single-product mission's pick-one semantics while avoiding the legacy URL-only path.
+    func startCheckoutWorkflow(for item: KitItem) async {
+        guard checkoutWorkflow == nil else { return }
+        let workflowID = UUID()
+        let merchant = MerchantCheckout(
+            shop: item.product.shop,
+            items: [item],
+            idempotencyKey: "crumb-\(UUID().uuidString)",
+            state: .preparing,
+            sandbox: nil
+        )
+        checkoutWorkflow = CheckoutWorkflow(id: workflowID, merchants: [merchant])
+        await prepareCheckout(for: item.product.shop, in: Cart(items: [item]), workflowID: workflowID)
+    }
+
+    /// Retries only one merchant and deliberately reuses its original idempotency key.
+    func retryCheckout(for shop: Shop) async {
+        guard var workflow = checkoutWorkflow,
+              let index = workflow.merchants.firstIndex(where: { $0.shop.id == shop.id }),
+              workflow.merchants[index].state != .preparing else { return }
+        workflow.merchants[index].state = .preparing
+        checkoutWorkflow = workflow
+        await prepareCheckout(for: shop, in: Cart(items: workflow.merchants.flatMap(\.items)), workflowID: workflow.id)
+    }
+
+    private func prepareCheckout(for shop: Shop, in cart: Cart, workflowID: UUID) async {
+        guard let workflow = checkoutWorkflow, workflow.id == workflowID,
+              let merchant = workflow.merchants.first(where: { $0.shop.id == shop.id }) else { return }
+        do {
+            let session = try await ucp.createCheckout(
+                for: shop, items: merchant.items, idempotencyKey: merchant.idempotencyKey
+            )
+            updateCheckout(shopID: shop.id, workflowID: workflowID, state: .prepared(session))
+            if case .sandbox = session.provenance {
+                var sandbox = SandboxCheckout()
+                if let expiry = session.expiresAt, expiry <= Date() { sandbox.phase = .expired }
+                updateSandbox(shopID: shop.id, workflowID: workflowID) { $0 = sandbox }
+            }
+        } catch UCPError.checkoutUnsupported(_) {
+            // UCP checkout is not available for this merchant. Resolve the existing safe merchant
+            // handoff as a clearly labeled fallback, never as a prepared UCP checkout.
+            let fallback = try? await ucp.checkoutHandoff(
+                for: shop, in: Cart(items: merchant.items)
+            )
+            updateCheckout(
+                shopID: shop.id, workflowID: workflowID,
+                state: .unsupported(
+                    "This merchant does not currently offer UCP checkout in Crumb.",
+                    fallbackURL: fallback
+                )
+            )
+        } catch UCPError.emptyCheckout(_) {
+            updateCheckout(
+                shopID: shop.id, workflowID: workflowID,
+                state: .failed("No checkout items were accepted by this merchant. Your cart is unchanged.")
+            )
+        } catch {
+            updateCheckout(
+                shopID: shop.id, workflowID: workflowID,
+                state: .failed("Checkout could not be prepared. Your cart is unchanged.")
+            )
+        }
+    }
+
+    private func updateCheckout(shopID: Shop.ID, workflowID: UUID, state: MerchantCheckout.State) {
+        guard var workflow = checkoutWorkflow, workflow.id == workflowID,
+              let index = workflow.merchants.firstIndex(where: { $0.shop.id == shopID }) else { return }
+        workflow.merchants[index].state = state
+        checkoutWorkflow = workflow
+    }
+
+    func editSandboxCheckout(for shop: Shop, _ edit: (inout SandboxCheckout) -> Void) {
+        guard let workflowID = checkoutWorkflow?.id else { return }
+        updateSandbox(shopID: shop.id, workflowID: workflowID) { sandbox in
+            guard var value = sandbox else { return }
+            edit(&value)
+            sandbox = value
+        }
+    }
+
+    func submitSandboxContact(for shop: Shop) async {
+        guard let workflow = checkoutWorkflow,
+              let merchant = workflow.merchants.first(where: { $0.id == shop.id }),
+              case .prepared(let session) = merchant.state,
+              var sandbox = merchant.sandbox,
+              (sandbox.phase == .contact || sandbox.phase == .shipping || sandbox.phase == .review),
+              sandbox.canSubmitContact else { return }
+        let key = sandbox.updateKey ?? "crumb-update-\(UUID().uuidString)"
+        sandbox.updateKey = key
+        sandbox.phase = .updating
+        setSandbox(sandbox, shopID: shop.id, workflowID: workflow.id)
+        let selections = sandbox.shippingSelections.map {
+            CheckoutFulfillmentSelection(groupID: $0.key, optionID: $0.value)
+        }
+        let command = CheckoutUpdateCommand(
+            buyer: CheckoutBuyer(firstName: sandbox.firstName, lastName: sandbox.lastName,
+                                  email: sandbox.email, phoneNumber: sandbox.phone.isEmpty ? nil : sandbox.phone),
+            shippingAddress: CheckoutPostalAddress(
+                firstName: sandbox.firstName, lastName: sandbox.lastName,
+                streetAddress: sandbox.street, extendedAddress: nil, locality: sandbox.city,
+                region: sandbox.region, postalCode: sandbox.postalCode, country: sandbox.country,
+                phoneNumber: sandbox.phone.isEmpty ? nil : sandbox.phone),
+            selections: selections
+        )
+        do {
+            let updated = try await ucp.updateCheckout(id: session.id, update: command, idempotencyKey: key)
+            updateCheckout(shopID: shop.id, workflowID: workflow.id, state: .prepared(updated))
+            sandbox.phase = updated.status == .readyForComplete ? .review : .shipping
+            sandbox.shippingSelections = Dictionary(uniqueKeysWithValues: updated.fulfillmentGroups.compactMap {
+                guard let selected = $0.selectedOptionID ?? $0.options.first?.id else { return nil }
+                return ($0.id, selected)
+            })
+            // A newly surfaced default is a new payload; the explicit shipping update gets its own
+            // idempotency key while an unchanged retry continues to reuse that new key.
+            if updated.fulfillmentGroups.contains(where: { $0.selectedOptionID == nil }) {
+                sandbox.updateKey = nil
+            }
+            sandbox.authoritativeFingerprint = updated.status == .readyForComplete ? sandbox.fingerprint : nil
+            sandbox.acknowledgedFingerprint = nil
+            setSandbox(sandbox, shopID: shop.id, workflowID: workflow.id)
+        } catch UCPError.checkoutExpired {
+            sandbox.phase = .expired
+            setSandbox(sandbox, shopID: shop.id, workflowID: workflow.id)
+        } catch {
+            sandbox.phase = .failed("Sandbox checkout could not be updated. Try again.")
+            setSandbox(sandbox, shopID: shop.id, workflowID: workflow.id)
+        }
+    }
+
+    func completeSandboxCheckout(for shop: Shop) async {
+        guard let workflow = checkoutWorkflow,
+              let merchant = workflow.merchants.first(where: { $0.id == shop.id }),
+              case .prepared(let session) = merchant.state,
+              case .sandbox(let handlerID) = session.provenance,
+              handlerID == CheckoutCompletionAuthorization.crumbSandboxPay.handlerInstanceID,
+              var sandbox = merchant.sandbox,
+              session.status == .readyForComplete,
+              sandbox.phase == .review, !sandbox.isDirty, sandbox.isAcknowledged,
+              authoritativeSelections(in: session) == sandbox.shippingSelections else { return }
+        let key = sandbox.completionKey ?? "crumb-complete-\(UUID().uuidString)"
+        sandbox.completionKey = key
+        sandbox.phase = .completing
+        setSandbox(sandbox, shopID: shop.id, workflowID: workflow.id)
+        do {
+            let completed = try await ucp.completeCheckout(
+                id: session.id, authorization: .crumbSandboxPay, idempotencyKey: key)
+            updateCheckout(shopID: shop.id, workflowID: workflow.id, state: .prepared(completed))
+            sandbox.phase = .completed
+            setSandbox(sandbox, shopID: shop.id, workflowID: workflow.id)
+        } catch UCPError.checkoutExpired {
+            sandbox.phase = .expired
+            setSandbox(sandbox, shopID: shop.id, workflowID: workflow.id)
+        } catch {
+            sandbox.phase = .failed("Sandbox completion is uncertain. Refresh or start a fresh sandbox checkout before trying again.")
+            setSandbox(sandbox, shopID: shop.id, workflowID: workflow.id)
+        }
+    }
+
+    func retrySandboxCheckout(for shop: Shop) async {
+        editSandboxCheckout(for: shop) { sandbox in
+            sandbox.phase = sandbox.completionKey == nil ? .contact : .review
+        }
+    }
+
+    func acknowledgeSandboxReview(for shop: Shop, acknowledged: Bool) {
+        editSandboxCheckout(for: shop) {
+            $0.acknowledgedFingerprint = acknowledged ? $0.fingerprint : nil
+        }
+    }
+
+    func mutateSandboxPayload(for shop: Shop, _ edit: (inout SandboxCheckout) -> Void) {
+        editSandboxCheckout(for: shop) {
+            edit(&$0)
+            $0.updateKey = nil
+            $0.acknowledgedFingerprint = nil
+        }
+    }
+
+    func startFreshSandboxCheckout(for shop: Shop) async {
+        guard let merchant = checkoutWorkflow?.merchants.first(where: { $0.id == shop.id }) else { return }
+        let items = merchant.items
+        closeCheckoutWorkflow()
+        guard !items.isEmpty else { return }
+        let workflowID = UUID()
+        checkoutWorkflow = CheckoutWorkflow(id: workflowID, merchants: [MerchantCheckout(
+            shop: shop, items: items, idempotencyKey: "crumb-\(UUID().uuidString)",
+            state: .preparing, sandbox: nil
+        )])
+        await prepareCheckout(for: shop, in: Cart(items: items), workflowID: workflowID)
+    }
+
+    func closeCheckoutWorkflow() {
+        guard let workflow = checkoutWorkflow else { return }
+        let sandboxIDs = workflow.merchants.compactMap { merchant -> String? in
+            guard case .prepared(let session) = merchant.state,
+                  case .sandbox = session.provenance else { return nil }
+            return session.id
+        }
+        checkoutWorkflow = nil // immediately releases all transient buyer/address data
+        Task { for id in sandboxIDs { try? await ucp.discardCheckout(id: id) } }
+    }
+
+    private func authoritativeSelections(in session: CheckoutSession) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: session.fulfillmentGroups.compactMap {
+            guard let selected = $0.selectedOptionID else { return nil }
+            return ($0.id, selected)
+        })
+    }
+
+    private func updateSandbox(
+        shopID: Shop.ID, workflowID: UUID,
+        edit: (inout SandboxCheckout?) -> Void
+    ) {
+        guard var workflow = checkoutWorkflow, workflow.id == workflowID,
+              let index = workflow.merchants.firstIndex(where: { $0.id == shopID }) else { return }
+        edit(&workflow.merchants[index].sandbox)
+        checkoutWorkflow = workflow
+    }
+
+    private func setSandbox(_ sandbox: SandboxCheckout, shopID: Shop.ID, workflowID: UUID) {
+        updateSandbox(shopID: shopID, workflowID: workflowID) { $0 = sandbox }
+    }
 
     /// Resolves the per-shop UCP handoff URL and presents the handoff sheet.
     ///

@@ -11,9 +11,14 @@ never on the device).
 > in prod. The HTTP layer is the only thing that differs — the core logic in
 > `crumb_agent/` is framework-agnostic and unit-tested.
 
-Scope (v1): **discovery only** — `search_catalog` (the `get_product` endpoint exists but
-the GA catalog does not yet expose that tool — see Notes). No cart, no checkout
-completion, no customer data. Checkout stays a per-shop `continue_url` handoff.
+Scope: catalog discovery plus constrained UCP checkout **preparation**. Checkout creates a
+merchant-scoped session for an explicitly configured merchant and returns its handoff URL;
+it never collects buyer/payment data, completes payment, or claims an order was placed.
+
+The app's native multi-step checkout and demo order completion are a **device-local
+sandbox** backed by deterministic fixtures. No sandbox buyer/address data or mock payment
+instrument is sent to this broker. The live broker remains create-only: it exposes no
+checkout get, update, cancel, or complete endpoint.
 
 ## Endpoints
 
@@ -23,8 +28,16 @@ completion, no customer data. Checkout stays a per-shop `continue_url` handoff.
 | `GET /healthz` | open | Liveness + whether credentials are configured |
 | `POST /catalog/search` | `x-broker-key`* | `{ "query": "...", "context"?: {...} }` → products |
 | `POST /catalog/product` | `x-broker-key`* | `{ "productId": "gid://...", "selected"?: [...] }` |
+| `POST /checkout/create` | `x-broker-key`* | `{ "merchantId", "items":[{"variantId","quantity"}], "idempotencyKey" }` |
 
-\* Catalog routes require the `x-broker-key` header **only if** `CRUMB_BROKER_KEY` is set.
+\* Catalog routes require `x-broker-key` when `CRUMB_BROKER_KEY` is set. Checkout is
+stricter: once a live merchant registry is configured, `CRUMB_BROKER_KEY` is mandatory;
+the route fails closed with `checkout_auth_not_configured` if the deployment omitted it.
+
+`/checkout/create` returns `prepared`, `unsupported`, `authentication_unsupported`, or
+`preparation_failed`. The last result covers malformed/protocol-invalid merchant responses
+and is retryable by the app. Unsupported merchants fall back to their catalog product/store
+URL; they are never represented as UCP checkout success.
 
 ## How auth works (no state)
 
@@ -50,8 +63,59 @@ Container env vars. The two secrets resolve from **Key Vault references** in Azu
 | `SHOPIFY_CATALOG_URL` | — | Dev Dashboard → Catalogs → "Copy URL" |
 | `SHOPIFY_TOKEN_URL` | — | default `https://api.shopify.com/auth/access_token` |
 | `UCP_VERSION` | — | default `2026-04-08` |
-| `CRUMB_BROKER_KEY` | ✓ | optional; required as `x-broker-key` when set |
+| `CRUMB_BROKER_KEY` | ✓ | required whenever live checkout merchants are configured; optional for catalog-only deployments |
 | `AGENT_PROFILE_URL` | — | optional; auto-derived from the request host if unset |
+| `UCP_CHECKOUT_MERCHANTS_JSON` | — | JSON object mapping stable merchant IDs to allowlisted HTTPS UCP origins; empty disables live checkout |
+
+Example (quote as one environment value):
+
+```json
+{"merchant-id-from-catalog":"https://merchant.example"}
+```
+
+When this registry is non-empty, Crumb's hosted profile advertises
+`dev.ucp.shopping.checkout` as a platform/consumer capability. It deliberately does not
+publish a checkout service endpoint: each merchant remains the service provider and
+Merchant of Record. It also never advertises a payment handler. The app's mock handler is
+not a live UCP capability and must not appear in the hosted profile.
+
+## Checkout preparation flow and boundaries
+
+1. The app sends a stable merchant ID, variant IDs, quantities, and idempotency key.
+2. The broker resolves the origin only from `UCP_CHECKOUT_MERCHANTS_JSON` and fetches
+   `/.well-known/ucp` without redirects.
+3. It intersects the merchant checkout capability with configured `UCP_VERSION`, resolves
+   the advertised REST service endpoint, and posts to the normative `/checkout-sessions`
+   path with `UCP-Agent`, `Request-Id`, and `Idempotency-Key` headers.
+4. It validates the returned session/status and HTTPS handoff URL. The app then lets the
+   buyer continue in the merchant's trusted checkout UI.
+
+Because this broker is create-only and deliberately does not normalize order data, Create
+responses are accepted only in `incomplete`, `requires_escalation`, or
+`ready_for_complete`. `complete_in_progress`, `completed`, and `canceled` are rejected as
+`preparation_failed` rather than surfaced as an unverified order/completion claim.
+
+Both configured and advertised hosts receive a public-IP DNS preflight. Only HTTPS on the
+default port is accepted, redirects are not followed, and requests use the bounded
+`UCP_HTTP_TIMEOUT_SECONDS` timeout. Arbitrary origins from the device are never fetched.
+
+Residual DNS risk: the HTTP/TLS library performs its own resolution after the preflight,
+so an attacker controlling an allowlisted merchant's DNS could change answers between
+those two operations. The allowlist makes that a trusted-onboarding risk rather than an
+arbitrary-device-input risk, but it is not DNS pinning. Production should also enforce
+network-layer egress denial for private, link-local, and cloud-metadata ranges (Azure
+Firewall/NAT policy or equivalent) and monitor merchant registry changes.
+
+Current deliberate limitations: exact protocol-version match only; unsigned/public
+merchant checkout only; no merchant-specific OAuth, HTTP message signing, payment
+instruments, checkout completion/cancel, buyer PII, AP2 mandates, or cross-merchant atomic
+transaction. A merchant requiring authentication returns `authentication_unsupported`.
+
+Production-native fulfillment updates and order completion require separate payment
+provider/platform onboarding, merchant/PSP agreement, a provider-issued single-use
+credential flow, privacy-policy/App Privacy changes for buyer PII, and authenticated UCP
+update/complete support. Until those exist, live sessions continue through the merchant's
+trusted HTTPS `continue_url`; the broker will not accept buyer or payment payloads.
 
 ## Make targets
 

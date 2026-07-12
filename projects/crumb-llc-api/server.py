@@ -7,6 +7,11 @@ Routes:
 - ``GET /.well-known/ucp``   — public agent profile (Shopify fetches this; open)
 - ``POST /catalog/search``   — {"query": str, "context"?: obj}
 - ``POST /catalog/product``  — {"productId": str, "selected"?: [...]}
+- ``POST /checkout/create``  — prepare one allowlisted merchant checkout session
+
+There are intentionally no live checkout get/update/complete routes. In particular this
+broker cannot receive buyer PII, fulfillment updates, payment instruments, or proxy an
+order-completion request. The native sandbox lifecycle lives entirely on the device.
 
 If ``CRUMB_BROKER_KEY`` is set, the catalog routes require a matching ``x-broker-key``
 header. All Shopify credentials stay server-side.
@@ -16,10 +21,12 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from crumb_agent.checkout import CheckoutClient
 from crumb_agent.config import get_settings
 from crumb_agent.models import normalize_product, normalize_search
 from crumb_agent.profile import build_profile
@@ -30,6 +37,7 @@ logger = logging.getLogger("crumb_agent")
 app = FastAPI(title="Crumb UCP Broker", version="0.1.0")
 
 _client: UCPClient | None = None
+_checkout_client: CheckoutClient | None = None
 
 
 def ucp() -> UCPClient:
@@ -37,6 +45,13 @@ def ucp() -> UCPClient:
     if _client is None:
         _client = UCPClient(get_settings())
     return _client
+
+
+def checkout() -> CheckoutClient:
+    global _checkout_client
+    if _checkout_client is None:
+        _checkout_client = CheckoutClient(get_settings())
+    return _checkout_client
 
 
 class SearchBody(BaseModel):
@@ -47,6 +62,17 @@ class SearchBody(BaseModel):
 class ProductBody(BaseModel):
     productId: str
     selected: list[dict[str, Any]] | None = None
+
+
+class CheckoutItemBody(BaseModel):
+    variantId: str = Field(min_length=1, max_length=1000)
+    quantity: int = Field(default=1, ge=1, le=100)
+
+
+class CheckoutBody(BaseModel):
+    merchantId: str = Field(min_length=1, max_length=255)
+    items: list[CheckoutItemBody] = Field(min_length=1, max_length=100)
+    idempotencyKey: str = Field(min_length=20, max_length=255)
 
 
 def _require_key(x_broker_key: str | None) -> None:
@@ -74,7 +100,12 @@ def _raise_for_ucp_error(exc: UCPError) -> None:
 
 @app.get("/healthz")
 def healthz() -> dict[str, Any]:
-    return {"status": "ok", "configured": get_settings().has_credentials}
+    settings = get_settings()
+    return {
+        "status": "ok",
+        "configured": settings.has_credentials,
+        "checkoutConfigured": settings.checkout_enabled,
+    }
 
 
 @app.get("/.well-known/ucp")
@@ -118,3 +149,28 @@ def catalog_product(
     if isinstance(product, dict):
         return {"product": normalize_product(product)}
     return {"product": normalize_product(structured)}
+
+
+@app.post("/checkout/create")
+def checkout_create(
+    body: CheckoutBody,
+    request: Request,
+    x_broker_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Prepare, but never complete, one merchant-scoped UCP checkout session."""
+    settings = get_settings()
+    # Live checkout is a state-changing upstream operation. Unlike read-only catalog,
+    # enabling it without an app-to-broker secret is a deployment error, not open access.
+    if settings.checkout_enabled and not settings.broker_key:
+        raise HTTPException(status_code=503, detail="checkout_auth_not_configured")
+    _require_key(x_broker_key)
+    # Idempotency remains stable across retries; Request-Id traces this individual attempt.
+    request_id = str(uuid4())
+    outcome = checkout().create(
+        body.merchantId,
+        [item.model_dump() for item in body.items],
+        idempotency_key=body.idempotencyKey,
+        request_id=request_id,
+        profile_url=_profile_url(request),
+    )
+    return outcome.as_dict()

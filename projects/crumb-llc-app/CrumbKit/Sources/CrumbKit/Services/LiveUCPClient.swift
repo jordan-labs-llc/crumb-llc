@@ -108,6 +108,37 @@ public struct LiveUCPClient: UCPClient {
         Cart(items: items)
     }
 
+    public func createCheckout(
+        for shop: Shop,
+        items: [KitItem],
+        idempotencyKey: String
+    ) async throws -> CheckoutSession {
+        let merchantItems = items.filter { $0.product.shop.id == shop.id }
+        guard !merchantItems.isEmpty else { throw UCPError.emptyCheckout(shop.id) }
+
+        let request = BrokerCreateCheckoutRequest(
+            merchantId: shop.id,
+            items: merchantItems.map {
+                .init(variantId: $0.variant.id, quantity: 1)
+            },
+            idempotencyKey: idempotencyKey
+        )
+        let response: BrokerCheckoutOutcome = try await post("checkout/create", body: request)
+        switch response.result {
+        case "prepared":
+            guard let session = response.session else {
+                throw UCPError.checkoutPreparationFailed(shop.id, "missing_prepared_session")
+            }
+            return try session.toCheckoutSession(shop: shop)
+        case "preparation_failed":
+            throw UCPError.checkoutPreparationFailed(shop.id, response.reason ?? "checkout_not_prepared")
+        case "unsupported", "authentication_unsupported":
+            throw UCPError.checkoutUnsupported(shop.id)
+        default:
+            throw UCPError.checkoutPreparationFailed(shop.id, "unknown_broker_result")
+        }
+    }
+
     public func checkoutHandoff(for shop: Shop, in cart: Cart) async throws -> URL {
         // Prefer the per-shop `continue_url` carried on a chosen variant (the real,
         // variant-specific secure-checkout link from the catalog).
@@ -131,6 +162,36 @@ public struct LiveUCPClient: UCPClient {
         return URL(string: "https://\(domain)")
     }
 
+    /// Only merchant-controlled public HTTPS locations may become checkout handoffs.
+    static func isSafeHandoffURL(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https",
+              url.user == nil,
+              url.password == nil,
+              let host = url.host?.lowercased(),
+              url.port == nil || url.port == 443,
+              !host.isEmpty
+        else { return false }
+
+        if host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".local") {
+            return false
+        }
+        if host == "::1" || host.hasPrefix("fe80:") || host.hasPrefix("fc") || host.hasPrefix("fd") {
+            return false
+        }
+        let octets = host.split(separator: ".").compactMap { Int($0) }
+        if octets.count == 4, octets.allSatisfy({ (0...255).contains($0) }) {
+            let first = octets[0]
+            let second = octets[1]
+            if first == 0 || first == 10 || first == 127 ||
+                (first == 169 && second == 254) ||
+                (first == 172 && (16...31).contains(second)) ||
+                (first == 192 && second == 168) {
+                return false
+            }
+        }
+        return true
+    }
+
     /// Awaits the launch-time readiness ping (see ``startReadiness(baseURL:session:)``), which the
     /// `init?(config:)` path kicks at construction. Kept for the `RootView` warm-up hook: calling it
     /// just joins the in-flight warm rather than firing a second, un-retried GET. A no-op when warming
@@ -141,7 +202,7 @@ public struct LiveUCPClient: UCPClient {
 
     // MARK: Transport
 
-    private func post<T: Decodable>(_ path: String, body: [String: String]) async throws -> T {
+    private func post<T: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> T {
         let url = baseURL.appending(path: path)
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -188,6 +249,101 @@ private struct BrokerSearchResponse: Decodable {
 
 private struct BrokerProductResponse: Decodable {
     let product: BrokerProduct?
+}
+
+private struct BrokerCreateCheckoutRequest: Encodable {
+    struct Item: Encodable {
+        let variantId: String
+        let quantity: Int
+    }
+
+    let merchantId: String
+    let items: [Item]
+    let idempotencyKey: String
+}
+
+private struct BrokerCheckoutOutcome: Decodable {
+    let result: String
+    let merchantId: String
+    let reason: String?
+    let session: BrokerCheckoutResponse?
+}
+
+private struct BrokerCheckoutResponse: Decodable {
+    struct Line: Decodable {
+        struct Item: Decodable {
+            let id: String
+            let title: String
+            let price: Int
+        }
+
+        let id: String
+        let item: Item
+        let quantity: Int
+        let totals: [CheckoutTotal]
+    }
+
+    struct Link: Decodable {
+        let type: String
+        let url: String
+        let title: String?
+    }
+
+    let id: String
+    let status: CheckoutStatus
+    let currency: String
+    let lineItems: [Line]
+    let totals: [CheckoutTotal]
+    let messages: [CheckoutMessage]?
+    let links: [Link]
+    let continueURL: String?
+    let expiresAt: String?
+
+    func toCheckoutSession(shop: Shop) throws -> CheckoutSession {
+        let handoff: URL?
+        if let continueURL {
+            guard let candidate = URL(string: continueURL), LiveUCPClient.isSafeHandoffURL(candidate) else {
+                throw UCPError.invalidContinueURL
+            }
+            handoff = candidate
+        } else {
+            handoff = nil
+        }
+
+        let checkoutLinks = try links.map { link in
+            guard let url = URL(string: link.url), LiveUCPClient.isSafeHandoffURL(url) else {
+                throw UCPError.checkoutPreparationFailed(shop.id, "unsafe_checkout_link")
+            }
+            return CheckoutLink(type: link.type, url: url, title: link.title)
+        }
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let expiry = expiresAt.flatMap { value in
+            formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        }
+        return CheckoutSession(
+            id: id,
+            shop: shop,
+            status: status,
+            currency: currency,
+            lineItems: lineItems.map {
+                CheckoutLineItem(
+                    id: $0.id,
+                    itemID: $0.item.id,
+                    title: $0.item.title,
+                    unitPrice: $0.item.price,
+                    quantity: $0.quantity,
+                    totals: $0.totals
+                )
+            },
+            totals: totals,
+            messages: messages ?? [],
+            links: checkoutLinks,
+            continueURL: handoff,
+            expiresAt: expiry
+        )
+    }
 }
 
 private struct BrokerMoney: Decodable {
