@@ -15,21 +15,21 @@ This adapts the useful property of Claude's `AskUserQuestion` flow: the assistan
 structured request for input, the host presents a focused answer surface, and execution resumes
 with a structured answer. It does not attempt to copy Claude's visual treatment literally.
 
-## Why the current implementation still feels hybrid
+## Why the first conversation pass still felt hybrid
 
-The current implementation has a strong thread and persistence model, but its interaction model is
-still screen-oriented:
+The first pass made the transcript and rich artifacts read-only and moved mission answers to a
+bottom dock. Two visual seams remained:
 
-- The conversation is a collapsible status strip showing only the latest two events by default.
-- `planReady` replaces the composer with a standalone **Curate my kit** button.
-- The plan artifact owns inline text fields, add buttons, and remove buttons.
-- The product artifact owns swipe decisions and standalone Add/Skip buttons.
-- Refinement chips, Reset, Save to taste, retry, persistence retry, and the kit/cart action appear
-  in different regions.
+- New missions still began in a scrolling form with a recipient picker, large field, separate
+  **Plan it** button, example chips, and Siri card.
+- Active missions stacked full-width option cards above a second rounded text field. Although both
+  lived in the dock, the result still looked like a control panel attached to chat.
+- People, History, and Taste occupied three persistent header icons, giving a tab-like impression
+  even though the application has no `TabView`.
 
-The user's input locus and interaction grammar therefore change with the mission phase. Styling
-these controls as chat cards would not solve the problem; it would merely scatter input throughout
-the transcript.
+The second pass makes the composer envelope itself the only mission input grammar. It appears in
+the same bottom location before and during a mission, owns its context and suggested replies, and
+collapses secondary navigation into one menu.
 
 ## Alternatives considered
 
@@ -67,9 +67,15 @@ supports these modes:
 V1 deliberately omits multi-select. If a later mission genuinely needs it, it must have a concrete
 flow plus keyboard, VoiceOver, persistence, and relaunch tests before the generic mode is added.
 
-At accessibility Dynamic Type sizes, options become full-width vertical rows above the text field.
-The unanswered question remains in the latest assistant turn; the dock's accessibility label names
-that question so the relationship is explicit.
+At normal text sizes, up to four short replies appear as compact, composer-owned suggestions. A
+detailed or overflowing choice opens a bounded, scrollable sheet owned by the composer and repeats
+the current question and subject. At accessibility Dynamic Type sizes, that expansion uses full-width 44-point
+rows instead of creating a nested option scroller or consuming the conversation viewport.
+Confirmation-only interactions do not render an inert text field.
+
+Every delayed reply retains the frozen thread ID, interaction ID, interaction generation, and
+subject revision captured when it was presented. If any part changes, the composer dismisses the
+old expansion and the reducer rejects the stale answer; matching option labels are never enough.
 
 Navigation is not conversational input. Back, Missions, History, Profile, passive product details,
 and the focused Cart/checkout surface may remain conventional navigation. Mission decisions do not.

@@ -3,7 +3,7 @@ import XCTest
 /// Deterministic coverage for the mission-entry accessibility + direct-product-search work (#61),
 /// using the seeded screenshot hooks (no live broker): onboarding controls must be queryable by
 /// their OWN ids (not clobbered to the container id), and mission entry must advertise a direct
-/// product search alongside the kit/space examples.
+/// product search alongside the kit/space examples, all owned by the sole bottom composer.
 final class MissionEntryAccessibilityUITests: XCTestCase {
 
     @MainActor
@@ -26,18 +26,48 @@ final class MissionEntryAccessibilityUITests: XCTestCase {
     }
 
     @MainActor
-    func testMissionEntryOffersADirectProductSearchExample() {
+    func testMissionEntryUsesOneBottomComposerAndStagesExamples() {
         let app = XCUIApplication()
         app.launchEnvironment["CRUMB_SCREENSHOT"] = "composer"   // seeded profile → lands on Missions
         app.launch()
 
-        // A direct-product example must be present so a first-run user learns finding one specific
-        // product is a first-class use, not only kit/outfitting missions. The quick-start chips
-        // carry the VoiceOver label "Plan: <prompt>".
-        XCTAssertTrue(app.buttons["Plan: Find premium jasmine tea"].waitForExistence(timeout: 20),
-                      "#61: mission entry shows no direct-product-search example")
-        // The kit/space examples remain too — both modes are advertised.
-        XCTAssertTrue(app.buttons["Plan: Set up my pour-over corner"].exists,
-                      "#61: kit/outfitting examples should remain alongside the direct-product one")
+        let dock = app.descendants(matching: .any).matching(identifier: "missionResponseDock").firstMatch
+        XCTAssertTrue(dock.waitForExistence(timeout: 20), "Mission entry has no bottom composer")
+        let field = app.descendants(matching: .any).matching(identifier: "missionResponseField").firstMatch
+        XCTAssertTrue(field.exists, "New and active missions must share the same input field")
+        XCTAssertEqual(app.textFields.count, 1, "Mission entry must expose exactly one editable field")
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "composerField").firstMatch.exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "planButton").firstMatch.exists)
+
+        // A direct-product and a kit example remain discoverable, but tapping only stages text in
+        // the composer; Send is still the one action that starts the mission.
+        let jasmine = app.buttons["newMissionSuggestion.jasmine-tea"]
+        XCTAssertTrue(jasmine.waitForExistence(timeout: 20),
+                      "#61: mission entry shows no direct-product-search suggestion")
+        XCTAssertTrue(app.buttons["newMissionSuggestion.pour-over"].exists,
+                      "#61: kit/outfitting suggestion should remain alongside direct search")
+        jasmine.tap()
+        XCTAssertEqual(field.value as? String, "Find premium jasmine tea")
+        XCTAssertTrue(app.buttons["missionResponseSend"].isEnabled)
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "MissionsScreen").firstMatch.exists,
+                      "Staging an example must not submit it")
+    }
+
+    @MainActor
+    func testSecondaryDestinationsLiveInOneHeaderMenu() {
+        let app = XCUIApplication()
+        app.launchEnvironment["CRUMB_SCREENSHOT"] = "composer"
+        app.launch()
+
+        let more = app.descendants(matching: .any).matching(identifier: "moreMenu").firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 20))
+        more.tap()
+
+        for identifier in ["historyButton", "peopleButton", "tasteProfileButton", "siriButton"] {
+            XCTAssertTrue(
+                app.descendants(matching: .any).matching(identifier: identifier).firstMatch.waitForExistence(timeout: 5),
+                "More menu lost \(identifier)"
+            )
+        }
     }
 }

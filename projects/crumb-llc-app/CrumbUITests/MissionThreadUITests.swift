@@ -28,6 +28,12 @@ final class MissionThreadUITests: XCTestCase {
     }
 
     @MainActor
+    private func dockOption(_ identifier: String) -> XCUIElement {
+        element("missionResponseDock").descendants(matching: .any)
+            .matching(identifier: "missionResponseOption.\(identifier)").firstMatch
+    }
+
+    @MainActor
     private func artifact(prefix: String, excluding identifier: String? = nil) -> XCUIElement {
         var format = "identifier BEGINSWITH %@"
         var arguments: [Any] = [prefix]
@@ -83,13 +89,18 @@ final class MissionThreadUITests: XCTestCase {
     }
 
     @MainActor
-    private func assertSoleMissionInput(file: StaticString = #filePath, line: UInt = #line) {
+    private func assertSoleMissionInput(
+        expectsEditableField: Bool = true,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
         XCTAssertTrue(element("missionResponseDock").exists, file: file, line: line)
-        XCTAssertTrue(element("missionResponseField").exists, file: file, line: line)
-        XCTAssertEqual(app.textFields.count, 1, "Mission must expose exactly one editable field", file: file, line: line)
+        XCTAssertEqual(element("missionResponseField").exists, expectsEditableField, file: file, line: line)
+        XCTAssertLessThanOrEqual(app.textFields.count, 1, "Mission must expose zero or one editable field", file: file, line: line)
         for removed in [
             "curateButton", "addButton", "skipButton", "kitTray", "threadRetryButton",
             "threadPersistenceRetryButton", "addPartField", "threadComposerField",
+            "composerField", "planButton",
         ] {
             XCTAssertFalse(element(removed).exists, "Legacy action remains outside the dock: \(removed)", file: file, line: line)
         }
@@ -106,10 +117,11 @@ final class MissionThreadUITests: XCTestCase {
         XCTAssertTrue(element("MissionsScreen").waitForExistence(timeout: 20))
 
         let goal = "Set up my pour-over corner"
-        let missionField = element("composerField")
+        XCTAssertTrue(element("missionResponseDock").waitForExistence(timeout: 10))
+        let missionField = element("missionResponseField")
         XCTAssertTrue(waitTap(missionField, timeout: 10, "mission composer"))
         missionField.typeText(goal)
-        XCTAssertTrue(waitTap(app.buttons["planButton"], timeout: 10, "Plan it"))
+        XCTAssertTrue(waitTap(element("missionResponseSend"), timeout: 10, "send mission"))
 
         XCTAssertTrue(element("MissionThreadScreen").waitForExistence(timeout: 30))
         let firstPlan = artifact(prefix: "missionArtifact.plan.")
@@ -140,6 +152,21 @@ final class MissionThreadUITests: XCTestCase {
         assertSoleMissionInput()
         snap("conversation-04-product-question")
         return product.identifier
+    }
+
+    @MainActor
+    func testTypedProductWriteBecomesComposerOnlyConfirmation() {
+        _ = launchToFirstProductQuestion()
+
+        let field = element("missionResponseField")
+        XCTAssertTrue(waitTap(field, timeout: 10, "product response field"))
+        field.typeText("add it")
+        XCTAssertTrue(waitTap(element("missionResponseSend"), timeout: 5, "send product request"))
+
+        XCTAssertTrue(dockOption("add").waitForExistence(timeout: 10))
+        XCTAssertTrue(dockOption("cancel").exists)
+        assertSoleMissionInput(expectsEditableField: false)
+        snap("conversation-product-confirmation")
     }
 
     @MainActor
@@ -262,8 +289,17 @@ final class MissionThreadUITests: XCTestCase {
                       "AX pending product question exists only in offscreen scrollback")
         XCTAssertTrue(element("missionResponseDock").waitForExistence(timeout: 10))
         XCTAssertTrue(element("missionResponseField").exists)
+        XCTAssertTrue(waitTap(
+            element("missionResponseChoiceDisclosure"),
+            timeout: 10,
+            "expand accessibility responses"
+        ))
+        XCTAssertTrue(element("missionResponseChoiceSheet").waitForExistence(timeout: 10))
+        XCTAssertTrue(element("missionResponseChoiceQuestion").exists)
         for id in ["add", "skip", "show-another", "adjust-search"] {
-            XCTAssertTrue(option(id).exists, "AX dock lost product response: \(id)")
+            let option = element("missionResponseOption.\(id)")
+            XCTAssertTrue(option.exists, "AX composer expansion lost product response: \(id)")
+            XCTAssertTrue(option.isHittable, "AX composer response is not actionable: \(id)")
         }
         assertSoleMissionInput()
         snap("conversation-axxxl-product-question")

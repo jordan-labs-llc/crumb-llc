@@ -87,12 +87,13 @@ final class LacrosseGearJourneyTests: XCTestCase {
         _ = greeting.waitForExistence(timeout: 15)
         snap("01-missions")
 
-        let field = el("composerField")
-        if waitTap(field, 10, "composerField") {
+        _ = el("missionResponseDock").waitForExistence(timeout: 10)
+        let field = el("missionResponseField")
+        if waitTap(field, 10, "missionResponseField") {
             field.typeText("premium lacrosse gear")
             snap("02-goal-typed")
         }
-        waitTap(app.buttons["planButton"], 5, "planButton")
+        waitTap(el("missionResponseSend"), 5, "missionResponseSend")
 
         // ---- Plan artifact inside the stable mission thread ----
         if el("MissionThreadScreen").waitForExistence(timeout: 60),

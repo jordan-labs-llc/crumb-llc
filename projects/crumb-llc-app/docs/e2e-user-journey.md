@@ -116,10 +116,10 @@ Steps captured by the driver:
 | snap | screen | key action |
 |---|---|---|
 | `00-launch` | onboarding (fresh install) | tap **Skip** |
-| `01-missions` | composer | type the goal into `composerField` |
-| `02-goal-typed` | composer | tap `planButton` ("Plan it") |
-| `03-plan` | thread with embedded plan artifact | tap **Curate my kit** |
-| `04-curate-first`…`06-curate-after-adds` | thread with embedded product deck | tap **Add to kit** ×N |
+| `01-missions` | conversations home + bottom composer | type the goal into `missionResponseField` |
+| `02-goal-typed` | bottom composer | tap `missionResponseSend` |
+| `03-plan` | conversation + read-only plan artifact | choose `missionResponseOption.start-shopping` |
+| `04-curate-first`…`06-curate-after-adds` | conversation + read-only product artifacts | choose composer replies by semantic id |
 | `07-cart` | cart | tap **Start checkout(s)** |
 | `08-checkout-workflow` / `09-final` | checkout sheet | inspect live escalation or sandbox steps |
 

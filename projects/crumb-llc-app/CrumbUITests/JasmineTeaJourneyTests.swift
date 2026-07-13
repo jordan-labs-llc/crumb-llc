@@ -72,14 +72,13 @@ final class JasmineTeaJourneyTests: XCTestCase {
         XCTAssertTrue(greeting.waitForExistence(timeout: 15), "Missions composer never appeared")
         snap("01-missions")
 
-        let field = el("composerField")
-        XCTAssertTrue(waitTap(field, 10, "composerField"), "composer field is unavailable")
+        XCTAssertTrue(el("missionResponseDock").waitForExistence(timeout: 10))
+        let field = el("missionResponseField")
+        XCTAssertTrue(waitTap(field, 10, "missionResponseField"), "composer field is unavailable")
         field.typeText("premium jasmine tea")
         snap("02-goal-typed")
 
-        // Dismiss keyboard if present, then plan.
-        if app.keyboards.buttons["Return"].exists { /* leave; submitLabel is .go */ }
-        XCTAssertTrue(waitTap(app.buttons["planButton"], 5, "planButton"), "plan button is unavailable")
+        XCTAssertTrue(waitTap(el("missionResponseSend"), 5, "missionResponseSend"), "send is unavailable")
 
         // ---- Step 2: plan artifact inside the stable mission thread ----
         let threadScreen = el("MissionThreadScreen")
