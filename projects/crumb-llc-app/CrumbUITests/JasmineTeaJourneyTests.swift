@@ -31,6 +31,13 @@ final class JasmineTeaJourneyTests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
+    private func prefixed(_ id: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", id)).firstMatch
+    }
+
+    private func option(_ id: String) -> XCUIElement { el("missionResponseOption.\(id)") }
+
     @discardableResult
     private func waitTap(_ e: XCUIElement, _ t: TimeInterval, _ label: String) -> Bool {
         guard e.waitForExistence(timeout: t) else {
@@ -74,86 +81,62 @@ final class JasmineTeaJourneyTests: XCTestCase {
         if app.keyboards.buttons["Return"].exists { /* leave; submitLabel is .go */ }
         XCTAssertTrue(waitTap(app.buttons["planButton"], 5, "planButton"), "plan button is unavailable")
 
-        // ---- Step 2: Plan editor (live planner: network + on-device model / fallback) ----
-        let planScreen = el("PlanScreen")
-        if planScreen.waitForExistence(timeout: 60) {
+        // ---- Step 2: plan artifact inside the stable mission thread ----
+        let threadScreen = el("MissionThreadScreen")
+        if threadScreen.waitForExistence(timeout: 60),
+           prefixed("missionArtifact.plan.").waitForExistence(timeout: 12) {
             usleep(600_000)   // let the route transition settle before auditing the hierarchy
             snap("03-plan")
-            // #66 regression guard: once the Plan screen is up, the Missions/composer surface must be
+            // #66 regression guard: once the thread is up, the Missions/composer surface must be
             // fully gone — not ghosted behind it. The old crossfade left both mounted at once, so the
             // Plan title collided with "What are we shopping for?" and "Ask with Siri".
             XCTAssertFalse(el("MissionsScreen").exists,
-                           "#66: MissionsScreen still in the hierarchy behind PlanScreen (ghosting)")
+                           "#66: MissionsScreen still in the hierarchy behind MissionThreadScreen (ghosting)")
             XCTAssertFalse(app.staticTexts["What are we shopping for?"].exists,
                            "#66: composer greeting still ghosted behind the Plan screen")
             XCTAssertFalse(app.staticTexts["Ask with Siri"].exists,
                            "#66: 'Ask with Siri' still ghosted behind the Plan screen")
-            // #24 regression guard: the plan CTA now carries its OWN id — the screen container no
-            // longer clobbers the safeAreaInset button to "PlanScreen". Assert it's queryable by id
-            // (fails if the a11y-id clobbering regresses), then tap it. Label fallback kept so the
-            // run still completes and captures where it broke.
-            let curate = el("curateButton")
-            let curateByID = curate.waitForExistence(timeout: 12)
-            XCTAssertTrue(curateByID, "curateButton is not queryable by id — #24 a11y-id clobbering regressed")
-            waitTap(curateByID ? curate : app.buttons["Curate my kit"], 12, "curateButton")
+            XCTAssertTrue(el("missionResponseDock").exists)
+            XCTAssertTrue(waitTap(option("start-shopping"), 12, "Start shopping"))
         } else if app.staticTexts["composerDecline"].exists || el("composerDecline").exists {
             snap("03-plan-declined")
             XCTFail("premium jasmine tea was incorrectly declined")
         } else {
             snap("03-plan-timeout")
-            XCTFail("Plan screen never appeared")
+            XCTFail("Mission thread plan artifact never appeared")
         }
 
-        // ---- Step 3: Curate swipe deck (live catalog search + curation) ----
-        if el("CurateScreen").waitForExistence(timeout: 90) {
-            snap("04-curate-first")
-            // #57: once CurateScreen is the accessibility root, the Plan loading surface must be
-            // gone — the two states should never be exposed at once.
-            XCTAssertFalse(app.staticTexts["Scanning shops for the right pieces…"].exists,
-                           "#57: Plan's loading scan row is still exposed after CurateScreen appeared")
-            // The deck streams raw picks first, then *settles* into the ranked, curator-voiced order.
-            // The blocking "Curating your picks…" spinner (`gatheringBanner`) must NOT linger over an
-            // actionable deck: within the settle window it either clears (settled) or downgrades to
-            // the quiet, non-blocking `refiningBanner` (#57). Wait out that window, then assert.
-            let deckReady = app.buttons["addButton"].waitForExistence(timeout: 30)
-            XCTAssertTrue(deckReady, "deck never became actionable")
-            // Poll until the blocking spinner is gone (bounded well above the 12s downgrade window).
-            let gathering = el("gatheringBanner")
-            let bannerDeadline = Date().addingTimeInterval(30)
-            while gathering.exists && Date() < bannerDeadline { usleep(300_000) }
-            snap("04-curate-settled")
-            let productCard = el("productCard")
-            XCTAssertTrue(productCard.waitForExistence(timeout: 10), "no settled product card is visible")
+        // ---- Step 3: frozen product question in the same conversation ----
+        if prefixed("missionArtifact.product.").waitForExistence(timeout: 90) {
+            snap("04-product-first")
+            XCTAssertTrue(el("MissionThreadScreen").exists,
+                          "MissionThreadScreen disappeared during product discovery")
+            let productCard = prefixed("missionArtifact.product.")
             XCTAssertTrue(
                 productCard.label.localizedCaseInsensitiveContains("jasmine"),
-                "the settled Shopify product card is not a jasmine result: \(productCard.label)"
+                "the Shopify product question is not a jasmine result: \(productCard.label)"
             )
-            // #57 core contract: no long-lived blocking spinner over a usable deck.
-            XCTAssertFalse(app.buttons["addButton"].exists && el("gatheringBanner").exists,
-                           "#57: `gatheringBanner` spinner still shown while the deck is actionable")
-            // #24 regression guard: the deck controls must carry their OWN ids, not the screen
-            // container's — before the fix addButton/skipButton both reported "CurateScreen".
-            XCTAssertTrue(app.buttons["addButton"].waitForExistence(timeout: 20),
-                          "addButton is not queryable by id — #24 a11y-id clobbering regressed")
-            XCTAssertTrue(app.buttons["skipButton"].exists,
-                          "skipButton is not queryable by id — #24 a11y-id clobbering regressed")
+            XCTAssertTrue(option("add").waitForExistence(timeout: 20))
+            XCTAssertTrue(option("skip").exists)
             for i in 0..<3 {
-                var add = app.buttons["addButton"]
-                if !add.exists { add = app.buttons["Add to kit"] }
+                let add = option("add")
                 if add.waitForExistence(timeout: 20), add.isEnabled {
-                    snap("05-curate-card-\(i)")
+                    snap("05-product-\(i)")
                     add.tap()
                     usleep(700_000)
                 } else { break }
             }
-            snap("06-curate-after-adds")
+            snap("06-after-adds")
         } else {
-            snap("04-curate-timeout"); return
+            snap("04-product-timeout"); return
         }
 
-        // ---- Step 4: open the Kit tray -> Cart. Tray label begins "Kit,". ----
-        let kitTray = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Kit,'")).firstMatch
-        waitTap(kitTray, 10, "kitTray")
+        // ---- Step 4: answer remaining product questions, then review the read-only kit. ----
+        for _ in 0..<30 {
+            if option("review-cart").waitForExistence(timeout: 1) { break }
+            guard waitTap(option("skip"), 20, "Skip remaining product") else { break }
+        }
+        XCTAssertTrue(waitTap(option("review-cart"), 15, "Review cart"))
 
         if el("CartScreen").waitForExistence(timeout: 15) {
             snap("07-cart")

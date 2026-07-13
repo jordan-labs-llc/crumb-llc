@@ -70,6 +70,9 @@ public struct HistoryEntry: Identifiable, Hashable, Sendable, Codable {
     /// Stable per shopping session, so re-reaching the cart in one session updates the same entry
     /// rather than spawning near-duplicates from back-and-forth editing.
     public let id: String
+    /// Optional scalar link to the conversation-backed workspace that produced this receipt.
+    /// Legacy rows decode `nil`; neither side owns or cascades to the other.
+    public let threadID: String?
     /// The original goal text, re-routed through the planner by "Plan this again".
     public let goal: String
     public let title: String
@@ -98,6 +101,7 @@ public struct HistoryEntry: Identifiable, Hashable, Sendable, Codable {
 
     public init(
         id: String,
+        threadID: String? = nil,
         goal: String,
         title: String,
         subtitle: String,
@@ -113,6 +117,7 @@ public struct HistoryEntry: Identifiable, Hashable, Sendable, Codable {
         createdAt: Date
     ) {
         self.id = id
+        self.threadID = threadID
         self.goal = goal
         self.title = title
         self.subtitle = subtitle
@@ -160,7 +165,7 @@ public struct HistoryEntry: Identifiable, Hashable, Sendable, Codable {
     /// An immutable copy with the outcome flag flipped (the handoff-followed update).
     public func withHandedOff(_ value: Bool) -> HistoryEntry {
         HistoryEntry(
-            id: id, goal: goal, title: title, subtitle: subtitle, plan: plan,
+            id: id, threadID: threadID, goal: goal, title: title, subtitle: subtitle, plan: plan,
             searchQueries: searchQueries, curatorNote: curatorNote, accentHex: accentHex,
             recapTag: recapTag, recapLine: recapLine, items: items, recipient: recipient,
             handedOff: value, createdAt: createdAt

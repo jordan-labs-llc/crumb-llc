@@ -21,8 +21,12 @@ grep -q 'simctl bootstatus' <<<"$dry_run" || fail "preflight must wait for simul
 grep -q 'xcodebuild.*build-for-testing' <<<"$dry_run" || fail "preflight must build the test bundle once"
 grep -q 'xcodebuild.*test-without-building' <<<"$dry_run" \
   || fail "preflight must isolate simulator test invocations"
+grep -q -- '-only-testing:CrumbUITests/MissionThreadUITests' <<<"$dry_run" \
+  || fail "preflight must include the persistent mission-thread journey"
+grep -A1 'ui_expected_count=2' <<<"$dry_run" | grep -q 'KitCompletenessCartUITests' \
+  || fail "preflight must expect both kit-completeness UI tests"
 
-archive_run="$(BUILD_NUMBER=2026071001 "$SCRIPT" --dry-run archive)"
+archive_run="$(BUILD_NUMBER=2026071001 ALLOW_MOCK_TESTFLIGHT=1 "$SCRIPT" --dry-run archive)"
 grep -q "generic/platform=iOS" <<<"$archive_run" || fail "archive must target generic iOS"
 grep -q "CURRENT_PROJECT_VERSION=2026071001" <<<"$archive_run" || fail "archive must use BUILD_NUMBER"
 

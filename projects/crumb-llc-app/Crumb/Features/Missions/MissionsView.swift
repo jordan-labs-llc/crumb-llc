@@ -14,6 +14,12 @@ struct MissionsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: CrumbMetrics.Space.l) {
                 greeting
+                if !model.incompleteThreads.isEmpty {
+                    ContinueMissionsSection(threads: model.incompleteThreads)
+                }
+                if !model.threadLoadFailures.isEmpty {
+                    ThreadRecoverySection(failures: model.threadLoadFailures)
+                }
                 MissionComposer()
                 siriHint
             }
@@ -65,6 +71,123 @@ struct MissionsView: View {
         }
         .buttonStyle(.plain)
         .accessibilityHint("Shows how the Siri shortcut routes into Crumb")
+    }
+}
+
+/// Quarantined thread rows remain visible and deletable instead of silently disappearing.
+private struct ThreadRecoverySection: View {
+    @Environment(AppModel.self) private var model
+    let failures: [MissionThreadLoadFailure]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
+            Label("Couldn’t restore", systemImage: "exclamationmark.icloud")
+                .font(CrumbType.captionStrong)
+                .foregroundStyle(CrumbColor.ochre)
+            ForEach(failures) { failure in
+                HStack(alignment: .top, spacing: CrumbMetrics.Space.m) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(failure.title)
+                            .font(CrumbType.headline)
+                            .foregroundStyle(CrumbColor.ink)
+                        Text("This saved mission is damaged and can’t be opened.")
+                            .font(CrumbType.caption)
+                            .foregroundStyle(CrumbColor.ink2)
+                    }
+                    Spacer(minLength: 0)
+                    Button("Delete", role: .destructive) {
+                        model.deleteThreadLoadFailure(failure)
+                    }
+                    .font(CrumbType.captionStrong)
+                    .accessibilityIdentifier("deleteThreadFailure.\(failure.id)")
+                }
+                .crumbCard()
+            }
+        }
+        .accessibilityIdentifier("threadRecoverySection")
+    }
+}
+
+/// Durable, unfinished mission threads sorted by the model's recency order. Each row is explicit
+/// about resuming versus deleting so backing out of a workspace never strands saved state.
+private struct ContinueMissionsSection: View {
+    @Environment(AppModel.self) private var model
+    let threads: [MissionThread]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
+            Label("Continue", systemImage: "bubble.left.and.bubble.right")
+                .font(CrumbType.captionStrong)
+                .foregroundStyle(CrumbColor.ink3)
+
+            ForEach(threads, id: \.id) { thread in
+                HStack(spacing: CrumbMetrics.Space.s) {
+                    Button {
+                        model.resumeThread(thread)
+                    } label: {
+                        HStack(spacing: CrumbMetrics.Space.m) {
+                            ZStack {
+                                Circle().fill(CrumbColor.pineSoft)
+                                Image(systemName: "arrow.right")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(CrumbColor.pine)
+                            }
+                            .frame(width: 34, height: 34)
+                            .accessibilityHidden(true)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(thread.task?.title ?? thread.goal)
+                                    .font(CrumbType.headline)
+                                    .foregroundStyle(CrumbColor.ink)
+                                    .lineLimit(2)
+                                Text(status(for: thread.phase))
+                                    .font(CrumbType.caption)
+                                    .foregroundStyle(CrumbColor.ink2)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Continue \(thread.task?.title ?? thread.goal)")
+                    .accessibilityIdentifier("continueThread.\(thread.id)")
+
+                    Button(role: .destructive) {
+                        model.deleteThread(thread)
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.callout)
+                            .foregroundStyle(CrumbColor.ink3)
+                            .frame(width: 34, height: 34)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Delete \(thread.task?.title ?? thread.goal)")
+                    .accessibilityIdentifier("deleteThread.\(thread.id)")
+                }
+                .padding(CrumbMetrics.Space.m)
+                .background(CrumbColor.raised, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous)
+                        .strokeBorder(CrumbColor.line, lineWidth: 1)
+                )
+                .accessibilityElement(children: .contain)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("continueMissionsSection")
+    }
+
+    private func status(for phase: MissionThreadPhase) -> String {
+        switch phase {
+        case .planning: "Planning"
+        case .planReady: "Plan ready"
+        case .gathering: "Searching shops"
+        case .deckReady: "Picks ready"
+        case .failed: "Needs attention"
+        case .declined: "Ready for another goal"
+        case .completed: "Completed"
+        case .abandoned: "Ended"
+        }
     }
 }
 

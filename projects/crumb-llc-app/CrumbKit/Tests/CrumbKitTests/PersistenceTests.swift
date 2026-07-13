@@ -3,8 +3,8 @@ import Foundation
 import SwiftData
 @testable import CrumbKit
 
-/// Regression guard for the store-collision bug: four `@Model` types (taste, recents, history,
-/// recipients) each used to build their **own** `ModelContainer`, and each container defaulted to
+/// Regression guard for the store-collision bug: the persisted `@Model` types (taste, recents,
+/// history, recipients, and mission threads) must share one `ModelContainer`, rather than each
 /// the *same* `default.store` file. SwiftData writes only the schema it was given, so the first
 /// container to open created its one table and the rest hit `no such table` — silently, because
 /// every write was a `try?`. The fix (`CrumbPersistence`) opens **one** shared container over the
@@ -24,11 +24,11 @@ struct PersistenceTests {
         return try ModelContainer(for: schema, configurations: configuration)
     }
 
-    /// The core acceptance test for Phase 1: write through **all four** stores on one shared on-disk
+    /// The core acceptance test for Phase 1: write through **all five** stores on one shared on-disk
     /// container, drop it (app quit), reopen a fresh one at the same file (relaunch), and require
     /// every store reads its row back. Pre-fix this threw / returned empty for three of the four,
     /// because their tables never existed in the shared file.
-    @Test("All four stores coexist on one file and survive a relaunch")
+    @Test("All five stores coexist on one file and survive a relaunch")
     @MainActor
     func sharedContainerSurvivesRelaunch() throws {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -42,7 +42,7 @@ struct PersistenceTests {
         let person = Recipient(id: "r1", name: "Mom", relationship: "mother",
                                taste: taste, accentHex: 0x1C4B43, createdAt: Date(timeIntervalSince1970: 1_000))
         let past = HistoryEntry(
-            id: "h1", goal: "premium jasmine tea", title: "Jasmine, done right",
+            id: "h1", threadID: "thread-1", goal: "premium jasmine tea", title: "Jasmine, done right",
             subtitle: "3 picks", plan: ["find loose-leaf jasmine"], searchQueries: ["jasmine tea"],
             curatorNote: "note", accentHex: 0x1C4B43, recapTag: "Tea", recapLine: "A calm cup.",
             items: [], recipient: person.ref, handedOff: true, createdAt: Date(timeIntervalSince1970: 2_000))
@@ -54,6 +54,10 @@ struct PersistenceTests {
             SwiftDataRecentMissionsStore(container: container).addRecent("premium jasmine tea")
             SwiftDataHistoryStore(container: container).save(past)
             SwiftDataRecipientStore(container: container).save(person)
+            try SwiftDataMissionThreadStore(container: container).save(MissionThread(
+                id: "thread-1", goal: "premium jasmine tea", recipient: person, taste: taste,
+                now: Date(timeIntervalSince1970: 3_000)
+            ))
         }()
 
         // Relaunch: a fresh container on the same file must read every row back — no `no such table`.
@@ -65,10 +69,45 @@ struct PersistenceTests {
         let loadedHistory = SwiftDataHistoryStore(container: container).loadEntries()
         #expect(loadedHistory.map(\.id) == ["h1"])
         #expect(loadedHistory.first?.recipient?.name == "Mom")
+        #expect(loadedHistory.first?.threadID == "thread-1")
 
         let loadedPeople = SwiftDataRecipientStore(container: container).loadRecipients()
         #expect(loadedPeople.map(\.id) == ["r1"])
         #expect(loadedPeople.first?.taste.signatureLine == "quiet and earthy")
+        #expect(SwiftDataMissionThreadStore(container: container).load().threads.map(\.id) == ["thread-1"])
+    }
+
+    /// Adding MissionThreadRecord to the union schema must open a file created by the pre-thread
+    /// four-model app and preserve every existing row. This is the real lightweight migration shape.
+    @Test("Legacy four-model store migrates to the five-model schema")
+    @MainActor
+    func legacyFourModelMigration() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("crumb-legacy-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("default.store")
+
+        let legacyModels: [any PersistentModel.Type] = [
+            TasteProfileRecord.self,
+            RecentMissionRecord.self,
+            HistoryEntryRecord.self,
+            RecipientRecord.self,
+        ]
+        try {
+            let schema = Schema(legacyModels)
+            let configuration = ModelConfiguration(schema: schema, url: url)
+            let container = try ModelContainer(for: schema, configurations: configuration)
+            SwiftDataRecentMissionsStore(container: container).addRecent("legacy goal")
+        }()
+
+        let migrated = try sharedContainer(at: url)
+        #expect(SwiftDataRecentMissionsStore(container: migrated).loadRecents() == ["legacy goal"])
+        try SwiftDataMissionThreadStore(container: migrated).save(MissionThread(
+            id: "new-thread", goal: "new goal", taste: SeedData.defaultTasteProfile,
+            now: Date(timeIntervalSince1970: 4_000)
+        ))
+        #expect(SwiftDataMissionThreadStore(container: migrated).load().threads.map(\.id) == ["new-thread"])
     }
 
     /// A second write on a *later* "launch" must land alongside the first — proving the reopened

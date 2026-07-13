@@ -1,307 +1,56 @@
 import SwiftUI
 import CrumbKit
 
-/// The Plan screen: the curator's serif note over the **editable** parts list (reword / remove /
-/// add a part), an honest note if smart planning was unavailable, a "scanning shops" affordance
-/// while candidates load, and the "Curate my kit" CTA that commits the edits and runs the search.
-struct PlanView: View {
-    @Environment(AppModel.self) private var model
-
-    @State private var newPart = ""
-
-    private var task: ShoppingTask? { model.selectedTask }
+/// A frozen plan attached to one assistant turn. It deliberately has no fields or buttons: changes
+/// are requested from ``MissionResponseDock`` and produce a new plan turn instead of rewriting
+/// scrollback in place.
+struct MissionPlanSnapshotView: View {
+    let snapshot: MissionPlanSnapshot
+    var isSuperseded = false
 
     var body: some View {
-        if let task {
-            content(for: task)
-        } else {
-            // Defensive: no mission selected — send the user home.
-            ContentUnavailableView("No mission yet", systemImage: "questionmark.circle")
-                .onAppear { model.goToMissions() }
-        }
-    }
-
-    private func content(for task: ShoppingTask) -> some View {
-        let accent = Color(hex: task.accentHex)
-        return ScrollView {
-            VStack(alignment: .leading, spacing: CrumbMetrics.Space.l) {
-                header(for: task)
-
-                CuratorNote(task.curatorNote, signoff: "Crumb", accent: accent)
-
-                if let note = model.plannerFallbackNote {
-                    plannerNote(note)
-                }
-
-                partsEditor
-
-                scanRow
-
-                Spacer(minLength: CrumbMetrics.Space.l)
-            }
-            .padding(.horizontal, CrumbMetrics.Space.xl)
-            .padding(.vertical, CrumbMetrics.Space.l)
-        }
-        .safeAreaInset(edge: .bottom) {
-            curateCTA(accent: accent)
-        }
-        // Container, not a blanket id: the scroll content keeps its ids for free, but the bottom
-        // `safeAreaInset` CTA (curateButton) sits outside the scroll element and was being clobbered
-        // to "PlanScreen". `.contain` names the screen container and leaves curateButton queryable. (#24)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("PlanScreen")
-    }
-
-    private func header(for task: ShoppingTask) -> some View {
-        VStack(alignment: .leading, spacing: CrumbMetrics.Space.xs) {
-            // Long generated titles must wrap down the page, never truncate or ride up into the
-            // header — `fixedSize` lets the text take all the vertical room it needs (#66).
-            Text(task.title)
-                .font(CrumbType.title)
-                .foregroundStyle(CrumbColor.ink)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(task.subtitle)
-                .font(CrumbType.callout)
-                .foregroundStyle(CrumbColor.ink2)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    // MARK: Editable parts
-
-    private var partsEditor: some View {
         VStack(alignment: .leading, spacing: CrumbMetrics.Space.m) {
-            HStack {
-                Text("The plan")
-                    .font(CrumbType.headline)
-                    .foregroundStyle(CrumbColor.ink)
-                Spacer()
-                Text("Reword, remove, or add")
-                    .font(CrumbType.caption)
-                    .foregroundStyle(CrumbColor.ink3)
-            }
-
-            if model.draftParts.isEmpty {
-                Text("Add a part below to tell me what to look for.")
-                    .font(CrumbType.caption)
-                    .foregroundStyle(CrumbColor.ink3)
-            } else {
-                ForEach(model.draftParts) { part in
-                    partRow(part)
+            HStack(alignment: .firstTextBaseline) {
+                Label("Shopping plan", systemImage: "list.bullet.clipboard")
+                    .font(CrumbType.captionStrong)
+                    .foregroundStyle(CrumbColor.pine)
+                Spacer(minLength: CrumbMetrics.Space.s)
+                if isSuperseded {
+                    Text("Updated")
+                        .font(CrumbType.caption)
+                        .foregroundStyle(CrumbColor.ink3)
                 }
             }
 
-            if model.draftParts.count < RuleBasedMissionPlanner.maxParts {
-                addPartField
-            }
-        }
-        .crumbCard()
-    }
-
-    private func partRow(_ part: PlanPart) -> some View {
-        let binding = Binding(
-            get: { part.label },
-            set: { model.updatePart(part, label: $0) }
-        )
-        return HStack(spacing: CrumbMetrics.Space.m) {
-            Image(systemName: "leaf.fill")
-                .foregroundStyle(CrumbColor.pine)
-                .imageScale(.small)
-                .accessibilityHidden(true)
-
-            TextField("Part of the plan", text: binding)
-                .textFieldStyle(.plain)
-                .font(CrumbType.body)
+            Text(snapshot.title)
+                .font(CrumbType.headline)
                 .foregroundStyle(CrumbColor.ink)
-                #if os(iOS)
-                .textInputAutocapitalization(.sentences)
-                #endif
-
-            Button {
-                model.removePart(part)
-            } label: {
-                Image(systemName: "minus.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(CrumbColor.ink3)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Remove \(part.label)")
-        }
-        .padding(.vertical, CrumbMetrics.Space.xs)
-    }
-
-    private var addPartField: some View {
-        HStack(spacing: CrumbMetrics.Space.s) {
-            Image(systemName: "plus")
-                .font(.footnote.weight(.bold))
-                .foregroundStyle(CrumbColor.ink3)
-            TextField("Add a part…", text: $newPart)
-                .textFieldStyle(.plain)
-                .font(CrumbType.callout)
-                .foregroundStyle(CrumbColor.ink)
-                .submitLabel(.done)
-                .onSubmit(commitNewPart)
-                #if os(iOS)
-                .textInputAutocapitalization(.sentences)
-                #endif
-            Button(action: commitNewPart) {
-                Image(systemName: "plus.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(newPart.trimmed.isEmpty ? CrumbColor.ink3 : CrumbColor.pine)
-            }
-            .buttonStyle(.plain)
-            .disabled(newPart.trimmed.isEmpty)
-            .accessibilityLabel("Add part")
-        }
-        .padding(.horizontal, CrumbMetrics.Space.m)
-        .padding(.vertical, CrumbMetrics.Space.s)
-        .background(CrumbColor.paper, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.tile, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: CrumbMetrics.Radius.tile, style: .continuous)
-                .strokeBorder(CrumbColor.line, lineWidth: 1)
-        )
-        .accessibilityIdentifier("addPartField")
-    }
-
-    private func commitNewPart() {
-        model.addPart(label: newPart)
-        newPart = ""
-    }
-
-    // MARK: Planner fallback note
-
-    /// An honest, quiet banner when Crumb wanted its AI planner but built a simple plan instead
-    /// (older device, Apple Intelligence off, offline). Parallel to the curator's fallback note.
-    private func plannerNote(_ note: String) -> some View {
-        HStack(alignment: .top, spacing: CrumbMetrics.Space.s) {
-            Image(systemName: "info.circle")
-                .foregroundStyle(CrumbColor.ink3)
-                .accessibilityHidden(true)
-            Text(note)
-                .font(CrumbType.caption)
-                .foregroundStyle(CrumbColor.ink2)
                 .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
+
+            VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
+                ForEach(Array(snapshot.parts.enumerated()), id: \.element.id) { index, part in
+                    HStack(alignment: .firstTextBaseline, spacing: CrumbMetrics.Space.s) {
+                        Text("\(index + 1)")
+                            .font(CrumbType.captionStrong)
+                            .foregroundStyle(CrumbColor.pine)
+                            .frame(minWidth: 20, alignment: .trailing)
+                        Text(part.label)
+                            .font(CrumbType.body)
+                            .foregroundStyle(CrumbColor.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
         }
-        .padding(CrumbMetrics.Space.m)
+        .padding(CrumbMetrics.Space.l)
         .background(CrumbColor.raised, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous)
                 .strokeBorder(CrumbColor.line, lineWidth: 1)
         )
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("plannerFallbackNote")
-    }
-
-    // MARK: Scan status
-
-    @ViewBuilder
-    private var scanRow: some View {
-        switch model.loadState {
-        case .idle:
-            HStack(spacing: CrumbMetrics.Space.s) {
-                Image(systemName: "sparkles")
-                    .foregroundStyle(CrumbColor.ochre)
-                Text(model.isSingleProductMission
-                    ? "This is what I'll shop for. I'll go find your options."
-                    : "Happy with the plan? I'll go find the pieces.")
-                    .font(CrumbType.callout)
-                    .foregroundStyle(CrumbColor.ink2)
-                Spacer(minLength: 0)
-            }
-            .padding(CrumbMetrics.Space.m)
-            .accessibilityElement(children: .combine)
-
-        // `.refining` means the first pick already streamed and we've navigated to Curate, so this
-        // Plan row isn't on screen for it — but the switch must stay exhaustive, and "still working"
-        // is the honest read if it ever is briefly visible during the transition.
-        case .loading, .refining:
-            HStack(spacing: CrumbMetrics.Space.m) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Scanning shops for the right pieces…")
-                    .font(CrumbType.callout)
-                    .foregroundStyle(CrumbColor.ink2)
-                Spacer(minLength: 0)
-            }
-            .padding(CrumbMetrics.Space.m)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Scanning shops")
-
-        case .failed:
-            failedRow
-
-        case .loaded:
-            HStack(spacing: CrumbMetrics.Space.s) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(CrumbColor.pine)
-                Text("^[\(model.candidates.count) pick](inflect: true) ready across the shops")
-                    .font(CrumbType.callout)
-                    .foregroundStyle(CrumbColor.ink2)
-                Spacer(minLength: 0)
-            }
-            .padding(CrumbMetrics.Space.m)
-            .accessibilityElement(children: .combine)
-        }
-    }
-
-    private var failedRow: some View {
-        HStack(spacing: CrumbMetrics.Space.m) {
-            Image(systemName: "wifi.exclamationmark")
-                .foregroundStyle(CrumbColor.ochre)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Couldn't reach the shops")
-                    .font(CrumbType.callout)
-                    .foregroundStyle(CrumbColor.ink)
-                Text("Check your connection and try again.")
-                    .font(CrumbType.caption)
-                    .foregroundStyle(CrumbColor.ink2)
-            }
-            Spacer(minLength: 0)
-            Button("Retry") { model.retryLoad() }
-                .font(CrumbType.headline)
-                .foregroundStyle(CrumbColor.pine)
-                .accessibilityIdentifier("retryButton")
-        }
-        .padding(CrumbMetrics.Space.m)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Couldn't reach the shops. Retry.")
-    }
-
-    // MARK: CTA
-
-    /// The commit CTA label — kit assembly vs a direct single-product search (#56), each with a
-    /// scanning variant.
-    private var ctaTitle: String {
-        if model.isSingleProductMission {
-            return model.isScanning ? "Finding options…" : "Find my options"
-        }
-        return model.isScanning ? "Gathering picks…" : "Curate my kit"
-    }
-
-    private func curateCTA(accent: Color) -> some View {
-        Button {
-            model.startCurating()
-        } label: {
-            HStack {
-                Spacer()
-                Text(ctaTitle)
-                    .font(CrumbType.headline)
-                Image(systemName: model.isSingleProductMission ? "magnifyingglass" : "rectangle.stack")
-                Spacer()
-            }
-            .foregroundStyle(.white)
-            .padding(CrumbMetrics.Space.l)
-            .background(CrumbColor.pine, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
-            .crumbShadow()
-        }
-        .buttonStyle(.plain)
-        .disabled(model.isScanning || model.draftParts.isEmpty)
-        .opacity(model.isScanning || model.draftParts.isEmpty ? 0.6 : 1)
-        .padding(.horizontal, CrumbMetrics.Space.xl)
-        .padding(.bottom, CrumbMetrics.Space.m)
-        .accessibilityIdentifier("curateButton")
+        .opacity(isSuperseded ? 0.72 : 1)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(isSuperseded ? "Updated shopping plan" : "Shopping plan")
+        .accessibilityIdentifier("missionArtifact.plan.\(snapshot.id)")
     }
 }

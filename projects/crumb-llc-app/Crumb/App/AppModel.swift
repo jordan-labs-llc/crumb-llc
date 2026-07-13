@@ -2,15 +2,15 @@ import Foundation
 import Observation
 import CrumbKit
 
-/// Top-level navigation state for the Missions → Plan → Curate → Cart flow.
+/// Top-level navigation state for the Missions → Mission thread → Cart flow.
 ///
 /// `onboarding` is the first-run entry: shown only when no ``TasteProfile`` has been
 /// persisted yet, so a returning user never sees it.
 enum Route: Hashable {
     case onboarding
     case missions
-    case plan
-    case curate
+    /// One stable workspace whose active artifact changes from plan to product deck in place.
+    case missionThread
     case cart
     /// The timeline of past missions, reached from the app header.
     case history
@@ -20,14 +20,31 @@ enum Route: Hashable {
     case people
 }
 
+/// The one response surface the mission UI renders. All choices and text are submitted against the
+/// frozen interaction identity, so scrollback and asynchronously changing artifacts are read-only.
+struct MissionDockState: Equatable {
+    enum Mode: Equatable { case freeText, singleChoice, confirmation, working, recovery, unavailable }
+
+    let mode: Mode
+    let interaction: MissionPendingInteraction?
+    let question: String
+    let options: [MissionInteractionOption]
+    let allowsFreeText: Bool
+    let placeholder: String
+    let isEnabled: Bool
+    let showsSaveRecovery: Bool
+}
+
+enum MissionSubmissionResult: Equatable {
+    case applied
+    case unsaved
+    case rejected
+}
+
 /// One editable row of a generated plan: a human label plus the catalog query that finds it.
 /// The composer's planner produces these; ``PlanView`` lets the user reword / add / remove them
 /// before curating. Rewording a label re-derives its query (see ``AppModel/updatePart(_:label:)``).
-struct PlanPart: Identifiable, Hashable {
-    let id = UUID()
-    var label: String
-    var query: String
-}
+typealias PlanPart = MissionPlanPart
 
 extension ShoppingTask {
     /// An immutable copy with a new plan + queries, keeping the mission's identity (id, title,
@@ -41,7 +58,8 @@ extension ShoppingTask {
             curatorNote: curatorNote,
             accentHex: accentHex,
             candidateIDs: candidateIDs,
-            searchQueries: searchQueries
+            searchQueries: searchQueries,
+            isSingleItem: isSingleItem
         )
     }
 }
@@ -59,7 +77,20 @@ final class AppModel {
     // MARK: Navigation
 
     var route: Route = .missions
-    private(set) var selectedTask: ShoppingTask?
+    /// The sole writable owner of the active mission's task, plan, products, deck, kit, recipient,
+    /// and conversation. The view-facing properties below are projections into this aggregate.
+    private(set) var activeThread: MissionThread? = nil
+    private(set) var incompleteThreads: [MissionThread] = []
+    private(set) var threadLoadFailures: [MissionThreadLoadFailure] = []
+    private(set) var threadPersistenceWarning: String?
+    /// The exact last aggregate accepted by the store. Discard restores this value; it never tries
+    /// to infer durable state from the timeline or from the current in-memory revision.
+    private var lastDurableActiveThread: MissionThread?
+    private var unsavedThreadID: String?
+    private var interactionConstructionFailure: String?
+
+    var activeThreadID: String? { activeThread?.id }
+    var selectedTask: ShoppingTask? { activeThread?.task }
 
     // MARK: Planning (the free-text composer → plan)
 
@@ -83,7 +114,7 @@ final class AppModel {
     /// The editable parts of the current plan — the curator's decomposition, which the user can
     /// reword / add to / trim on the Plan screen before curating. Committed back into the
     /// mission's queries when they tap "Curate my kit" (see ``beginCuration()``).
-    private(set) var draftParts: [PlanPart] = []
+    var draftParts: [PlanPart] { activeThread?.plan ?? [] }
 
     /// `true` when the plan has been edited (or freshly planned) since the last successful
     /// candidate load, so "Curate my kit" knows to re-run the search rather than reuse a
@@ -95,7 +126,7 @@ final class AppModel {
 
     // MARK: Domain state
 
-    private(set) var kit: [KitItem] = []
+    var kit: [KitItem] { activeThread?.kit ?? [] }
 
     // MARK: History (the persisted record of past missions)
 
@@ -113,13 +144,13 @@ final class AppModel {
     /// The id of the entry for the *current* shopping session, or `nil` before the kit first reaches
     /// the cart this session. Stable per `enterPlan`, so re-reaching the cart updates the same entry
     /// (and a real checkout handoff flips that entry's outcome). A new mission starts a fresh id.
-    private var currentHistoryEntryID: String?
+    private var currentHistoryEntryID: String? { activeThread?.historyEntryID }
 
     /// The user's *original* free-text goal for this session, so a saved entry stores the real goal
     /// (not `ShoppingTask.title`, which the planner title-cases and length-caps) and "Plan this
     /// again" re-plans exactly what they typed. `nil` for the seed-mission path, where the task's
     /// own title is the faithful goal.
-    private var currentMissionGoal: String?
+    private var currentMissionGoal: String? { activeThread?.goal }
 
     /// The current per-recipient History filter (the chip row at the top of the timeline). `.all` by
     /// default; `.yourself` / `.person(id)` narrow the timeline to one person's kits.
@@ -159,12 +190,12 @@ final class AppModel {
     /// The **active** mission's recipient (`nil` = Yourself). Set when a mission is started for
     /// someone and carried through plan → curate → refine → recap; reset on the next `enterPlan`.
     /// This is the switch behind ``activeTaste``: the whole curation pipeline reads *their* taste.
-    private(set) var activeRecipient: Recipient?
+    var activeRecipient: Recipient? { activeThread?.recipient }
 
     /// The taste the *current mission* curates through: the active recipient's when shopping for
     /// someone, else the owner's. **Every** seam call that used to pass `tasteProfile` now passes
     /// this, so "become their shopper" is a single source of truth.
-    var activeTaste: TasteProfile { activeRecipient?.taste ?? tasteProfile }
+    var activeTaste: TasteProfile { activeThread?.tasteSnapshot ?? tasteProfile }
 
     /// The lean recipient snapshot threaded into the curator + recap as gift context (and stamped
     /// onto the saved history entry). `nil` for an owner mission.
@@ -193,9 +224,9 @@ final class AppModel {
     // MARK: Conversational refinement (talk back to the curator)
 
     /// The running per-mission refinement conversation, oldest-first ("make it cheaper", then
-    /// "but keep the kettle"). Fed to the interpreter every time so refinements compose.
-    /// **Ephemeral**: cleared on `enterPlan` (a new mission) and never persisted across launches.
-    private(set) var refinementTurns: [String] = []
+    /// "but keep the kettle"). Fed to the interpreter every time so refinements compose and
+    /// persisted with the mission thread so a resumed mission keeps its conversational context.
+    var refinementTurns: [String] { activeThread?.refinementTurns ?? [] }
 
     /// `true` while a refinement is reworking the on-screen deck. Drives the Curate screen's
     /// "Reworking the deck…" shimmer (the sibling of `isRecurating`).
@@ -215,11 +246,11 @@ final class AppModel {
 
     /// The directives applied this mission, kept so "save to taste" can deterministically fold
     /// them into the profile when no model is available to re-read the text (sim/CI).
-    private var refinementDirectives: [RefinementDirective] = []
+    private var refinementDirectives: [RefinementDirective] { activeThread?.refinementDirectives ?? [] }
 
     /// The deck as first dealt for this mission, before any refinement — the snapshot
     /// ``resetRefinements()`` restores so Reset truly undoes the conversation.
-    private var baseCandidates: [Product] = []
+    private var baseCandidates: [Product] { activeThread?.baseCandidates ?? [] }
 
     /// The quick-refinement chips shown on the Curate screen, fit to the current mission
     /// (tea → Organic/Caffeine-free/Bolder; a hike → Warmer/Lighter/Durable). Set to the
@@ -229,9 +260,13 @@ final class AppModel {
     private(set) var refineChips: [RefineChip] = []
 
     /// Ranked candidate products for the selected mission.
-    private(set) var candidates: [Product] = []
+    var candidates: [Product] { activeThread?.candidates ?? [] }
     /// The remaining swipe deck (candidates not yet decided on).
-    private(set) var deck: [Product] = []
+    var deck: [Product] {
+        guard let thread = activeThread else { return [] }
+        let byID = Dictionary(uniqueKeysWithValues: thread.candidates.map { ($0.id, $0) })
+        return thread.remainingDeckIDs.compactMap { byID[$0] }
+    }
 
     /// Where the Plan screen's candidate load currently stands.
     enum LoadState: Equatable {
@@ -400,10 +435,19 @@ final class AppModel {
     private let recentsStore: any RecentMissionsStore
     private let historyStore: any HistoryStore
     private let recipientStore: any RecipientStore
+    private let threadStore: any MissionThreadStore
     /// Injected wall-clock — used only at save time for an entry's `createdAt` (and the session
     /// entry id). A closure so tests can pin time and keep timeline grouping deterministic; pure
     /// logic never calls `Date()` directly (see [[ios-sim-available-xcode27]] build notes).
     private let clock: () -> Date
+
+    /// Transient generations for in-flight work. Persisted pending-operation metadata supports
+    /// crash recovery; these IDs additionally reject late completions after a same-thread retry.
+    private var activeOperationIDs: [MissionOperationKind: String] = [:]
+    private var operationTasks: [MissionOperationKind: Task<Void, Never>] = [:]
+    /// Handles for fire-and-forget entry points. Operation IDs reject stale commits; these handles
+    /// additionally propagate cancellation so superseded model/tool work stops consuming resources.
+    private var launchedOperationTasks: [MissionOperationKind: Task<Void, Never>] = [:]
 
     /// Builds the app model, restoring the persisted ``TasteProfile`` if one exists.
     ///
@@ -426,6 +470,7 @@ final class AppModel {
         recentsStore: any RecentMissionsStore = InMemoryRecentMissionsStore(),
         historyStore: any HistoryStore = InMemoryHistoryStore(),
         recipientStore: any RecipientStore = InMemoryRecipientStore(),
+        threadStore: any MissionThreadStore = InMemoryMissionThreadStore(),
         clock: @escaping () -> Date = { Date() }
     ) {
         self.ucp = ucp
@@ -441,6 +486,7 @@ final class AppModel {
         self.recentsStore = recentsStore
         self.historyStore = historyStore
         self.recipientStore = recipientStore
+        self.threadStore = threadStore
         self.clock = clock
 
         let stored = tasteStore.loadProfile()
@@ -449,6 +495,901 @@ final class AppModel {
         self.recentGoals = recentsStore.loadRecents()
         self.historyEntries = historyStore.loadEntries()
         self.recipients = recipientStore.loadRecipients()
+        let loadedThreads = threadStore.load()
+        self.incompleteThreads = loadedThreads.threads
+        self.threadLoadFailures = loadedThreads.failures
+    }
+
+    // MARK: Mission thread transactions
+
+    /// The one mutation choke point for durable mission state. A transaction updates memory first
+    /// so the current session stays usable if storage fails, then performs a revision-ordered save.
+    private func mutateActiveThread(_ mutation: (inout MissionThread) -> Void) {
+        guard var thread = activeThread else { return }
+        interactionConstructionFailure = nil
+        // Advance first so any interaction installed by the transaction can freeze this exact
+        // subject revision and pass aggregate validation before it is persisted.
+        thread.revision += 1
+        thread.updatedAt = clock()
+        mutation(&thread)
+        if let failure = interactionConstructionFailure {
+            threadPersistenceWarning = "This conversation couldn't continue safely: \(failure)"
+            interactionConstructionFailure = nil
+            return
+        }
+        activeThread = thread
+        upsertThreadInMemory(thread)
+        persistThread(thread)
+    }
+
+    private func installActiveThread(_ thread: MissionThread, persist: Bool = true) {
+        if let failure = interactionConstructionFailure {
+            threadPersistenceWarning = "This conversation couldn't continue safely: \(failure)"
+            interactionConstructionFailure = nil
+            return
+        }
+        activeThread = thread
+        upsertThreadInMemory(thread)
+        if persist { persistThread(thread) }
+        else {
+            lastDurableActiveThread = thread
+            unsavedThreadID = nil
+        }
+    }
+
+    private func upsertThreadInMemory(_ thread: MissionThread) {
+        incompleteThreads.removeAll { $0.id == thread.id }
+        guard thread.phase != .completed, thread.phase != .abandoned else { return }
+        incompleteThreads.append(thread)
+        incompleteThreads.sort { $0.updatedAt > $1.updatedAt }
+        if incompleteThreads.count > 12 { incompleteThreads.removeLast(incompleteThreads.count - 12) }
+    }
+
+    @discardableResult
+    private func persistThread(_ thread: MissionThread, committedID: String? = nil) -> Bool {
+        do {
+            try threadStore.save(thread)
+            threadPersistenceWarning = nil
+            unsavedThreadID = nil
+            lastDurableActiveThread = thread
+            if activeThread?.id == thread.id, activeThread?.blockingRecovery != nil {
+                activeThread?.blockingRecovery = nil
+            }
+            return true
+        } catch {
+            unsavedThreadID = thread.id
+            threadPersistenceWarning = "This mission is available now, but couldn't be saved on this device."
+            if activeThread?.id == thread.id {
+                if let committedID {
+                    activeThread?.blockingRecovery = .saveCommittedMutation(
+                        failedRevision: thread.revision, idempotencyID: committedID
+                    )
+                } else if thread.pendingInteraction != nil {
+                    activeThread?.blockingRecovery = .savePendingInteraction(failedRevision: thread.revision)
+                } else {
+                    activeThread?.blockingRecovery = .saveCommittedMutation(
+                        failedRevision: thread.revision,
+                        idempotencyID: thread.decisions.last?.id ?? "thread-\(thread.revision)"
+                    )
+                }
+                if let blocked = activeThread { upsertThreadInMemory(blocked) }
+            }
+            return false
+        }
+    }
+
+    func retryThreadPersistence() {
+        guard var thread = activeThread, unsavedThreadID == thread.id else { return }
+        let queued = thread.pendingOperation?.retry
+        thread.blockingRecovery = nil
+        activeThread = thread
+        if persistThread(thread), let queued { runQueuedRetry(queued) }
+    }
+
+    func discardUnsavedThreadChanges() {
+        guard let active = activeThread, unsavedThreadID == active.id else { return }
+        cancelOperations()
+        if let durable = lastDurableActiveThread, durable.id == active.id {
+            activeThread = durable
+            upsertThreadInMemory(durable)
+        } else {
+            activeThread = nil
+            incompleteThreads.removeAll { $0.id == active.id }
+            try? threadStore.delete(id: active.id)
+            route = .missions
+        }
+        unsavedThreadID = nil
+        threadPersistenceWarning = nil
+    }
+
+    private func cancelOperations() {
+        for task in operationTasks.values { task.cancel() }
+        for task in launchedOperationTasks.values { task.cancel() }
+        operationTasks.removeAll()
+        launchedOperationTasks.removeAll()
+        activeOperationIDs.removeAll()
+        settleWatchdog?.cancel()
+        isPlanning = false
+        isReworking = false
+        isRecurating = false
+        curationRefiningOvertime = false
+    }
+
+    private func beginOperation(_ kind: MissionOperationKind) -> String? {
+        guard activeThread != nil else { return nil }
+        operationTasks[kind]?.cancel()
+        let id = UUID().uuidString
+        activeOperationIDs[kind] = id
+        return id
+    }
+
+    private func operationIsCurrent(_ kind: MissionOperationKind, id: String, threadID: String) -> Bool {
+        activeThread?.id == threadID && activeOperationIDs[kind] == id
+    }
+
+    private func finishOperation(_ kind: MissionOperationKind, id: String) {
+        guard activeOperationIDs[kind] == id else { return }
+        activeOperationIDs[kind] = nil
+        operationTasks[kind] = nil
+    }
+
+    private func replaceDeck(_ products: [Product]) {
+        mutateActiveThread { $0.remainingDeckIDs = products.map(\.id) }
+    }
+
+    private func replaceCandidates(_ products: [Product], base: [Product]? = nil) {
+        mutateActiveThread {
+            $0.candidates = products
+            if let base { $0.baseCandidates = base }
+        }
+    }
+
+    var threadShowsDeck: Bool {
+        guard let thread = activeThread else { return false }
+        return thread.phase == .deckReady || (thread.phase == .gathering && !thread.candidates.isEmpty)
+    }
+
+    var threadComposerEnabled: Bool {
+        guard let thread = activeThread else { return false }
+        if isPlanning || isReworking || isScanning { return false }
+        return thread.phase == .declined || thread.phase == .deckReady
+    }
+
+    var threadComposerPlaceholder: String {
+        guard let thread = activeThread else { return "Start a mission…" }
+        if isPlanning { return "Planning your mission…" }
+        if isScanning { return "Searching the shops…" }
+        if isReworking { return "Reworking your picks…" }
+        switch thread.phase {
+        case .declined: return "Try another shopping goal…"
+        case .planReady: return "Edit the plan above"
+        case .deckReady: return "Tell Crumb what to change…"
+        case .failed: return "Retry from the message above"
+        default: return "Crumb is working…"
+        }
+    }
+
+    var missionDockState: MissionDockState {
+        guard let thread = activeThread else {
+            return MissionDockState(mode: .unavailable, interaction: nil, question: "Mission unavailable",
+                                    options: [], allowsFreeText: false, placeholder: "Start a mission…",
+                                    isEnabled: false, showsSaveRecovery: false)
+        }
+        if thread.blockingRecovery != nil || unsavedThreadID == thread.id {
+            return MissionDockState(mode: .recovery, interaction: thread.pendingInteraction,
+                                    question: "Save this turn before continuing.",
+                                    options: [
+                                        MissionInteractionOption(id: "save-again", label: "Save again"),
+                                        MissionInteractionOption(id: "discard", label: "Discard"),
+                                    ], allowsFreeText: false, placeholder: "Save or discard this turn",
+                                    isEnabled: true, showsSaveRecovery: true)
+        }
+        guard let interaction = thread.pendingInteraction else {
+            return MissionDockState(mode: .working, interaction: nil, question: "Crumb is working…",
+                                    options: [], allowsFreeText: false, placeholder: threadComposerPlaceholder,
+                                    isEnabled: false, showsSaveRecovery: false)
+        }
+        let mode: MissionDockState.Mode
+        switch interaction.kind {
+        case .recovery, .retry: mode = .recovery
+        case .clarification where interaction.options.contains(where: { $0.id == "stop" }): mode = .working
+        case .clarification where interaction.options.isEmpty: mode = .freeText
+        default: mode = interaction.selectionMode == .confirmation ? .confirmation : .singleChoice
+        }
+        return MissionDockState(
+            mode: mode,
+            interaction: interaction,
+            question: interaction.question,
+            options: interaction.options,
+            allowsFreeText: interaction.allowsFreeText,
+            placeholder: interaction.allowsFreeText ? "Message Crumb…" : "Choose a response",
+            isEnabled: true,
+            showsSaveRecovery: false
+        )
+    }
+
+    /// Convenience entry points for the response dock. They capture the current frozen identity;
+    /// external callers that may be delayed (App Intents) submit a fully populated value instead.
+    func submitMissionOption(_ optionID: String) {
+        if optionID == "save-again" { retryThreadPersistence(); return }
+        if optionID == "discard" { discardUnsavedThreadChanges(); return }
+        guard let thread = activeThread, let interaction = thread.pendingInteraction else { return }
+        submitMissionAnswer(MissionInteractionSubmission(
+            threadID: thread.id, interactionID: interaction.id,
+            interactionGeneration: interaction.interactionGeneration,
+            subjectRevision: interaction.subjectRevision,
+            answer: .option(id: optionID)
+        ))
+    }
+
+    func submitMissionText(_ text: String) {
+        guard let thread = activeThread, let interaction = thread.pendingInteraction else { return }
+        submitMissionAnswer(MissionInteractionSubmission(
+            threadID: thread.id, interactionID: interaction.id,
+            interactionGeneration: interaction.interactionGeneration,
+            subjectRevision: interaction.subjectRevision,
+            answer: .freeText(text)
+        ))
+    }
+
+    func productInteractionSubmission(
+        productID: Product.ID,
+        optionID: String,
+        expectedThreadID: String? = nil,
+        expectedInteractionID: String? = nil,
+        expectedGeneration: Int? = nil,
+        expectedSubjectRevision: Int? = nil,
+        expectedVariantID: Variant.ID? = nil
+    ) -> MissionInteractionSubmission? {
+        guard let thread = activeThread, let interaction = thread.pendingInteraction,
+              thread.blockingRecovery == nil,
+              case .product(let currentID, let currentVariantID) = interaction.resolver,
+              currentID == productID,
+              interaction.options.contains(where: { $0.id == optionID }) else { return nil }
+        if let expectedThreadID, expectedThreadID != thread.id { return nil }
+        if let expectedInteractionID, expectedInteractionID != interaction.id { return nil }
+        if let expectedGeneration, expectedGeneration != interaction.interactionGeneration { return nil }
+        if let expectedSubjectRevision, expectedSubjectRevision != interaction.subjectRevision { return nil }
+        if let expectedVariantID, expectedVariantID != currentVariantID { return nil }
+        return MissionInteractionSubmission(
+            threadID: thread.id, interactionID: interaction.id,
+            interactionGeneration: interaction.interactionGeneration,
+            subjectRevision: interaction.subjectRevision,
+            answer: .option(id: optionID)
+        )
+    }
+
+    @discardableResult
+    func submitMissionAnswer(_ submission: MissionInteractionSubmission) -> MissionSubmissionResult {
+        guard var thread = activeThread else { return .rejected }
+        let interaction: MissionPendingInteraction
+        do { interaction = try thread.validate(submission) }
+        catch {
+            return .rejected
+        }
+
+        let displayAnswer: String
+        switch submission.answer {
+        case .option(let id): displayAnswer = interaction.options.first(where: { $0.id == id })?.label ?? id
+        case .freeText(let text): displayAnswer = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        do { try thread.resolveInteraction(submission) }
+        catch { return .rejected }
+        thread.revision += 1
+        thread.updatedAt = clock()
+        thread.appendEvent(kind: .userMessage, text: displayAnswer, createdAt: clock(), operationID: submission.idempotencyID)
+
+        var effect: MissionReducerEffect?
+        interactionConstructionFailure = nil
+        reduceResolvedAnswer(submission, interaction: interaction, thread: &thread, effect: &effect)
+        if let failure = interactionConstructionFailure {
+            threadPersistenceWarning = "This conversation couldn't continue safely: \(failure)"
+            interactionConstructionFailure = nil
+            return .rejected
+        }
+        if let effect { queue(effect, submissionID: submission.idempotencyID, in: &thread) }
+        activeThread = thread
+        upsertThreadInMemory(thread)
+        guard persistThread(thread, committedID: submission.idempotencyID) else { return .unsaved }
+        runMissionEffect(effect)
+        return .applied
+    }
+
+    private enum MissionReducerEffect {
+        case beginCuration
+        case replaceGoal(String)
+        case changePlan(String)
+        case refine(String)
+        case retry(MissionRetryDescriptor)
+        case saveTaste
+        case openCart
+        case goToMissions
+    }
+
+    private func runMissionEffect(_ effect: MissionReducerEffect?) {
+        guard let effect else { return }
+        switch effect {
+        case .beginCuration: startCurating()
+        case .replaceGoal(let text):
+            Task { @MainActor [weak self] in await self?.retryPlanningInActiveThread(goal: text, appendUserEvent: false) }
+        case .changePlan(let text):
+            Task { @MainActor [weak self] in await self?.applyPlanChange(text: text) }
+        case .refine(let text):
+            launchedOperationTasks[.refinement]?.cancel()
+            launchedOperationTasks[.refinement] = Task { @MainActor [weak self] in
+                await self?.applyRefinement(text: text, appendUserEvent: false)
+            }
+        case .retry(let retry): runRetry(retry)
+        case .saveTaste: Task { @MainActor [weak self] in await self?.performQueuedTasteSave() }
+        case .openCart: openCart()
+        case .goToMissions: goToMissions()
+        }
+    }
+
+    /// Records the accepted answer's continuation before the answer is considered durable. The
+    /// concrete worker may replace this descriptor with its own operation id, but a crash or failed
+    /// save can always recover/retry the accepted action without asking the prior question again.
+    private func queue(_ effect: MissionReducerEffect, submissionID: String, in thread: inout MissionThread) {
+        let retry: MissionRetryDescriptor?
+        let title: String
+        switch effect {
+        case .beginCuration:
+            retry = MissionRetryDescriptor(kind: .gathering, input: thread.task?.searchQueries.joined(separator: "\n") ?? "", taskRevision: thread.revision, returnPhase: .planReady)
+            title = "Searching the shops…"
+            thread.phase = .gathering
+        case .replaceGoal(let goal):
+            retry = MissionRetryDescriptor(kind: .planning, input: goal, taskRevision: nil, returnPhase: .planning)
+            title = "Planning your mission…"
+            thread.phase = .planning
+        case .changePlan(let change):
+            retry = MissionRetryDescriptor(kind: .planning, input: change, taskRevision: thread.revision, returnPhase: .planReady)
+            title = "Updating the plan…"
+            thread.phase = .planning
+        case .refine(let text):
+            retry = MissionRetryDescriptor(kind: .refinement, input: text, taskRevision: thread.revision, returnPhase: .deckReady)
+            title = "Reworking the picks…"
+        case .retry(let descriptor):
+            retry = descriptor
+            title = "Trying that turn again…"
+        case .saveTaste:
+            retry = MissionRetryDescriptor(kind: .chips, input: "save-to-taste", taskRevision: thread.revision, returnPhase: .deckReady)
+            title = "Saving this to taste…"
+        case .openCart, .goToMissions:
+            retry = nil
+            title = ""
+        }
+        guard let retry else { return }
+        let operationID = "answer-\(submissionID)"
+        thread.pendingOperation = MissionPendingOperation(id: operationID, retry: retry, startedAt: clock())
+        thread.retry = nil
+        installWorkingQuestion(in: &thread, operationID: operationID, title: title, context: retry.kind.rawValue)
+    }
+
+    private func runQueuedRetry(_ retry: MissionRetryDescriptor) {
+        switch retry.kind {
+        case .planning where retry.returnPhase == .planning:
+            Task { @MainActor [weak self] in await self?.retryPlanningInActiveThread(goal: retry.input, appendUserEvent: false) }
+        case .planning:
+            Task { @MainActor [weak self] in await self?.applyPlanChange(text: retry.input) }
+        case .gathering, .curation:
+            startCurating()
+        case .refinement:
+            launchedOperationTasks[.refinement] = Task { @MainActor [weak self] in
+                await self?.applyRefinement(text: retry.input, appendUserEvent: false)
+            }
+        case .chips where retry.input == "save-to-taste":
+            Task { @MainActor [weak self] in await self?.performQueuedTasteSave() }
+        case .chips:
+            if let task = selectedTask { refreshRefineChips(for: task) }
+        }
+    }
+
+    private func reduceResolvedAnswer(
+        _ submission: MissionInteractionSubmission,
+        interaction: MissionPendingInteraction,
+        thread: inout MissionThread,
+        effect: inout MissionReducerEffect?
+    ) {
+        let option: String? = { if case .option(let id) = submission.answer { return id }; return nil }()
+        let text: String? = { if case .freeText(let value) = submission.answer { return value.trimmed }; return nil }()
+
+        switch interaction.resolver {
+        case .plan:
+            if option == "start-shopping" { effect = .beginCuration }
+            else if option == "start-over" {
+                thread.phase = .abandoned
+                thread.appendEvent(kind: .notice, text: "Ended this mission.", createdAt: clock())
+                effect = .goToMissions
+            } else if let text { effect = .changePlan(text) }
+            else { installPlanChangeQuestion(in: &thread) }
+
+        case .product(let productID, let variantID):
+            guard let product = thread.candidates.first(where: { $0.id == productID }),
+                  thread.remainingDeckIDs.contains(productID) else {
+                installNextProductOrKitQuestion(in: &thread)
+                return
+            }
+            switch option {
+            case "add":
+                guard let variantID,
+                      let variant = product.variants.first(where: { $0.id == variantID }),
+                      let snapshot = productSnapshot(for: interaction, in: thread),
+                      snapshot.productID == product.id,
+                      snapshot.variantID == variant.id,
+                      snapshot.title == product.name,
+                      snapshot.merchant == product.shop.name,
+                      snapshot.presentedPrice == variant.price else {
+                    thread.appendEvent(
+                        kind: .assistantMessage,
+                        text: "That pick changed since I showed it, so I refreshed the details before adding it.",
+                        createdAt: clock(), productID: product.id
+                    )
+                    installProductQuestion(in: &thread, product: product)
+                    return
+                }
+                if !thread.kit.contains(where: { $0.product.id == productID }) {
+                    thread.kit.append(KitItem(product: product, variant: variant))
+                    thread.remainingDeckIDs.removeAll { $0 == productID }
+                    thread.decisions.append(MissionProductDecision(
+                        id: submission.idempotencyID, kind: .added, productID: productID,
+                        variantID: variant.id, createdAt: clock()
+                    ))
+                    thread.appendEvent(kind: .productAdded, text: "Added \(product.name).", createdAt: clock(), productID: productID, operationID: submission.idempotencyID)
+                }
+                installNextProductOrKitQuestion(in: &thread)
+            case "skip":
+                thread.remainingDeckIDs.removeAll { $0 == productID }
+                thread.decisions.append(MissionProductDecision(id: submission.idempotencyID, kind: .skipped, productID: productID, createdAt: clock()))
+                thread.appendEvent(kind: .productSkipped, text: "Skipped \(product.name).", createdAt: clock(), productID: productID, operationID: submission.idempotencyID)
+                installNextProductOrKitQuestion(in: &thread)
+            case "show-another":
+                thread.remainingDeckIDs.removeAll { $0 == productID }
+                thread.remainingDeckIDs.append(productID)
+                thread.appendEvent(kind: .notice, text: "Showing another option.", createdAt: clock(), productID: productID)
+                installNextProductOrKitQuestion(in: &thread)
+            case "adjust-search": installRefinementQuestion(in: &thread)
+            default:
+                if let text, let requested = conversationalProductWrite(in: text) {
+                    installProductConfirmation(in: &thread, product: product, action: requested)
+                } else if let text { effect = .refine(text) }
+                else { installNextProductOrKitQuestion(in: &thread) }
+            }
+
+        case .kit:
+            switch option {
+            case "review-cart":
+                installKitQuestion(in: &thread)
+                effect = .openCart
+            case "find-more":
+                let kept = Set(thread.kit.map { $0.product.id })
+                thread.decisions.removeAll { $0.kind == .skipped }
+                thread.remainingDeckIDs = thread.candidates.map(\.id).filter { !kept.contains($0) }
+                installNextProductOrKitQuestion(in: &thread)
+            case "end":
+                thread.phase = .completed
+                thread.appendEvent(kind: .notice, text: "Ended this mission.", createdAt: clock())
+                effect = .goToMissions
+            default:
+                if let text { effect = .refine(text) }
+                else { installNextProductOrKitQuestion(in: &thread) }
+            }
+
+        case .retry(let retry):
+            if option == "retry" { effect = .retry(retry) }
+            else if option == "cancel" {
+                thread.retry = nil
+                thread.phase = .abandoned
+                thread.appendEvent(kind: .notice, text: "Ended this mission.", createdAt: clock())
+                effect = .goToMissions
+            }
+            else if let text {
+                switch retry.kind {
+                case .planning where retry.returnPhase == .planning: effect = .replaceGoal(text)
+                case .planning, .gathering, .curation: effect = .changePlan(text)
+                case .refinement: effect = .refine(text)
+                case .chips: installQuestionForStableState(in: &thread)
+                }
+            }
+
+        case .refinement:
+            if option == "reset" { resetRefinements(in: &thread); installNextProductOrKitQuestion(in: &thread) }
+            else if option == "save-to-taste" { effect = .saveTaste; installNextProductOrKitQuestion(in: &thread) }
+            else if let text { effect = .refine(text) }
+            else { installNextProductOrKitQuestion(in: &thread) }
+
+        case .clarification(let context):
+            if option == "cancel" {
+                cancelOperations()
+                thread.pendingOperation = nil
+                thread.retry = nil
+                thread.phase = .abandoned
+                thread.appendEvent(kind: .notice, text: "Ended this mission.", createdAt: clock())
+                effect = .goToMissions
+            } else if option == "stop" {
+                cancelOperations()
+                thread.pendingOperation = nil
+                thread.retry = nil
+                thread.phase = thread.task == nil ? .declined : (thread.candidates.isEmpty ? .planReady : .deckReady)
+                thread.appendEvent(kind: .notice, text: "Stopped that work.", createdAt: clock())
+                installQuestionForStableState(in: &thread)
+            } else if context == "declined", let text { effect = .replaceGoal(text) }
+            else if context == "plan-change", let text { effect = .changePlan(text) }
+            else if context.hasPrefix("working:"), let text {
+                cancelOperations()
+                thread.pendingOperation = nil
+                effect = thread.task == nil ? .replaceGoal(text) : .refine(text)
+            }
+        }
+    }
+
+    private func runRetry(_ retry: MissionRetryDescriptor) {
+        switch retry.kind {
+        case .planning: Task { @MainActor [weak self] in await self?.retryPlanningInActiveThread(goal: retry.input, appendUserEvent: false) }
+        case .gathering, .curation:
+            if let task = selectedTask { Task { @MainActor [weak self] in await self?.loadCandidates(for: task) } }
+        case .refinement: Task { @MainActor [weak self] in await self?.applyRefinement(text: retry.input, appendUserEvent: false) }
+        case .chips where retry.input == "save-to-taste":
+            Task { @MainActor [weak self] in await self?.performQueuedTasteSave() }
+        case .chips: if let task = selectedTask { refreshRefineChips(for: task) }
+        }
+    }
+
+    /// Interaction construction is an application invariant, not a best-effort enhancement. A
+    /// malformed resolver must fail loudly in development and can never leave a write-capable UI
+    /// silently detached from its durable question.
+    private func requireInteraction(_ install: () throws -> Void) {
+        do { try install() }
+        catch {
+            interactionConstructionFailure = String(describing: error)
+        }
+    }
+
+    private func installWorkingQuestion(
+        in thread: inout MissionThread,
+        operationID: String,
+        title: String,
+        context: String
+    ) {
+        thread.supersedePendingInteraction()
+        thread.appendEvent(
+            kind: .assistantMessage,
+            text: title,
+            createdAt: clock(),
+            operationID: operationID,
+            blocks: [.activity(MissionActivityReceipt(operationID: operationID, title: title))]
+        )
+        guard let promptID = thread.timeline.last?.id else { return }
+        requireInteraction {
+            try thread.installInteraction(
+            promptEventID: promptID,
+            subjectRevision: thread.revision,
+            kind: .clarification,
+            question: title,
+            options: [MissionInteractionOption(id: "stop", label: "Stop")],
+            allowsFreeText: true,
+            resolver: .clarification(contextID: "working:\(context)"),
+            createdAt: clock()
+            )
+        }
+    }
+
+    private func installPlanApprovalQuestion(in thread: inout MissionThread) {
+        guard let task = thread.task, !thread.plan.isEmpty else { return }
+        thread.supersedePendingInteraction()
+        let snapshot = MissionPlanSnapshot(
+            id: "plan-\(thread.id)-\(thread.revision)", revision: thread.revision,
+            title: task.title, parts: thread.plan
+        )
+        thread.appendEvent(
+            kind: .planReady,
+            text: "Here’s the plan. Should I shop it?",
+            createdAt: clock(),
+            blocks: [.plan(snapshot)]
+        )
+        guard let promptID = thread.timeline.last?.id else { return }
+        requireInteraction {
+            try thread.installInteraction(
+            promptEventID: promptID,
+            subjectRevision: thread.revision,
+            kind: .planApproval,
+            question: "Should I shop this plan?",
+            options: [
+                MissionInteractionOption(id: "start-shopping", label: "Start shopping"),
+                MissionInteractionOption(id: "change-plan", label: "Change the plan"),
+                MissionInteractionOption(id: "start-over", label: "Start over"),
+            ],
+            allowsFreeText: true,
+            resolver: .plan(planRevision: thread.revision),
+            createdAt: clock()
+            )
+        }
+    }
+
+    private func installPlanChangeQuestion(in thread: inout MissionThread) {
+        thread.appendEvent(kind: .assistantMessage, text: "What should I change in the plan?", createdAt: clock())
+        guard let promptID = thread.timeline.last?.id else { return }
+        requireInteraction {
+            try thread.installInteraction(
+            promptEventID: promptID, subjectRevision: thread.revision,
+            kind: .clarification, question: "What should I change in the plan?",
+            options: [], allowsFreeText: true,
+            resolver: .clarification(contextID: "plan-change"), createdAt: clock()
+            )
+        }
+    }
+
+    private func installDeclinedQuestion(in thread: inout MissionThread) {
+        thread.supersedePendingInteraction()
+        thread.appendEvent(kind: .assistantMessage, text: "What would you like to shop for instead?", createdAt: clock())
+        guard let promptID = thread.timeline.last?.id else { return }
+        requireInteraction {
+            try thread.installInteraction(
+            promptEventID: promptID, subjectRevision: thread.revision,
+            kind: .clarification, question: "What would you like to shop for instead?",
+            options: [MissionInteractionOption(id: "cancel", label: "Cancel")],
+            allowsFreeText: true, resolver: .clarification(contextID: "declined"), createdAt: clock()
+            )
+        }
+    }
+
+    private func installProductQuestion(in thread: inout MissionThread, product: Product) {
+        thread.supersedePendingInteraction()
+        let variant = product.defaultVariant
+        thread.appendEvent(
+            kind: .assistantMessage,
+            text: "How does this one look?",
+            createdAt: clock(), productID: product.id,
+            blocks: [.product(MissionProductSnapshot(product: product, variant: variant))]
+        )
+        guard let promptID = thread.timeline.last?.id else { return }
+        requireInteraction {
+            try thread.installInteraction(
+            promptEventID: promptID, subjectRevision: thread.revision,
+            kind: .productDecision, question: "What should I do with \(product.name)?",
+            options: [
+                MissionInteractionOption(id: "add", label: isSingleProductMission ? "Shortlist" : "Add"),
+                MissionInteractionOption(id: "skip", label: "Skip"),
+                MissionInteractionOption(id: "show-another", label: "Show another"),
+                MissionInteractionOption(id: "adjust-search", label: "Adjust search"),
+            ],
+            allowsFreeText: true,
+            resolver: .product(productID: product.id, variantID: variant.id),
+            createdAt: clock()
+            )
+        }
+    }
+
+    private enum ConversationalProductWrite: Equatable { case add, skip }
+
+    private func conversationalProductWrite(in text: String) -> ConversationalProductWrite? {
+        let normalized = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if ["add", "add it", "add this", "keep it", "shortlist it"].contains(normalized) { return .add }
+        if ["skip", "skip it", "pass", "pass on it"].contains(normalized) { return .skip }
+        return nil
+    }
+
+    private func productSnapshot(
+        for interaction: MissionPendingInteraction,
+        in thread: MissionThread
+    ) -> MissionProductSnapshot? {
+        thread.timeline.first(where: { $0.id == interaction.promptEventID })?.blocks.compactMap { block in
+            if case .product(let snapshot) = block { return snapshot }
+            return nil
+        }.first
+    }
+
+    private func installProductConfirmation(
+        in thread: inout MissionThread,
+        product: Product,
+        action: ConversationalProductWrite
+    ) {
+        thread.supersedePendingInteraction()
+        let variant = product.defaultVariant
+        let optionID = action == .add ? "add" : "skip"
+        let verb = action == .add ? (isSingleProductMission ? "shortlist" : "add") : "skip"
+        thread.appendEvent(
+            kind: .assistantMessage,
+            text: "Just to confirm: \(verb) \(product.name)?",
+            createdAt: clock(), productID: product.id,
+            blocks: [.product(MissionProductSnapshot(product: product, variant: variant))]
+        )
+        guard let promptID = thread.timeline.last?.id else { return }
+        requireInteraction {
+            try thread.installInteraction(
+                promptEventID: promptID, subjectRevision: thread.revision,
+                kind: .productDecision, question: "\(verb.capitalized) \(product.name)?",
+                options: [
+                    MissionInteractionOption(id: optionID, label: verb.capitalized),
+                    MissionInteractionOption(id: "cancel", label: "Cancel"),
+                ], selectionMode: .confirmation, allowsFreeText: false,
+                resolver: .product(productID: product.id, variantID: variant.id), createdAt: clock()
+            )
+        }
+    }
+
+    private func installKitQuestion(in thread: inout MissionThread) {
+        thread.supersedePendingInteraction()
+        let snapshot = MissionKitSnapshot(
+            id: "kit-\(thread.id)-\(thread.revision)", revision: thread.revision,
+            items: thread.kit.map(MissionKitSnapshotItem.init)
+        )
+        let question = thread.kit.isEmpty ? "Want me to look again?" : "Ready to review what you kept?"
+        thread.appendEvent(
+            kind: .assistantMessage, text: question, createdAt: clock(), blocks: [.kit(snapshot)]
+        )
+        guard let promptID = thread.timeline.last?.id else { return }
+        var options = [MissionInteractionOption(id: "find-more", label: "Find more")]
+        if !thread.kit.isEmpty { options.insert(MissionInteractionOption(id: "review-cart", label: "Review cart"), at: 0) }
+        options.append(MissionInteractionOption(id: "end", label: "End mission"))
+        requireInteraction {
+            try thread.installInteraction(
+            promptEventID: promptID, subjectRevision: thread.revision,
+            kind: .cartReview, question: question, options: options,
+            allowsFreeText: true,
+            resolver: .kit(snapshotID: snapshot.id, revision: snapshot.revision), createdAt: clock()
+            )
+        }
+    }
+
+    private func installRefinementQuestion(in thread: inout MissionThread) {
+        thread.supersedePendingInteraction()
+        thread.appendEvent(kind: .assistantMessage, text: "What should I adjust?", createdAt: clock())
+        guard let promptID = thread.timeline.last?.id else { return }
+        var options: [MissionInteractionOption] = []
+        if !thread.refinementTurns.isEmpty { options.append(MissionInteractionOption(id: "reset", label: "Reset changes")) }
+        if thread.refinementDirectives.contains(where: { $0.isActionable }) {
+            options.append(MissionInteractionOption(id: "save-to-taste", label: saveToTasteLabel))
+        }
+        requireInteraction {
+            try thread.installInteraction(
+            promptEventID: promptID, subjectRevision: thread.revision,
+            kind: .refinement, question: "What should I adjust?", options: options,
+            allowsFreeText: true, resolver: .refinement(baseRevision: thread.revision), createdAt: clock()
+            )
+        }
+    }
+
+    private func installRetryQuestion(in thread: inout MissionThread, retry: MissionRetryDescriptor) {
+        thread.supersedePendingInteraction()
+        thread.appendEvent(kind: .assistantMessage, text: "That turn didn’t finish. What next?", createdAt: clock())
+        guard let promptID = thread.timeline.last?.id else { return }
+        requireInteraction {
+            try thread.installInteraction(
+            promptEventID: promptID, subjectRevision: thread.revision,
+            kind: .retry, question: "That turn didn’t finish. What next?",
+            options: [
+                MissionInteractionOption(id: "retry", label: "Retry"),
+                MissionInteractionOption(id: "cancel", label: "Cancel"),
+            ], allowsFreeText: true, resolver: .retry(retry), createdAt: clock()
+            )
+        }
+    }
+
+    private func installNextProductOrKitQuestion(in thread: inout MissionThread) {
+        let byID = Dictionary(uniqueKeysWithValues: thread.candidates.map { ($0.id, $0) })
+        if let product = thread.remainingDeckIDs.compactMap({ byID[$0] }).first {
+            thread.phase = .deckReady
+            installProductQuestion(in: &thread, product: product)
+        } else {
+            // A useful final kit remains resumable and conversational until the person explicitly
+            // chooses End; opening Cart is navigation, not terminal mission completion.
+            thread.phase = .deckReady
+            installKitQuestion(in: &thread)
+        }
+    }
+
+    private func installQuestionForStableState(in thread: inout MissionThread) {
+        switch thread.phase {
+        case .planReady: installPlanApprovalQuestion(in: &thread)
+        case .deckReady, .completed: installNextProductOrKitQuestion(in: &thread)
+        case .declined: installDeclinedQuestion(in: &thread)
+        case .failed:
+            if let retry = thread.retry { installRetryQuestion(in: &thread, retry: retry) }
+        default: break
+        }
+    }
+
+    private func resetRefinements(in thread: inout MissionThread) {
+        let excluded = Set(thread.kit.map { $0.product.id })
+        thread.refinementTurns = []
+        thread.refinementDirectives = []
+        thread.candidates = thread.baseCandidates
+        thread.remainingDeckIDs = thread.baseCandidates.map(\.id).filter { !excluded.contains($0) }
+        thread.appendEvent(kind: .refinementsReset, text: "Reset the conversation changes.", createdAt: clock())
+        refinementTier = nil
+        canSaveRefinementToTaste = false
+        isReworking = false
+    }
+
+    func sendThreadMessage(_ text: String) {
+        if activeThread?.pendingInteraction != nil {
+            submitMissionText(text)
+            return
+        }
+        guard let phase = activeThread?.phase else { return }
+        switch phase {
+        case .declined:
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.retryPlanningInActiveThread(goal: text)
+            }
+        case .deckReady:
+            refine(text)
+        default:
+            break
+        }
+    }
+
+    func resumeThread(_ thread: MissionThread) {
+        cancelOperations()
+        var recovered = thread
+        do { try recovered.recoverAfterInterruption(at: clock()) }
+        catch {
+            threadLoadFailures.append(MissionThreadLoadFailure(id: thread.id, title: thread.goal, reason: String(describing: error)))
+            return
+        }
+        if let retry = recovered.retry {
+            recovered.revision += 1
+            recovered.updatedAt = clock()
+            recovered.supersedePendingInteraction()
+            installRetryQuestion(in: &recovered, retry: retry)
+        } else if recovered.pendingInteraction == nil {
+            recovered.revision += 1
+            recovered.updatedAt = clock()
+            installQuestionForStableState(in: &recovered)
+        }
+        installActiveThread(recovered)
+        planDecline = recovered.phase == .declined ? recovered.timeline.last?.text : nil
+        planDirty = recovered.phase == .planReady
+        loadState = recovered.phase == .deckReady ? .loaded : .idle
+        canSaveRefinementToTaste = recovered.refinementDirectives.contains { $0.isActionable }
+        if let task = recovered.task { refreshRefineChips(for: task) }
+        route = .missionThread
+    }
+
+    func deleteThread(_ thread: MissionThread) {
+        try? threadStore.delete(id: thread.id)
+        incompleteThreads.removeAll { $0.id == thread.id }
+        if activeThread?.id == thread.id {
+            cancelOperations()
+            activeThread = nil
+            route = .missions
+        }
+    }
+
+    func deleteThreadLoadFailure(_ failure: MissionThreadLoadFailure) {
+        try? threadStore.delete(id: failure.id)
+        threadLoadFailures.removeAll { $0.id == failure.id }
+    }
+
+    func retryThreadOperation() {
+        if let interaction = activeThread?.pendingInteraction,
+           interaction.options.contains(where: { $0.id == "retry" }) {
+            submitMissionOption("retry")
+            return
+        }
+        guard let retry = activeThread?.retry else { return }
+        switch retry.kind {
+        case .planning:
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.retryPlanningInActiveThread(goal: retry.input)
+            }
+        case .gathering, .curation:
+            guard let task = selectedTask else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.loadCandidates(for: task)
+            }
+        case .refinement:
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.applyRefinement(text: retry.input)
+            }
+        case .chips:
+            if let task = selectedTask { refreshRefineChips(for: task) }
+        }
     }
 
     // MARK: Derived
@@ -480,6 +1421,12 @@ final class AppModel {
         kit.contains { $0.product.id == product.id }
     }
 
+    private var excludedDeckProductIDs: Set<Product.ID> {
+        Set(kit.map { $0.product.id }).union(
+            activeThread?.decisions.filter { $0.kind == .skipped }.map(\.productID) ?? []
+        )
+    }
+
     // MARK: Navigation actions
 
     /// Selects a pre-built mission and routes to Plan, kicking off the "scanning shops" load
@@ -490,7 +1437,11 @@ final class AppModel {
         enterPlan(with: task)
         loadState = .loading
         planDirty = false
-        Task { await loadCandidates(for: task) }
+        let launched = Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            await self.loadCandidates(for: task)
+        }
+        launchedOperationTasks[.gathering] = launched
     }
 
     /// Re-runs the candidate load for the current mission (the Plan screen's "Retry").
@@ -505,7 +1456,12 @@ final class AppModel {
     /// over ``runPlan(goal:)`` so the button stays synchronous; the async core is what tests
     /// drive deterministically.
     func planMission(goal: String, for recipient: Recipient? = nil) {
-        Task { await runPlan(goal: goal, for: recipient) }
+        cancelOperations()
+        let launched = Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            await self.performPlan(goal: goal, for: recipient)
+        }
+        launchedOperationTasks[.planning] = launched
     }
 
     /// Decomposes `goal` via the injected ``MissionPlanner`` and either routes into an editable
@@ -513,66 +1469,167 @@ final class AppModel {
     /// shoppable goal is also recorded in recents. Internal (not private) so tests can await it
     /// rather than racing the fire-and-forget `Task`.
     func runPlan(goal: String, for recipient: Recipient? = nil) async {
+        cancelOperations()
+        await performPlan(goal: goal, for: recipient)
+    }
+
+    private func performPlan(goal: String, for recipient: Recipient? = nil) async {
         let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let profile = recipient?.taste ?? tasteProfile
+        closeCheckoutWorkflow()
+        curatorTier = nil
+        refinementTier = nil
+        canSaveRefinementToTaste = false
+        isReworking = false
+        isRecurating = false
+        loadState = .idle
+        settleWatchdog?.cancel()
+        curationRefiningOvertime = false
+        var thread = MissionThread(goal: trimmed, recipient: recipient, taste: profile, now: clock())
+        thread.appendEvent(kind: .userMessage, text: trimmed, createdAt: clock())
+        installActiveThread(thread)
+        route = .missionThread
+        await retryPlanningInActiveThread(goal: trimmed, appendUserEvent: false)
+    }
+
+    /// Runs (or retries) planning inside the current thread. Both thread and operation identity
+    /// must still match when the model returns; cancellation alone is never trusted.
+    private func retryPlanningInActiveThread(goal: String, appendUserEvent: Bool = true) async {
+        let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let threadID = activeThread?.id,
+              let operationID = beginOperation(.planning) else { return }
+
         isPlanning = true
         planDecline = nil
-        defer { isPlanning = false }
+        let retry = MissionRetryDescriptor(
+            kind: .planning, input: trimmed, taskRevision: nil, returnPhase: .planning
+        )
+        mutateActiveThread {
+            $0.goal = trimmed
+            $0.phase = .planning
+            $0.task = nil
+            $0.plan = []
+            $0.pendingOperation = MissionPendingOperation(id: operationID, retry: retry, startedAt: clock())
+            $0.retry = nil
+            if appendUserEvent {
+                $0.appendEvent(kind: .userMessage, text: trimmed, createdAt: clock(), operationID: operationID)
+            }
+            $0.appendEvent(kind: .planningStarted, text: "Planning this mission…", createdAt: clock(), operationID: operationID)
+            installWorkingQuestion(in: &$0, operationID: operationID, title: "Planning your mission…", context: "planning")
+        }
 
-        // The plan itself is curated to the recipient's taste when this is a gift mission, so the
-        // parts the user edits already read as theirs.
-        let profile = recipient?.taste ?? tasteProfile
+        let profile = activeThread?.tasteSnapshot ?? tasteProfile
         let planned = await CrumbTrace.measure("plan", summarize: {
             "goalChars=\(trimmed.count) shoppable=\($0.task != nil) parts=\($0.task?.plan.count ?? 0) tier=\($0.tier.traceLabel)"
         }) {
             await planner.plan(goal: trimmed, profile: profile)
         }
+        guard operationIsCurrent(.planning, id: operationID, threadID: threadID) else { return }
+        isPlanning = false
+        finishOperation(.planning, id: operationID)
+
         if let task = planned.task {
             recentsStore.addRecent(trimmed)
             recentGoals = recentsStore.loadRecents()
             plannerTier = planned.tier
-            enterPlan(with: task, recipient: recipient)
-            currentMissionGoal = trimmed   // the real goal, for a faithful record + re-plan
+            mutateActiveThread {
+                $0.task = task
+                $0.plan = Self.draftParts(from: task)
+                $0.phase = .planReady
+                $0.pendingOperation = nil
+                $0.retry = nil
+                installPlanApprovalQuestion(in: &$0)
+            }
+            planDirty = true
         } else {
-            planDecline = planned.decline
-                ?? "I'm a shopping curator — hand me something to shop for."
+            let decline = planned.decline ?? "I'm a shopping curator — hand me something to shop for."
+            planDecline = decline
+            mutateActiveThread {
+                $0.phase = .declined
+                $0.pendingOperation = nil
+                $0.retry = retry
+                $0.appendEvent(kind: .assistantMessage, text: decline, createdAt: clock(), operationID: operationID)
+                installDeclinedQuestion(in: &$0)
+            }
+        }
+    }
+
+    /// Applies conversational plan feedback without editing controls in the transcript. The model
+    /// receives the original goal plus the requested change, while the authoritative mission goal
+    /// remains unchanged and the returned plan is presented for a fresh explicit approval.
+    private func applyPlanChange(text: String) async {
+        let change = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !change.isEmpty, let threadID = activeThreadID,
+              let goal = activeThread?.goal, let operationID = beginOperation(.planning) else { return }
+        isPlanning = true
+        let retry = MissionRetryDescriptor(kind: .planning, input: change, taskRevision: activeThread?.revision, returnPhase: .planReady)
+        mutateActiveThread {
+            $0.phase = .planning
+            $0.pendingOperation = MissionPendingOperation(id: operationID, retry: retry, startedAt: clock())
+            $0.retry = nil
+            installWorkingQuestion(in: &$0, operationID: operationID, title: "Updating the plan…", context: "plan-change")
+        }
+        let request = "\(goal). Update the shopping plan with this request: \(change)"
+        let result = await planner.plan(goal: request, profile: activeTaste)
+        guard operationIsCurrent(.planning, id: operationID, threadID: threadID) else { return }
+        isPlanning = false
+        finishOperation(.planning, id: operationID)
+        if let task = result.task {
+            plannerTier = result.tier
+            mutateActiveThread {
+                $0.task = task
+                $0.plan = Self.draftParts(from: task)
+                $0.phase = .planReady
+                $0.pendingOperation = nil
+                $0.retry = nil
+                installPlanApprovalQuestion(in: &$0)
+            }
+            planDirty = true
+        } else {
+            mutateActiveThread {
+                $0.phase = .planReady
+                $0.pendingOperation = nil
+                $0.retry = nil
+                $0.appendEvent(kind: .assistantMessage, text: "I couldn’t make that change safely, so I kept the last plan.", createdAt: clock())
+                installPlanApprovalQuestion(in: &$0)
+            }
         }
     }
 
     /// Sets up the Plan screen for `task`: seeds the editable parts, resets the deck, and routes
     /// to Plan **without** searching yet (the search runs on "Curate my kit", after edits).
     func enterPlan(with task: ShoppingTask, recipient: Recipient? = nil) {
+        cancelOperations()
         closeCheckoutWorkflow()
-        selectedTask = task
-        // Who this mission is for — `nil` = Yourself. Set here (not in the composer) so every entry
-        // point (live composer, seed `select`, screenshot, planAgain) resolves the recipient the
-        // same way and the curation pipeline reads `activeTaste` from this single switch.
-        activeRecipient = recipient
-        draftParts = Self.draftParts(from: task)
-        kit.removeAll()
-        candidates = []
-        deck = []
+        let profile = recipient?.taste ?? tasteProfile
+        var thread = MissionThread(goal: task.title, recipient: recipient, taste: profile, now: clock())
+        thread.task = task
+        thread.plan = Self.draftParts(from: task)
+        thread.phase = .planReady
+        thread.appendEvent(kind: .userMessage, text: task.title, createdAt: clock())
+        installPlanApprovalQuestion(in: &thread)
+        installActiveThread(thread)
         curatorTier = nil
-        clearRefinement()
-        // A new shopping session — the next cart-reach starts a fresh history entry, not an update
-        // to the previous mission's one. The seed-mission path leaves `currentMissionGoal` nil so
-        // the task's own title stands in as the goal; `runPlan` sets the real typed goal after.
-        currentHistoryEntryID = nil
-        currentMissionGoal = nil
+        refinementTier = nil
+        canSaveRefinementToTaste = false
+        isReworking = false
         loadState = .idle
         settleWatchdog?.cancel()
         curationRefiningOvertime = false
         planDirty = true
-        route = .plan
+        route = .missionThread
     }
 
     /// Resets the ephemeral refinement conversation and its derived state — called whenever a new
     /// mission is entered (so refinements never leak across missions) and when a fresh deck is
     /// dealt. Does not touch the persisted ``TasteProfile``.
     private func clearRefinement() {
-        refinementTurns = []
+        mutateActiveThread {
+            $0.refinementTurns = []
+            $0.refinementDirectives = []
+        }
         refinementTier = nil
-        refinementDirectives = []
         canSaveRefinementToTaste = false
         isReworking = false
     }
@@ -583,11 +1640,16 @@ final class AppModel {
     /// pass no-ops if the user has already moved to another mission. See [[conversational-refinement]].
     private func refreshRefineChips(for task: ShoppingTask) {
         refineChips = RuleBasedRefineChipSuggester.chips(for: task)
-        Task {
-            let suggested = await chipSuggester.chips(for: task, profile: activeTaste)
-            guard selectedTask?.id == task.id else { return }
+        guard let threadID = activeThread?.id, let operationID = beginOperation(.chips) else { return }
+        let profile = activeTaste
+        let chipTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let suggested = await self.chipSuggester.chips(for: task, profile: profile)
+            guard self.operationIsCurrent(.chips, id: operationID, threadID: threadID) else { return }
             refineChips = suggested
+            self.finishOperation(.chips, id: operationID)
         }
+        operationTasks[.chips] = chipTask
     }
 
     /// Builds editable parts from a task, pairing each plan label with its query by index and
@@ -607,13 +1669,20 @@ final class AppModel {
     func addPart(label: String) {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, draftParts.count < RuleBasedMissionPlanner.maxParts else { return }
-        draftParts.append(PlanPart(label: trimmed, query: RuleBasedMissionPlanner.clean(query: trimmed)))
+        mutateActiveThread {
+            $0.plan.append(PlanPart(label: trimmed, query: RuleBasedMissionPlanner.clean(query: trimmed)))
+            $0.phase = .planReady
+        }
         planDirty = true
     }
 
     /// Removes a part from the draft plan.
     func removePart(_ part: PlanPart) {
-        draftParts.removeAll { $0.id == part.id }
+        guard draftParts.count > 1 else { return }
+        mutateActiveThread {
+            $0.plan.removeAll { $0.id == part.id }
+            $0.phase = .planReady
+        }
         planDirty = true
     }
 
@@ -621,15 +1690,24 @@ final class AppModel {
     /// query that matches the new wording when the user next curates.
     func updatePart(_ part: PlanPart, label: String) {
         guard let index = draftParts.firstIndex(where: { $0.id == part.id }) else { return }
-        draftParts[index].label = label
-        draftParts[index].query = RuleBasedMissionPlanner.clean(query: label)
+        mutateActiveThread {
+            guard $0.plan.indices.contains(index) else { return }
+            $0.plan[index].label = label
+            $0.plan[index].query = RuleBasedMissionPlanner.clean(query: label)
+            $0.phase = .planReady
+        }
         planDirty = true
     }
 
     /// Advances from Plan to the swipe deck, committing any plan edits and (re-)running the
     /// catalog search first. Fire-and-forget wrapper over ``beginCuration()``.
     func startCurating() {
-        Task { await beginCuration() }
+        launchedOperationTasks[.gathering]?.cancel()
+        let launched = Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            await self.beginCuration()
+        }
+        launchedOperationTasks[.gathering] = launched
     }
 
     /// Commits the edited plan into the mission's queries and loads candidates, then advances
@@ -638,16 +1716,18 @@ final class AppModel {
     func beginCuration() async {
         guard let base = selectedTask else { return }
         if !planDirty, loadState == .loaded, !candidates.isEmpty {
-            route = .curate
+            route = .missionThread
             return
         }
         let queries = draftParts.map(\.query).filter { !$0.isEmpty }
         guard !queries.isEmpty else { return }   // nothing searchable — CTA is disabled anyway
         let task = base.rebuilt(plan: draftParts.map(\.label), searchQueries: queries)
-        selectedTask = task
+        mutateActiveThread {
+            $0.task = task
+        }
         planDirty = false
         await loadCandidates(for: task)
-        if loadState == .loaded { route = .curate }
+        if loadState == .loaded { route = .missionThread }
     }
 
     #if DEBUG
@@ -659,14 +1739,11 @@ final class AppModel {
         // `CRUMB_SINGLE=1` flips a seed mission into single-product framing so the shortlist copy
         // (#56) can be captured headlessly — the mock catalog has no tea, so we reuse a seed deck.
         if ProcessInfo.processInfo.environment["CRUMB_SINGLE"] == "1" { task = task.settingSingleItem(true) }
-        selectedTask = task
-        kit.removeAll()
-        candidates = []
-        deck = []
+        enterPlan(with: task)
         curatorTier = nil
         clearRefinement()
         await loadCandidates(for: task)
-        route = .curate
+        route = .missionThread
     }
 
     /// Screenshot hook: deal a deck then accept every card, landing on Curate's "that's a
@@ -691,7 +1768,7 @@ final class AppModel {
     func presentCartForScreenshot(missionID: String) async {
         var task = missions.first { $0.id == missionID } ?? SeedData.hike
         if ProcessInfo.processInfo.environment["CRUMB_SINGLE"] == "1" { task = task.settingSingleItem(true) }
-        selectedTask = task
+        enterPlan(with: task)
         curatorTier = nil
         clearRefinement()
         // Pick the first few products from distinct shops so the cart shows a real multi-shop spread.
@@ -701,7 +1778,10 @@ final class AppModel {
             chosen.append(product)
             if chosen.count == 3 { break }
         }
-        kit = chosen.map(KitItem.init(product:))
+        mutateActiveThread {
+            $0.kit = chosen.map(KitItem.init(product:))
+            $0.phase = .deckReady
+        }
         openCart()
     }
 
@@ -770,8 +1850,11 @@ final class AppModel {
     /// the same proven path as ``presentCurateForScreenshot(missionID:)`` (which lands directly on
     /// Curate, never routing through the Plan step).
     func presentGiftCurateForScreenshot(missionID: String) async {
-        activeRecipient = recipients.first
-        await presentCurateForScreenshot(missionID: missionID)
+        var task = missions.first { $0.id == missionID } ?? SeedData.hike
+        if ProcessInfo.processInfo.environment["CRUMB_SINGLE"] == "1" { task = task.settingSingleItem(true) }
+        enterPlan(with: task, recipient: recipients.first)
+        await loadCandidates(for: task)
+        route = .missionThread
     }
 
     /// Screenshot hook: land on History filtered to the first seeded person, so the "for <name>"
@@ -785,6 +1868,10 @@ final class AppModel {
     #endif
 
     func openCart() {
+        let destination = isSingleProductMission ? "shortlist" : "kit"
+        mutateActiveThread {
+            $0.appendEvent(kind: .cartOpened, text: "Opened the \(destination).", createdAt: clock())
+        }
         route = .cart
         // Reaching the cart with a kit is the save trigger: record (or update) this session's
         // history entry. Fire-and-forget so navigation stays instant; the recap is written async.
@@ -792,9 +1879,11 @@ final class AppModel {
     }
 
     func goToMissions() {
+        cancelOperations()
         closeCheckoutWorkflow()
         // Returning to the composer resets the picker to Yourself — gifting is opt-in per mission.
         composerRecipient = nil
+        planDecline = nil
         route = .missions
     }
 
@@ -803,7 +1892,8 @@ final class AppModel {
     /// Fire-and-forget wrapper over ``recordCurrentKit()`` (the recap write is async). Internal so
     /// tests can await the async core deterministically rather than racing the `Task`.
     func recordKitToHistory() {
-        Task { await recordCurrentKit() }
+        guard let threadID = activeThreadID else { return }
+        Task { await recordCurrentKit(threadID: threadID) }
     }
 
     /// Snapshots the current kit into a ``HistoryEntry`` and saves it — the heart of the History
@@ -822,13 +1912,23 @@ final class AppModel {
     ///   re-reach reuses the stored recap, so a non-deterministic model can't make a kit's saved
     ///   title/line wobble between visits.
     func recordCurrentKit() async {
-        guard let task = selectedTask, !kit.isEmpty else { return }
+        guard let threadID = activeThreadID else { return }
+        await recordCurrentKit(threadID: threadID)
+    }
 
-        let items = kit.map(HistoryItem.init)
-        let goal = currentMissionGoal ?? task.title
+    /// Records one captured thread generation. The fire-and-forget cart path may begin after the
+    /// user has already switched missions, so every value and post-await guard is tied to this id.
+    private func recordCurrentKit(threadID: String) async {
+        guard let thread = activeThread, thread.id == threadID,
+              let task = thread.task, !thread.kit.isEmpty else { return }
+
+        let items = thread.kit.map(HistoryItem.init)
+        let goal = thread.goal
+        let profile = thread.tasteSnapshot
+        let recipientRef = thread.recipient.map(RecipientRef.init)
 
         // Reuse this session's id/createdAt/outcome on a re-reach; otherwise mint a new entry.
-        let existing = currentHistoryEntryID.flatMap { id in historyEntries.first { $0.id == id } }
+        let existing = thread.historyEntryID.flatMap { id in historyEntries.first { $0.id == id } }
         let id: String
         let createdAt: Date
         let handedOff: Bool
@@ -838,10 +1938,11 @@ final class AppModel {
             handedOff = existing.handedOff
         } else {
             let now = clock()
-            id = "\(task.id)-\(Int(now.timeIntervalSinceReferenceDate))"
+            id = "\(threadID)-\(UUID().uuidString)"
             createdAt = now
             handedOff = false
-            currentHistoryEntryID = id
+            guard activeThreadID == threadID else { return }
+            mutateActiveThread { $0.historyEntryID = id }
         }
 
         let facts = items.map(RecapFact.init)
@@ -849,11 +1950,9 @@ final class AppModel {
 
         // Snapshot who this kit was for (a gift) — `nil` for an owner kit. Captured at save time so
         // the entry stays a faithful receipt even if the person is later edited or deleted.
-        let recipientRef = activeRecipientRef
-
         func makeEntry(tag: String, line: String, handedOff: Bool) -> HistoryEntry {
             HistoryEntry(
-                id: id, goal: goal, title: task.title, subtitle: task.subtitle,
+                id: id, threadID: threadID, goal: goal, title: task.title, subtitle: task.subtitle,
                 plan: task.plan, searchQueries: task.searchQueries, curatorNote: task.curatorNote,
                 accentHex: task.accentHex, recapTag: tag, recapLine: line, items: items,
                 recipient: recipientRef, handedOff: handedOff, createdAt: createdAt
@@ -870,7 +1969,7 @@ final class AppModel {
             seedLine = existing.recapLine
         } else {
             let floor = RuleBasedRecapWriter.recap(
-                goal: goal, plan: task.plan, items: facts, profile: activeTaste,
+                goal: goal, plan: task.plan, items: facts, profile: profile,
                 recipient: recipientRef, reason: nil
             )
             seedTag = floor.tag
@@ -884,9 +1983,10 @@ final class AppModel {
         // bail if the session moved on.
         guard keptChanged else { return }
         let written = await recapWriter.writeRecap(
-            goal: goal, plan: task.plan, items: facts, profile: activeTaste, recipient: recipientRef
+            goal: goal, plan: task.plan, items: facts, profile: profile, recipient: recipientRef
         )
-        guard currentHistoryEntryID == id, let latest = historyEntries.first(where: { $0.id == id }) else { return }
+        guard activeThreadID == threadID, currentHistoryEntryID == id,
+              let latest = historyEntries.first(where: { $0.id == id }) else { return }
         historyStore.save(makeEntry(tag: written.tag, line: written.line, handedOff: latest.handedOff))
         historyEntries = historyStore.loadEntries()
     }
@@ -953,9 +2053,10 @@ final class AppModel {
     func back() {
         switch route {
         case .onboarding, .missions: break  // roots — nothing to step back to
-        case .plan: route = .missions
-        case .curate: route = .plan
-        case .cart: route = .curate
+        case .missionThread:
+            planDecline = nil
+            route = .missions
+        case .cart: route = .missionThread
         case .history: route = .missions
         case .historyDetail: route = .history
         case .people: route = .missions
@@ -1012,6 +2113,9 @@ final class AppModel {
     func updateTaste(_ profile: TasteProfile) {
         tasteProfile = profile
         tasteStore.saveProfile(profile)
+        if activeThread?.recipient == nil {
+            mutateActiveThread { $0.tasteSnapshot = profile }
+        }
         guard !candidates.isEmpty else { return }
         Task { await recurateCurrentDeck() }
     }
@@ -1022,16 +2126,21 @@ final class AppModel {
     /// tests can drive the re-curate deterministically rather than racing the fire-and-forget
     /// `Task` that ``updateTaste(_:)`` kicks off.
     func recurateCurrentDeck() async {
-        guard let task = selectedTask, !candidates.isEmpty else { return }
+        guard let task = selectedTask, !candidates.isEmpty, let threadID = activeThreadID,
+              let operationID = beginOperation(.curation) else { return }
         isRecurating = true
-        defer { isRecurating = false }
 
         let curated = await curator.curate(candidates, for: activeTaste, mission: task, refinement: nil, recipient: activeRecipientRef)
-        // The user may have navigated to another mission while we were re-curating.
-        guard selectedTask?.id == task.id else { return }
+        guard operationIsCurrent(.curation, id: operationID, threadID: threadID) else { return }
+        isRecurating = false
+        finishOperation(.curation, id: operationID)
         let priced = PriceBand.priceSane(curated.products)
-        candidates = priced
-        deck = priced.filter { !isInKit($0) }
+        let excludedIDs = excludedDeckProductIDs
+        mutateActiveThread {
+            $0.candidates = priced
+            $0.remainingDeckIDs = priced.map(\.id).filter { !excludedIDs.contains($0) }
+            installNextProductOrKitQuestion(in: &$0)
+        }
         curatorTier = curated.tier
     }
 
@@ -1041,7 +2150,12 @@ final class AppModel {
     /// wrapper over ``applyRefinement(text:)`` so the bar stays synchronous; the async core is what
     /// tests drive deterministically.
     func refine(_ text: String) {
-        Task { await applyRefinement(text: text) }
+        launchedOperationTasks[.refinement]?.cancel()
+        let launched = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.applyRefinement(text: text)
+        }
+        launchedOperationTasks[.refinement] = launched
     }
 
     /// Reworks the current deck from a refinement line: interprets it (in the context of the
@@ -1050,39 +2164,66 @@ final class AppModel {
     /// ranking AND voice honor it. The kit is preserved; the rest is re-dealt in the new order.
     /// Internal (not private) so tests can await it rather than racing the fire-and-forget `Task`.
     func applyRefinement(text: String) async {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let task = selectedTask, !trimmed.isEmpty, !candidates.isEmpty else { return }
+        await applyRefinement(text: text, appendUserEvent: true)
+    }
 
-        refinementTurns.append(trimmed)
+    private func applyRefinement(text: String, appendUserEvent: Bool) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let task = selectedTask, !trimmed.isEmpty, !candidates.isEmpty,
+              let threadID = activeThreadID, let operationID = beginOperation(.refinement) else { return }
+
         isReworking = true
-        defer { isReworking = false }
+        let retry = MissionRetryDescriptor(
+            kind: .refinement, input: trimmed, taskRevision: activeThread?.revision, returnPhase: .deckReady
+        )
+        mutateActiveThread {
+            $0.refinementTurns.append(trimmed)
+            $0.pendingOperation = MissionPendingOperation(id: operationID, retry: retry, startedAt: clock())
+            $0.retry = nil
+            if appendUserEvent {
+                $0.appendEvent(kind: .userMessage, text: trimmed, createdAt: clock(), operationID: operationID)
+            }
+            $0.appendEvent(kind: .refinementRequested, text: "Reworking the picks…", createdAt: clock(), operationID: operationID)
+            installWorkingQuestion(in: &$0, operationID: operationID, title: "Reworking the picks…", context: "refinement")
+        }
+        let conversation = refinementTurns
 
         let interpreted = await refiner.interpret(
-            trimmed, conversation: refinementTurns, mission: task, profile: activeTaste
+            trimmed, conversation: conversation, mission: task, profile: activeTaste
         )
+        guard operationIsCurrent(.refinement, id: operationID, threadID: threadID) else { return }
         refinementTier = interpreted.tier
-        refinementDirectives.append(interpreted.directive)
 
         // Pull in new candidates only when the refinement asked for something not in the deck
         // (e.g. "add rain pants"); otherwise re-curate the existing deck in place.
         var working = candidates
         if !interpreted.directive.addQueries.isEmpty, let found = await search(interpreted.directive.addQueries) {
-            guard selectedTask?.id == task.id else { return }
+            guard operationIsCurrent(.refinement, id: operationID, threadID: threadID) else { return }
             var seen = Set(working.map(\.id))
             working += found.filter { seen.insert($0.id).inserted }
         }
 
-        let context = RefinementContext(directive: interpreted.directive, conversation: refinementTurns)
+        let context = RefinementContext(directive: interpreted.directive, conversation: conversation)
         let curated = await curator.curate(working, for: activeTaste, mission: task, refinement: context, recipient: activeRecipientRef)
-        // The user may have navigated to another mission while we were reworking.
-        guard selectedTask?.id == task.id else { return }
+        guard operationIsCurrent(.refinement, id: operationID, threadID: threadID) else { return }
+        isReworking = false
+        finishOperation(.refinement, id: operationID)
         // Keep the price backstop on refinement too — unless the user explicitly asked to go
         // pricier, in which case honor it and leave the order the curator produced.
         let priced = interpreted.directive.priceDirection == .pricier
             ? curated.products
             : PriceBand.priceSane(curated.products)
-        candidates = priced
-        deck = priced.filter { !isInKit($0) }
+        let excludedIDs = excludedDeckProductIDs
+        mutateActiveThread {
+            $0.refinementDirectives.append(interpreted.directive)
+            $0.candidates = priced
+            $0.remainingDeckIDs = priced.map(\.id).filter { !excludedIDs.contains($0) }
+            $0.phase = .deckReady
+            $0.pendingOperation = nil
+            $0.retry = nil
+            $0.appendEvent(kind: .refinementApplied, text: "I updated the picks to match.", createdAt: clock(), operationID: operationID)
+            installNextProductOrKitQuestion(in: &$0)
+        }
         curatorTier = curated.tier
         canSaveRefinementToTaste = refinementDirectives.contains { $0.isActionable }
     }
@@ -1091,9 +2232,28 @@ final class AppModel {
     /// ``baseCandidates`` snapshot), preserving the kit. Synchronous and model-free — the base
     /// deck already carries Crumb's voice, so Reset is an instant undo, not a re-curate.
     func resetRefinements() {
-        clearRefinement()
-        candidates = baseCandidates
-        deck = baseCandidates.filter { !isInKit($0) }
+        let restored = baseCandidates
+        let excludedIDs = excludedDeckProductIDs
+        mutateActiveThread {
+            let refinementOperations = Set($0.timeline.compactMap {
+                $0.kind == .refinementRequested ? $0.operationID : nil
+            })
+            for index in $0.timeline.indices {
+                let event = $0.timeline[index]
+                if event.kind == .refinementApplied
+                    || (event.kind == .userMessage && event.operationID.map(refinementOperations.contains) == true) {
+                    $0.timeline[index].isSuperseded = true
+                }
+            }
+            $0.refinementTurns = []
+            $0.refinementDirectives = []
+            $0.candidates = restored
+            $0.remainingDeckIDs = restored.map(\.id).filter { !excludedIDs.contains($0) }
+            $0.appendEvent(kind: .refinementsReset, text: "Reset the conversation changes.", createdAt: clock())
+        }
+        refinementTier = nil
+        canSaveRefinementToTaste = false
+        isReworking = false
     }
 
     /// Folds the accumulated refinement into the persisted ``TasteProfile`` so future missions
@@ -1103,13 +2263,14 @@ final class AppModel {
     /// the save still does something honest and is testable. Persists but does **not** re-curate —
     /// the on-screen deck already reflects the refinement; this is for *next* time.
     func saveRefinementToTaste() async {
-        guard canSaveRefinementToTaste, !refinementTurns.isEmpty else { return }
+        guard canSaveRefinementToTaste, !refinementTurns.isEmpty, let threadID = activeThreadID else { return }
         let combined = refinementTurns.joined(separator: ". ")
         // Fold into whichever taste this mission is curating through: the recipient's during a gift
         // mission (so it sticks next time you shop for them — the owner's profile is untouched), or
         // the owner's otherwise (exactly today's behavior).
         let base = activeTaste
         let extracted = await tasteExtractor.extract(from: combined, base: base)
+        guard activeThreadID == threadID else { return }
         let updated = (extracted ?? Self.fold(refinementDirectives, into: base)).normalized
 
         if let recipient = activeRecipient {
@@ -1119,6 +2280,19 @@ final class AppModel {
             tasteStore.saveProfile(updated)
         }
         canSaveRefinementToTaste = false
+    }
+
+    private func performQueuedTasteSave() async {
+        let threadID = activeThreadID
+        await saveRefinementToTaste()
+        guard activeThreadID == threadID,
+              activeThread?.pendingOperation?.retry.kind == .chips,
+              activeThread?.pendingOperation?.retry.input == "save-to-taste" else { return }
+        mutateActiveThread {
+            $0.pendingOperation = nil
+            $0.retry = nil
+            installNextProductOrKitQuestion(in: &$0)
+        }
     }
 
     /// Deterministically folds refinement directives into a profile (the no-model floor for
@@ -1197,7 +2371,12 @@ final class AppModel {
         updated.taste = recipient.taste.normalized
         recipientStore.save(updated)
         recipients = recipientStore.loadRecipients()
-        if activeRecipient?.id == updated.id { activeRecipient = updated }
+        if activeRecipient?.id == updated.id {
+            mutateActiveThread {
+                $0.recipient = updated
+                $0.tasteSnapshot = updated.taste
+            }
+        }
         if composerRecipient?.id == updated.id { composerRecipient = updated }
     }
 
@@ -1252,6 +2431,22 @@ final class AppModel {
     /// the dedupe collapses them to that mission's curated set — mock behavior is
     /// unchanged.
     func loadCandidates(for task: ShoppingTask) async {
+        guard let threadID = activeThreadID, let operationID = beginOperation(.gathering) else { return }
+        let retry = MissionRetryDescriptor(
+            kind: .gathering,
+            input: task.searchQueries.joined(separator: "\n"),
+            taskRevision: activeThread?.revision,
+            returnPhase: .planReady
+        )
+        mutateActiveThread {
+            $0.phase = .gathering
+            $0.pendingOperation = MissionPendingOperation(id: operationID, retry: retry, startedAt: clock())
+            $0.retry = nil
+            if $0.timeline.last?.kind != .gatheringStarted {
+                $0.appendEvent(kind: .gatheringStarted, text: "Searching the shops…", createdAt: clock(), operationID: operationID)
+            }
+            installWorkingQuestion(in: &$0, operationID: operationID, title: "Searching the shops…", context: "gathering")
+        }
         loadState = .loading
         settleWatchdog?.cancel()
         curationRefiningOvertime = false
@@ -1269,9 +2464,8 @@ final class AppModel {
         let streamTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await batch in collector.picks {
-                // Stop feeding a deck the user has navigated away from.
-                guard self.selectedTask?.id == task.id else { break }
-                let fresh = batch.filter { product in !self.deck.contains { $0.id == product.id } }
+                guard self.operationIsCurrent(.gathering, id: operationID, threadID: threadID) else { break }
+                let fresh = batch.filter { product in !self.candidates.contains { $0.id == product.id } }
                 guard !fresh.isEmpty else { continue }
                 // Voice each streamed pick with the deterministic floor the instant it lands, so the
                 // deck never shows the raw merchant blurb as the "why this is you" — not even in the
@@ -1282,21 +2476,30 @@ final class AppModel {
                     $0.withRationale(self.curator.rationale(for: $0, profile: self.activeTaste, recipient: self.activeRecipientRef, mission: task))
                 }
                 let wasEmpty = self.deck.isEmpty
-                self.deck.append(contentsOf: voicedFresh)
                 // Order the streamed floor with the same mission-aware rank the settle uses (#58): for a
                 // premium-tea search this leads with credible specialty picks and sinks bulk / sample /
                 // sachet listings, instead of showing whatever order the live searches returned in —
                 // model-free, so it's the trustworthy floor even before curation settles.
-                self.deck = Self.streamFloor.rank(self.deck, for: self.activeTaste, mission: task)
-                self.candidates = self.deck
+                let ranked = Self.streamFloor.rank(self.candidates + voicedFresh, for: self.activeTaste, mission: task)
+                let excludedIDs = self.excludedDeckProductIDs
+                self.mutateActiveThread {
+                    $0.candidates = ranked
+                    $0.remainingDeckIDs = ranked.map(\.id).filter { !excludedIDs.contains($0) }
+                    $0.appendEvent(
+                        kind: .productsFound,
+                        text: "Found \(ranked.count) \(ranked.count == 1 ? "option" : "options") so far.",
+                        createdAt: self.clock(),
+                        operationID: operationID
+                    )
+                }
                 if wasEmpty {
                     // First pick: the deck is now actionable. Navigate to Curate and flip out of the
                     // blocking "loading" state into "refining" — the gather/curation keep settling,
                     // but the user can already swipe, so the banner must not read as a blocking
                     // spinner (#57). Arm the watchdog that downgrades it if the settle runs long.
-                    self.route = .curate
+                    self.route = .missionThread
                     self.loadState = .refining
-                    self.startSettleWatchdog(for: task)
+                    self.startSettleWatchdog(for: task, operationID: operationID, threadID: threadID)
                 }
             }
         }
@@ -1315,14 +2518,21 @@ final class AppModel {
         await collector.finish()      // close the stream so the subscriber's loop ends…
         _ = await streamTask.value    // …and drain any trailing picks before we settle the deck.
 
-        // Only mutate if the user is still on this task.
-        guard selectedTask?.id == task.id else { return }
+        guard operationIsCurrent(.gathering, id: operationID, threadID: threadID) else { return }
 
         guard let gathered else {
             settleWatchdog?.cancel()
-            candidates = []
-            deck = []
-            baseCandidates = []
+            mutateActiveThread {
+                $0.candidates = []
+                $0.baseCandidates = []
+                $0.remainingDeckIDs = []
+                $0.phase = .failed
+                $0.pendingOperation = nil
+                $0.retry = retry
+                $0.appendEvent(kind: .failure, text: "I couldn't reach the shops. You can retry when you're ready.", createdAt: clock(), operationID: operationID)
+                installRetryQuestion(in: &$0, retry: retry)
+            }
+            finishOperation(.gathering, id: operationID)
             loadState = .failed
             curationRefiningOvertime = false
             return
@@ -1334,7 +2544,7 @@ final class AppModel {
         // streamed, deterministically-voiced deck rather than spin forever (#57). For a gift mission
         // this curates to the recipient's taste, with gift-framed voice.
         let curated = await curateBounded(gathered.products, for: task)
-        guard selectedTask?.id == task.id else { return }
+        guard operationIsCurrent(.gathering, id: operationID, threadID: threadID) else { return }
         settleWatchdog?.cancel()
 
         // Price sanity: sink any wildly-mispriced catalog outlier (the $1,450 "Premium Black Tea
@@ -1350,16 +2560,30 @@ final class AppModel {
             priced = PriceBand.priceSane(deck)
             curatorTier = .ruleBased(.modelNotReady)
         }
-        candidates = priced
-        baseCandidates = priced   // the snapshot Reset restores
         // Settle: swap the streamed raw deck for the curated (ranked, voiced, price-saned) order,
         // keeping only cards the user hasn't already swiped past.
-        deck = Self.settledDeck(priced, keepingUndecidedFrom: deck)
+        let settled = Self.settledDeck(priced, keepingUndecidedFrom: deck)
+        mutateActiveThread {
+            $0.candidates = priced
+            $0.baseCandidates = priced
+            $0.remainingDeckIDs = settled.map(\.id)
+            $0.phase = .deckReady
+            $0.pendingOperation = nil
+            $0.retry = nil
+            $0.appendEvent(
+                kind: .gatheringCompleted,
+                text: "\(priced.count) \(priced.count == 1 ? "pick" : "picks") ready to explore.",
+                createdAt: clock(),
+                operationID: operationID
+            )
+            installNextProductOrKitQuestion(in: &$0)
+        }
+        finishOperation(.gathering, id: operationID)
         loadState = .loaded
         curationRefiningOvertime = false
         // If nothing streamed (a successful but empty gather), the stream never navigated us — land
         // on Curate anyway so the empty state shows, matching the pre-streaming behavior.
-        if route != .curate { route = .curate }
+        if route != .missionThread { route = .missionThread }
         // Note: the refinement conversation is reset by `enterPlan` (a new mission) and the
         // screenshot hook, NOT here — clearing it on every (re)load would race a refinement that
         // arrived while an earlier load was still settling.
@@ -1369,13 +2593,14 @@ final class AppModel {
     /// ``curationSettleWindow`` seconds, downgrade the "Curating your picks…" spinner to the quiet,
     /// non-blocking "still personalizing" status so a usable deck is never sat behind an indefinite
     /// spinner (#57). No-ops if the deck settled, failed, or the user moved to another mission first.
-    private func startSettleWatchdog(for task: ShoppingTask) {
+    private func startSettleWatchdog(for task: ShoppingTask, operationID: String, threadID: String) {
         settleWatchdog?.cancel()
         let window = curationSettleWindow
         settleWatchdog = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(window))
             guard let self, !Task.isCancelled,
-                  self.selectedTask?.id == task.id, self.loadState == .refining else { return }
+                  self.operationIsCurrent(.gathering, id: operationID, threadID: threadID),
+                  self.loadState == .refining else { return }
             self.curationRefiningOvertime = true
         }
     }
@@ -1443,28 +2668,64 @@ final class AppModel {
 
     /// Accept the current top card: add it to the kit and advance the deck.
     func accept(_ product: Product) {
-        if !isInKit(product) {
-            kit.append(KitItem(product: product))
+        if let submission = productInteractionSubmission(productID: product.id, optionID: "add") {
+            submitMissionAnswer(submission)
+            return
         }
-        advance(past: product)
+        guard activeThread?.pendingInteraction == nil else { return }
+        guard !isInKit(product) else { return }
+        let destination = isSingleProductMission ? "shortlist" : "kit"
+        let operationID = UUID().uuidString
+        mutateActiveThread {
+            $0.kit.append(KitItem(product: product))
+            $0.remainingDeckIDs.removeAll { $0 == product.id }
+            $0.decisions.append(MissionProductDecision(
+                id: operationID, kind: .added, productID: product.id,
+                variantID: product.variants.first?.id, createdAt: clock()
+            ))
+            $0.appendEvent(kind: .productAdded, text: "Added \(product.name) to the \(destination).", createdAt: clock(), productID: product.id, operationID: operationID)
+        }
     }
 
     /// Skip the current top card without adding it.
     func skip(_ product: Product) {
-        advance(past: product)
-    }
-
-    private func advance(past product: Product) {
-        deck.removeAll { $0.id == product.id }
+        if let submission = productInteractionSubmission(productID: product.id, optionID: "skip") {
+            submitMissionAnswer(submission)
+            return
+        }
+        guard activeThread?.pendingInteraction == nil else { return }
+        guard deck.contains(where: { $0.id == product.id }) else { return }
+        let operationID = UUID().uuidString
+        mutateActiveThread {
+            $0.remainingDeckIDs.removeAll { $0 == product.id }
+            $0.decisions.append(MissionProductDecision(
+                id: operationID, kind: .skipped, productID: product.id, createdAt: clock()
+            ))
+            $0.appendEvent(kind: .productSkipped, text: "Skipped \(product.name).", createdAt: clock(), productID: product.id, operationID: operationID)
+        }
     }
 
     func removeFromKit(_ item: KitItem) {
-        kit.removeAll { $0.id == item.id }
+        guard kit.contains(where: { $0.id == item.id }) else { return }
+        let operationID = UUID().uuidString
+        mutateActiveThread {
+            $0.kit.removeAll { $0.id == item.id }
+            $0.decisions.append(MissionProductDecision(
+                id: operationID, kind: .removed, productID: item.product.id,
+                variantID: item.variant.id, createdAt: clock()
+            ))
+            $0.appendEvent(kind: .productRemoved, text: "Removed \(item.product.name).", createdAt: clock(), productID: item.product.id, operationID: operationID)
+        }
     }
 
     /// Re-deal any candidates not currently in the kit (used by "Find more").
     func reshuffleDeck() {
-        deck = candidates.filter { !isInKit($0) }
+        let kitIDs = Set(kit.map { $0.product.id })
+        mutateActiveThread {
+            $0.decisions.removeAll { $0.kind == .skipped }
+            $0.remainingDeckIDs = $0.candidates.map(\.id).filter { !kitIDs.contains($0) }
+            $0.appendEvent(kind: .notice, text: "Put the skipped picks back into the deck.", createdAt: clock())
+        }
     }
 
     // MARK: App Intents / onscreen entities (issue #41)
@@ -1472,6 +2733,10 @@ final class AppModel {
     /// The mission's full curated pool — the products App Intents can resolve a ``ProductEntity``
     /// against (the visible deck plus anything already swiped into the kit).
     var sessionProducts: [Product] { candidates }
+
+    /// Resolves only an undecided, currently actionable card. Mutating App Intents use this rather
+    /// than the full session pool so a stale Skip/Add request cannot resurrect a decided product.
+    func deckProduct(id: Product.ID) -> Product? { deck.first { $0.id == id } }
 
     /// The visible swipe deck (undecided cards) — the entities Siri should *suggest*, since those
     /// are what the user is looking at right now.
@@ -1670,6 +2935,12 @@ final class AppModel {
             updateCheckout(shopID: shop.id, workflowID: workflow.id, state: .prepared(completed))
             sandbox.phase = .completed
             setSandbox(sandbox, shopID: shop.id, workflowID: workflow.id)
+            if checkoutWorkflow?.merchants.allSatisfy({ $0.sandbox?.phase == .completed }) == true {
+                mutateActiveThread {
+                    $0.phase = .completed
+                    $0.appendEvent(kind: .notice, text: "Checkout completed for every shop.", createdAt: clock())
+                }
+            }
         } catch UCPError.checkoutExpired {
             sandbox.phase = .expired
             setSandbox(sandbox, shopID: shop.id, workflowID: workflow.id)

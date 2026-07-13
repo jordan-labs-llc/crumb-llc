@@ -51,13 +51,14 @@ struct RootView: View {
             let env = ProcessInfo.processInfo.environment
             let mission = env["CRUMB_MISSION"] ?? "coffee"
             switch env["CRUMB_SCREENSHOT"] {
-            case "curate": await model.presentCurateForScreenshot(missionID: mission)
+            case "curate", "conversation-product":
+                await model.presentCurateForScreenshot(missionID: mission)
             case "cart": await model.presentCartForScreenshot(missionID: mission)
             case "sandbox-contact": await model.presentSandboxCheckoutForScreenshot(missionID: mission, stage: "contact")
             case "sandbox-review": await model.presentSandboxCheckoutForScreenshot(missionID: mission, stage: "review")
             case "sandbox-completed": await model.presentSandboxCheckoutForScreenshot(missionID: mission, stage: "completed")
             case "kit": await model.presentFullKitForScreenshot(missionID: mission)
-            case "plan": model.presentPlanForScreenshot(missionID: mission)
+            case "plan", "conversation-plan": model.presentPlanForScreenshot(missionID: mission)
             case "refine":
                 // Deal a deck then run a canned refinement so the reworked deck + bar render.
                 let refinement = env["CRUMB_REFINE"] ?? "make it cheaper"
@@ -99,8 +100,11 @@ struct RootView: View {
         switch model.route {
         case .onboarding: OnboardingView()
         case .missions: MissionsView()
-        case .plan: PlanView()
-        case .curate: CurateView()
+        case .missionThread:
+            MissionThreadView()
+                // Phase changes keep the workspace mounted; changing to a different mission gets a
+                // fresh set of view-local focus, drag, scroll, and composer state.
+                .id(model.activeThreadID ?? "no-active-thread")
         case .cart: CartView()
         case .history: HistoryView()
         case .historyDetail: HistoryDetailView()
@@ -121,6 +125,7 @@ struct RootView: View {
 /// profile button.
 struct AppHeader: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         HStack(spacing: CrumbMetrics.Space.m) {
@@ -135,14 +140,19 @@ struct AppHeader: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Back")
+                .accessibilityIdentifier("backButton")
                 .transition(.opacity)
             }
 
             HStack(spacing: CrumbMetrics.Space.xs) {
                 CrumbBadge(size: 26)
-                Text("Crumb")
-                    .font(CrumbType.title2)
-                    .foregroundStyle(CrumbColor.ink)
+                if !dynamicTypeSize.isAccessibilitySize {
+                    Text("Crumb")
+                        .font(CrumbType.title2)
+                        .foregroundStyle(CrumbColor.ink)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
             }
 
             Spacer()
@@ -187,6 +197,10 @@ struct AppHeader: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Your taste profile")
         }
+        // Navigation chrome must remain recognizable at the largest accessibility sizes. Mission
+        // content and the response dock continue to use the user's full setting; only this fixed-
+        // height icon row is capped so glyphs do not overlap or clip out of their hit targets.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .padding(.horizontal, CrumbMetrics.Space.xl)
         .padding(.vertical, CrumbMetrics.Space.m)
         .accessibilityElement(children: .contain)

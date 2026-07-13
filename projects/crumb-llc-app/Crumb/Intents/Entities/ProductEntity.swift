@@ -12,7 +12,13 @@ import CrumbKit
 /// session-scoped (a mission's candidates), so an id that no longer resolves means the mission
 /// moved on — the intents fail honestly rather than acting on a stale card.
 struct ProductEntity: AppEntity, Identifiable {
-    let id: Product.ID
+    let id: String
+    let productID: Product.ID
+    let threadID: String?
+    let interactionID: String?
+    let interactionGeneration: Int?
+    let subjectRevision: Int?
+    let variantID: Variant.ID?
     let name: String
     let shopName: String
     let priceText: String
@@ -32,14 +38,53 @@ struct ProductEntity: AppEntity, Identifiable {
         )
     }
 
-    init(_ product: Product) {
-        self.id = product.id
+    init(_ product: Product, threadID: String? = nil, interaction: MissionPendingInteraction? = nil) {
+        self.productID = product.id
+        self.threadID = threadID
+        self.interactionID = interaction?.id
+        self.interactionGeneration = interaction?.interactionGeneration
+        self.subjectRevision = interaction?.subjectRevision
+        if case .product(_, let variantID) = interaction?.resolver { self.variantID = variantID }
+        else { self.variantID = nil }
+        self.id = Self.identity(
+            productID: product.id, threadID: threadID, interactionID: interaction?.id,
+            generation: interaction?.interactionGeneration, subjectRevision: interaction?.subjectRevision,
+            variantID: self.variantID
+        )
         self.name = product.name
         self.shopName = product.shop.name
         self.priceText = ProductEntity.priceFormatter.string(from: product.price as NSDecimalNumber)
             ?? "\(product.price)"
         self.rationale = product.rationale
         self.symbol = product.symbol
+    }
+
+    fileprivate init(_ product: Product, serializedIdentity: String) {
+        let parts = serializedIdentity.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        productID = parts.first ?? product.id
+        threadID = parts.count > 1 && !parts[1].isEmpty ? parts[1] : nil
+        interactionID = parts.count > 2 && !parts[2].isEmpty ? parts[2] : nil
+        interactionGeneration = parts.count > 3 ? Int(parts[3]) : nil
+        subjectRevision = parts.count > 4 ? Int(parts[4]) : nil
+        variantID = parts.count > 5 && !parts[5].isEmpty ? parts[5] : nil
+        id = serializedIdentity
+        name = product.name
+        shopName = product.shop.name
+        priceText = ProductEntity.priceFormatter.string(from: product.price as NSDecimalNumber) ?? "\(product.price)"
+        rationale = product.rationale
+        symbol = product.symbol
+    }
+
+    private static func identity(
+        productID: String, threadID: String?, interactionID: String?, generation: Int?,
+        subjectRevision: Int?, variantID: String?
+    ) -> String {
+        [productID, threadID ?? "", interactionID ?? "", generation.map(String.init) ?? "",
+         subjectRevision.map(String.init) ?? "", variantID ?? ""].joined(separator: "|")
+    }
+
+    fileprivate static func productID(from identity: String) -> String {
+        identity.split(separator: "|", omittingEmptySubsequences: false).first.map(String.init) ?? identity
     }
 
     private static let priceFormatter: NumberFormatter = {
@@ -58,11 +103,16 @@ struct ProductEntityQuery: EntityQuery {
 
     @MainActor
     func entities(for identifiers: [ProductEntity.ID]) async throws -> [ProductEntity] {
-        identifiers.compactMap { model.sessionProduct(id: $0).map(ProductEntity.init) }
+        identifiers.compactMap { identity in
+            let productID = ProductEntity.productID(from: identity)
+            return model.sessionProduct(id: productID).map { ProductEntity($0, serializedIdentity: identity) }
+        }
     }
 
     @MainActor
     func suggestedEntities() async throws -> [ProductEntity] {
-        model.deckProducts.map(ProductEntity.init)
+        model.deckProducts.map {
+            ProductEntity($0, threadID: model.activeThreadID, interaction: model.activeThread?.pendingInteraction)
+        }
     }
 }

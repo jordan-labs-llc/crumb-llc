@@ -50,7 +50,7 @@ public struct InterpretedRefinement: Sendable, Equatable {
 /// - `removeHints` — keywords for candidates to **demote** (push to the tail), e.g. "no synthetic".
 /// - `addQueries` — catalog queries for things not in the deck yet (e.g. "add rain pants"); the
 ///   app re-searches + merges only when this is non-empty.
-public struct RefinementDirective: Sendable, Equatable {
+public struct RefinementDirective: Sendable, Equatable, Codable, Hashable {
     /// A short re-ranking / re-voicing note ("warmer tones and materials"). May be empty.
     public var emphasis: String
     /// Catalog queries for items the user asked for that aren't in the deck. Capped at
@@ -75,7 +75,7 @@ public struct RefinementDirective: Sendable, Equatable {
     }
 
     /// Which way the user wants price to lean. `.none` leaves the deck's price order alone.
-    public enum PriceDirection: String, Sendable, Equatable, CaseIterable {
+    public enum PriceDirection: String, Sendable, Equatable, Codable, Hashable, CaseIterable {
         case cheaper
         case pricier
         case none

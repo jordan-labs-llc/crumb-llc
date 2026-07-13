@@ -51,6 +51,13 @@ final class LacrosseGearJourneyTests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
+    private func prefixed(_ id: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", id)).firstMatch
+    }
+
+    private func option(_ id: String) -> XCUIElement { el("missionResponseOption.\(id)") }
+
     @discardableResult
     private func waitTap(_ e: XCUIElement, _ t: TimeInterval, _ label: String) -> Bool {
         guard e.waitForExistence(timeout: t) else {
@@ -87,53 +94,46 @@ final class LacrosseGearJourneyTests: XCTestCase {
         }
         waitTap(app.buttons["planButton"], 5, "planButton")
 
-        // ---- Plan editor ----
-        if el("PlanScreen").waitForExistence(timeout: 60) {
+        // ---- Plan artifact inside the stable mission thread ----
+        if el("MissionThreadScreen").waitForExistence(timeout: 60),
+           prefixed("missionArtifact.plan.").waitForExistence(timeout: 12) {
             usleep(600_000)
             snap("03-plan")
-            // #68 contract: "premium lacrosse gear" is a player kit, not one product — the plan must
-            // be framed as a kit (the "Curate my kit" CTA), not the single-item "Find my options".
-            // The planner (rule floor, or the model reconciled to the sports-kit floor when it
-            // under-decomposes) expands it into concrete safety/fit parts.
-            XCTAssertTrue(app.buttons["Curate my kit"].waitForExistence(timeout: 12)
-                          || el("curateButton").label.localizedCaseInsensitiveContains("kit"),
-                          "#68: lacrosse gear should plan as a kit ('Curate my kit'), not a single-item search")
-            let curate = el("curateButton")
-            let curateByID = curate.waitForExistence(timeout: 12)
-            waitTap(curateByID ? curate : app.buttons["Curate my kit"], 12, "curateButton")
+            XCTAssertFalse(el("MissionsScreen").exists,
+                           "Missions remained exposed behind the mission thread")
+            XCTAssertTrue(prefixed("missionArtifact.plan.").label.localizedCaseInsensitiveContains("helmet"),
+                          "#68: lacrosse gear plan should contain concrete safety/fit parts")
+            waitTap(option("start-shopping"), 12, "Start shopping")
         } else {
             snap("03-plan-timeout"); return
         }
 
-        // ---- Curate swipe deck (live catalog search + curation) ----
-        if el("CurateScreen").waitForExistence(timeout: 90) {
-            snap("04-curate-first")
-            // Wait for the deck to settle (the gathering shimmer clears) so we assert on the ranked,
-            // gated order — not the transient raw stream. On-device settle can take 50s+.
-            let gathering = el("gatheringBanner")
-            let settleDeadline = Date().addingTimeInterval(90)
-            while gathering.exists && Date() < settleDeadline { usleep(300_000) }
-            snap("04-curate-settled")
-            // #64 contract: the settled top card must not be a pet/novelty product.
-            assertNoPetProducts("settled deck top card")
+        // ---- Frozen product question in the same conversation ----
+        if prefixed("missionArtifact.product.").waitForExistence(timeout: 90) {
+            snap("04-product-first")
+            XCTAssertTrue(el("MissionThreadScreen").exists,
+                          "MissionThreadScreen disappeared during product discovery")
+            assertNoPetProducts("first product question")
             for i in 0..<3 {
-                var add = app.buttons["addButton"]
-                if !add.exists { add = app.buttons["Add to kit"] }
+                let add = option("add")
                 if add.waitForExistence(timeout: 20), add.isEnabled {
-                    snap("05-curate-card-\(i)")
-                    assertNoPetProducts("curate card \(i)")
+                    snap("05-product-\(i)")
+                    assertNoPetProducts("product question \(i)")
                     add.tap()
                     usleep(700_000)
                 } else { break }
             }
-            snap("06-curate-after-adds")
+            snap("06-after-adds")
         } else {
-            snap("04-curate-timeout"); return
+            snap("04-product-timeout"); return
         }
 
-        // ---- Kit tray -> Cart ----
-        let kitTray = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Kit,'")).firstMatch
-        waitTap(kitTray, 10, "kitTray")
+        // ---- Finish the product questions, then review the kit through the dock. ----
+        for _ in 0..<30 {
+            if option("review-cart").waitForExistence(timeout: 1) { break }
+            guard waitTap(option("skip"), 20, "Skip remaining product") else { break }
+        }
+        waitTap(option("review-cart"), 15, "Review cart")
 
         if el("CartScreen").waitForExistence(timeout: 15) {
             snap("07-cart")
