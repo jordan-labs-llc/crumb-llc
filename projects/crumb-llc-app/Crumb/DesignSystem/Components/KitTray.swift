@@ -44,6 +44,7 @@ struct KitTray: View {
         .accessibilityLabel(accessibilityLabel)
         .accessibilityHint(items.isEmpty ? "" : "Opens your kit")
         .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("kitTray")
     }
 
     // MARK: Pieces
@@ -107,9 +108,13 @@ struct KitTray: View {
     /// kit wording otherwise (#56).
     private var titleLine: String {
         if items.isEmpty { return isSingleProduct ? "Your shortlist" : "Your kit" }
-        return isSingleProduct
-            ? "^[\(items.count) option](inflect: true)"
-            : "^[\(items.count) item](inflect: true)"
+        let noun: String
+        if isSingleProduct {
+            noun = items.count == 1 ? "option" : "options"
+        } else {
+            noun = items.count == 1 ? "item" : "items"
+        }
+        return "\(items.count) \(noun)"
     }
 
     private var secondaryLine: String {

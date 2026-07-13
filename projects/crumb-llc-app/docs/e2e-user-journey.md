@@ -49,7 +49,7 @@ xcodebuild build-for-testing -project Crumb.xcodeproj -scheme Crumb \
   CODE_SIGNING_ALLOWED=NO
 
 # Fresh install so first-run onboarding is part of the journey:
-xcrun simctl uninstall "$SIM" com.crumbllc.Crumb 2>/dev/null || true
+xcrun simctl uninstall "$SIM" llc.crumb.Crumb 2>/dev/null || true
 
 xcodebuild test-without-building -project Crumb.xcodeproj -scheme Crumb \
   -destination "platform=iOS Simulator,id=$SIM" -derivedDataPath build/dd \
@@ -104,8 +104,10 @@ identifier, label, and frame — use them to verify VoiceOver labels and to find
 
 ## 3. The journey (what "done" looks like)
 
-Expected route: **Onboarding → Missions/composer → Plan → Curate deck → Kit tray → Cart
-→ Checkout workflow.** Live merchants that require escalation continue on the merchant site.
+Expected route: **Onboarding → Missions/composer → persistent mission thread (plan + product
+artifacts) → Kit tray → Cart → Checkout workflow.** Planning, product decisions, and refinements
+remain in one resumable conversation instead of navigating to separate Plan and Curate screens.
+Live merchants that require escalation continue on the merchant site.
 Deterministic mock sessions instead run an explicitly labeled **SANDBOX** flow in app: contact and
 shipping → authoritative review → sandbox completion. It never charges or creates a real order.
 
@@ -116,8 +118,8 @@ Steps captured by the driver:
 | `00-launch` | onboarding (fresh install) | tap **Skip** |
 | `01-missions` | composer | type the goal into `composerField` |
 | `02-goal-typed` | composer | tap `planButton` ("Plan it") |
-| `03-plan` | plan editor | tap **Curate my kit** |
-| `04-curate-first`…`06-curate-after-adds` | curate deck | tap **Add to kit** ×N |
+| `03-plan` | thread with embedded plan artifact | tap **Curate my kit** |
+| `04-curate-first`…`06-curate-after-adds` | thread with embedded product deck | tap **Add to kit** ×N |
 | `07-cart` | cart | tap **Start checkout(s)** |
 | `08-checkout-workflow` / `09-final` | checkout sheet | inspect live escalation or sandbox steps |
 
@@ -126,15 +128,9 @@ For deterministic screenshots, use `CRUMB_SCREENSHOT=sandbox-contact`, `sandbox-
 
 ### Gotchas that will trip an agent
 
-- **Accessibility-id clobbering.** A screen-level `.accessibilityIdentifier("XScreen")` on a
-  **non-scroll container (VStack)** propagates onto its children and overrides their ids.
-  So on Curate, `addButton`/`skipButton` actually report `identifier:'CurateScreen'`, and the
-  plan CTA reports `PlanScreen` instead of `curateButton`. **Tap those by visible label**
-  ("Add to kit", "Skip", "Curate my kit"). Ids on `ScrollView`-rooted screens (Missions, Cart)
-  survive, so `composerField`, `planButton`, `continue.<shop>` work by id. (This is filed as an
-  issue; until fixed, prefer label taps for deck/plan CTAs.)
-- **KitTray has no id** — match its button by label prefix `"Kit,"` (it reads
-  "Kit, N items from M shops, subtotal $X"; empty state: "Your kit is empty").
+- Mission responses are exposed only through the bottom response dock. Query options by
+  `missionResponseOption.<semantic-id>` and assert they descend from `missionResponseDock`.
+  Legacy inline plan, product, and kit controls should be absent from the mission screen.
 - **Never gate a tap on a bare `.exists`** right after a screen appears — the control may lag
   the container. Use the `waitTap` helper (waits for existence, then hittability, then taps).
 - **`continueAfterFailure = true`** so the run walks as far as the app allows and you capture

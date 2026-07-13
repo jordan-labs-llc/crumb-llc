@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "fixture-thread-v1",
+  "revision": 0,
+  "originalGoal": "Find a calm desk lamp",
+  "goal": "Find a calm desk lamp",
+  "phase": "planning",
+  "plan": [],
+  "candidates": [],
+  "baseCandidates": [],
+  "remainingDeckIDs": [],
+  "kit": [],
+  "decisions": [],
+  "refinementTurns": [],
+  "refinementDirectives": [],
+  "tasteSnapshot": {
+    "vibe": ["calm"],
+    "leanings": ["warm light"],
+    "budgetComfort": 0.4,
+    "signatureLine": "quietly useful"
+  },
+  "timeline": [],
+  "createdAt": 1000,
+  "updatedAt": 1000
+}

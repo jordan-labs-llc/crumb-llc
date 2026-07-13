@@ -180,6 +180,7 @@ run_ui_test() {
   shift 2
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "+ ui_expected_count=$expected_count"
     run "$@"
     return
   fi
@@ -267,8 +268,9 @@ preflight() {
   for ui_spec in \
     '1:CrumbUITests/CrumbUITests' \
     '1:CrumbUITests/JasmineTeaJourneyTests' \
-    '1:CrumbUITests/KitCompletenessCartUITests' \
+    '2:CrumbUITests/KitCompletenessCartUITests' \
     '1:CrumbUITests/LacrosseGearJourneyTests' \
+    '1:CrumbUITests/MissionThreadUITests' \
     '2:CrumbUITests/MissionEntryAccessibilityUITests'; do
     local expected_count="${ui_spec%%:*}"
     local ui_suite="${ui_spec#*:}"

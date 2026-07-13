@@ -130,6 +130,18 @@ struct HistoryTests {
         #expect(e.withHandedOff(true).handedOff)
     }
 
+    @Test("History's optional thread link survives copies and remains legacy-optional")
+    func threadLink() {
+        let legacy = entry("legacy", daysAgo: 0)
+        #expect(legacy.threadID == nil)
+        let linked = HistoryEntry(
+            id: "linked", threadID: "thread-1", goal: "goal", title: "title", subtitle: "sub",
+            plan: ["part"], searchQueries: ["query"], curatorNote: "note", accentHex: 0x1C4B43,
+            recapTag: "Tag", recapLine: "Line", items: [], handedOff: false, createdAt: Self.now
+        )
+        #expect(linked.withHandedOff(true).threadID == "thread-1")
+    }
+
     // MARK: - Rule-based recap (pure floor)
 
     @Test("The recap tag strips leading filler and title-cases the goal's key words")

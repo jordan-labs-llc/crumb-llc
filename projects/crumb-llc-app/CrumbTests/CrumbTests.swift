@@ -25,7 +25,7 @@ struct CrumbTests {
 
     // MARK: - Free-text planning (the composer / Siri entry)
 
-    @Test("Planning a shoppable goal routes to an editable Plan and records a recent")
+    @Test("Planning a shoppable goal routes to a thread with an editable plan and records a recent")
     @MainActor
     func planRoutesToEditablePlan() async {
         let recents = InMemoryRecentMissionsStore()
@@ -36,14 +36,14 @@ struct CrumbTests {
         )
         await model.runPlan(goal: "Set up my pour-over corner")
 
-        #expect(model.route == .plan)
+        #expect(model.route == .missionThread)
         #expect(model.selectedTask != nil)
         #expect(!model.draftParts.isEmpty)              // an editable plan was produced
         #expect(model.planDecline == nil)
         #expect(model.recentGoals.first == "Set up my pour-over corner") // recorded, most-recent-first
     }
 
-    @Test("A non-shopping goal declines gracefully and stays on Missions")
+    @Test("A non-shopping goal declines gracefully inside its mission thread")
     @MainActor
     func planDeclinesNonShoppingGoal() async {
         let model = AppModel(
@@ -52,7 +52,7 @@ struct CrumbTests {
         )
         await model.runPlan(goal: "what is the weather?")
 
-        #expect(model.route == .missions)              // no navigation into an empty plan
+        #expect(model.route == .missionThread)         // the decline remains a retryable conversation
         #expect(model.selectedTask == nil)
         #expect(model.planDecline != nil)              // a friendly message instead
         #expect(model.recentGoals.isEmpty)             // nonsense isn't remembered
@@ -60,16 +60,16 @@ struct CrumbTests {
 
     // MARK: - Onboarding "let the goal lead" fast path (#28)
 
-    @Test("A first-run user can start from a goal: it plans straight to Curate and persists a profile")
+    @Test("A first-run user can start from a goal: it opens a mission thread and persists a profile")
     @MainActor
-    func goalFirstOnboardingRoutesToPlan() async {
+    func goalFirstOnboardingRoutesToThread() async {
         let store = InMemoryTasteStore()   // no saved profile → first-run onboarding
         let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator(), tasteStore: store)
         #expect(model.route == .onboarding)
 
         await model.runOnboardingGoal("Set up my pour-over corner")
 
-        #expect(model.route == .plan)                  // led straight into the editable plan
+        #expect(model.route == .missionThread)         // led straight into the thread's editable plan
         #expect(model.selectedTask != nil)
         #expect(store.loadProfile() != nil)            // onboarding completed + persisted (won't reappear)
     }
@@ -97,13 +97,13 @@ struct CrumbTests {
 
         await model.runOnboardingGoal("what is the weather?")
 
-        #expect(model.route == .missions)              // dropped into the app, not left on onboarding
+        #expect(model.route == .missionThread)         // decline is shown in a retryable thread
         #expect(model.selectedTask == nil)
-        #expect(model.planDecline != nil)              // the friendly decline, shown on Missions
+        #expect(model.planDecline != nil)              // the friendly decline, shown in the thread
         #expect(store.loadProfile() != nil)            // onboarding still persisted
     }
 
-    @Test("Editing the plan then curating searches the edited queries and advances to Curate")
+    @Test("Editing the plan then curating searches in the same mission thread")
     @MainActor
     func editPlanThenCurate() async {
         let model = AppModel(
@@ -117,7 +117,7 @@ struct CrumbTests {
 
         await model.beginCuration()
 
-        #expect(model.route == .curate)
+        #expect(model.route == .missionThread)
         #expect(model.loadState == .loaded)
         #expect(!model.candidates.isEmpty)             // the mock resolved the edited queries
     }
@@ -126,7 +126,7 @@ struct CrumbTests {
     @MainActor
     func removePart() async {
         let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
-        await model.runPlan(goal: "Make my desk feel calm")
+        model.enterPlan(with: SeedData.desk)
         let count = model.draftParts.count
         let part = try! #require(model.draftParts.first)
         model.removePart(part)
@@ -134,15 +134,216 @@ struct CrumbTests {
         #expect(!model.draftParts.contains(part))
     }
 
-    @Test("Accepting a product adds it to the kit once")
+    @Test("The final plan part cannot be removed")
     @MainActor
-    func acceptBuildsKit() throws {
+    func keepFinalPlanPart() async {
         let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
-        let product = try #require(SeedData.hikeProducts.first)
+        await model.runPlan(goal: "Make my desk feel calm")
+        #expect(model.draftParts.count == 1)
+        let part = try! #require(model.draftParts.first)
+        model.removePart(part)
+        #expect(model.draftParts == [part])
+    }
+
+    @Test("Accepting a product in a thread adds it to the kit and timeline once")
+    @MainActor
+    func acceptBuildsKit() async throws {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        let product = try #require(model.deck.first)
         model.accept(product)
         model.accept(product) // idempotent by product id
         #expect(model.kit.count == 1)
         #expect(model.isInKit(product))
+        #expect(model.activeThread?.decisions.filter { $0.kind == .added }.count == 1)
+        #expect(model.activeThread?.timeline.filter { $0.kind == .productAdded }.count == 1)
+    }
+
+    // MARK: - Durable mission threads
+
+    @Test("Planning creates a durable thread with a semantic timeline")
+    @MainActor
+    func planningCreatesThreadTimeline() async throws {
+        let threadStore = InMemoryMissionThreadStore()
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            threadStore: threadStore
+        )
+
+        await model.runPlan(goal: "Set up my pour-over corner")
+
+        let thread = try #require(model.activeThread)
+        #expect(model.route == .missionThread)
+        #expect(thread.originalGoal == "Set up my pour-over corner")
+        #expect(thread.phase == .planReady)
+        #expect(thread.timeline.map(\.kind).contains(.userMessage))
+        #expect(thread.timeline.map(\.kind).contains(.planningStarted))
+        #expect(thread.timeline.map(\.kind).contains(.planReady))
+        #expect(thread.timeline.map(\.sequence) == Array(0..<thread.timeline.count))
+        #expect(threadStore.load().threads.first?.id == thread.id)
+    }
+
+    @Test("Planning always ends with one durable plan approval interaction")
+    @MainActor
+    func planningInstallsPlanApproval() async throws {
+        let store = InMemoryMissionThreadStore()
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile), threadStore: store
+        )
+
+        await model.runPlan(goal: "Set up my pour-over corner")
+
+        let interaction = try #require(model.activeThread?.pendingInteraction)
+        #expect(interaction.kind == .planApproval)
+        #expect(interaction.options.map(\.id) == ["start-shopping", "change-plan", "start-over"])
+        #expect(model.missionDockState.interaction == interaction)
+        #expect(store.load().threads.first?.pendingInteraction == interaction)
+    }
+
+    @Test("A product answer is idempotent and advances to exactly one next question")
+    @MainActor
+    func productReducerIsIdempotent() async throws {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        let product = try #require(model.deck.first)
+        let submission = try #require(model.productInteractionSubmission(productID: product.id, optionID: "add"))
+
+        model.submitMissionAnswer(submission)
+        model.submitMissionAnswer(submission)
+
+        #expect(model.kit.map(\.product.id) == [product.id])
+        #expect(model.activeThread?.decisions.filter { $0.id == submission.idempotencyID }.count == 1)
+        #expect(model.activeThread?.pendingInteraction != nil)
+        #expect(model.activeThread?.pendingInteraction?.id != submission.interactionID)
+    }
+
+    @Test("Show another rotates without recording a skip")
+    @MainActor
+    func showAnotherDoesNotSkip() async throws {
+        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        let before = model.deck.map(\.id)
+        let product = try #require(model.deck.first)
+        let submission = try #require(model.productInteractionSubmission(productID: product.id, optionID: "show-another"))
+
+        model.submitMissionAnswer(submission)
+
+        #expect(model.activeThread?.decisions.contains { $0.productID == product.id && $0.kind == .skipped } == false)
+        if before.count > 1 {
+            #expect(model.deck.first?.id == before[1])
+            #expect(model.deck.last?.id == product.id)
+        }
+    }
+
+    @Test("Typed product write intent asks for confirmation before mutating")
+    @MainActor
+    func typedAddRequiresConfirmation() async throws {
+        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        let product = try #require(model.deck.first)
+        let interaction = try #require(model.activeThread?.pendingInteraction)
+        model.submitMissionAnswer(MissionInteractionSubmission(
+            threadID: try #require(model.activeThreadID), interactionID: interaction.id,
+            interactionGeneration: interaction.interactionGeneration,
+            subjectRevision: interaction.subjectRevision, answer: .freeText("add it")
+        ))
+
+        #expect(model.kit.isEmpty)
+        #expect(model.activeThread?.pendingInteraction?.selectionMode == .confirmation)
+        #expect(model.activeThread?.pendingInteraction?.options.map(\.id) == ["add", "cancel"])
+        guard case .product(let id, _) = model.activeThread?.pendingInteraction?.resolver else {
+            Issue.record("Expected a frozen product confirmation")
+            return
+        }
+        #expect(id == product.id)
+    }
+
+    @Test("Planning the same goal twice creates distinct mission threads")
+    @MainActor
+    func sameGoalCreatesDistinctThreads() async throws {
+        let threadStore = InMemoryMissionThreadStore()
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            threadStore: threadStore
+        )
+
+        await model.runPlan(goal: "Set up my pour-over corner")
+        let firstID = try #require(model.activeThreadID)
+        await model.runPlan(goal: "Set up my pour-over corner")
+        let secondID = try #require(model.activeThreadID)
+
+        #expect(firstID != secondID)
+        #expect(Set(threadStore.load().threads.map(\.id)) == [firstID, secondID])
+    }
+
+    @Test("Committing an edited direct-product plan preserves single-item framing")
+    @MainActor
+    func rebuiltPlanPreservesSingleItem() async throws {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
+        )
+        let direct = ShoppingTask(
+            id: "direct.coffee", title: "Find a coffee grinder", subtitle: "Compare a few options",
+            plan: ["Coffee grinder"], curatorNote: "One product, several choices.", accentHex: 0,
+            candidateIDs: [], searchQueries: ["coffee grinder"], isSingleItem: true
+        )
+        model.enterPlan(with: direct)
+        let part = try #require(model.draftParts.first)
+        model.updatePart(part, label: "quiet burr coffee grinder")
+
+        await model.beginCuration()
+
+        #expect(model.route == .missionThread)
+        #expect(model.selectedTask?.isSingleItem == true)
+        #expect(model.isSingleProductMission)
+    }
+
+    @Test("A second AppModel resumes the persisted thread without rebuilding its state")
+    @MainActor
+    func resumesPersistedThread() async throws {
+        let threadStore = InMemoryMissionThreadStore()
+        let tasteStore = InMemoryTasteStore(SeedData.defaultTasteProfile)
+        let first = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: tasteStore, threadStore: threadStore
+        )
+        await first.runPlan(goal: "Set up my pour-over corner")
+        await first.beginCuration()
+        let product = try #require(first.deck.first)
+        first.accept(product)
+        let savedID = try #require(first.activeThreadID)
+        let savedDeck = first.deck.map(\.id)
+        let savedTimeline = try #require(first.activeThread?.timeline)
+        let savedInteraction = try #require(first.activeThread?.pendingInteraction)
+
+        let relaunched = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: tasteStore, threadStore: threadStore
+        )
+        let persisted = try #require(relaunched.incompleteThreads.first { $0.id == savedID })
+        relaunched.resumeThread(persisted)
+
+        #expect(relaunched.route == .missionThread)
+        #expect(relaunched.activeThreadID == savedID)
+        #expect(relaunched.kit.map(\.product.id) == [product.id])
+        #expect(relaunched.deck.map(\.id) == savedDeck)
+        #expect(relaunched.activeThread?.timeline == savedTimeline)
+        #expect(relaunched.activeThread?.pendingInteraction == savedInteraction)
+        #expect(relaunched.loadState == .loaded)
     }
 
     @Test("MockUCPClient.searchCatalog(\"hike\") returns the hike candidates")
@@ -174,7 +375,7 @@ struct CrumbTests {
         ])
         let task = Self.fakeTask(queries: ["q1", "q2"])
         let model = AppModel(ucp: fake, curator: RuleBasedCurator())
-        model.select(task)               // sets selectedTask so the load isn't skipped
+        model.enterPlan(with: task)
         await model.loadCandidates(for: task)
 
         #expect(model.loadState == .loaded)
@@ -188,7 +389,7 @@ struct CrumbTests {
         let fake = FakeUCP(byQuery: ["q1": [Self.fakeProduct("a")]], failing: ["q2"])
         let task = Self.fakeTask(queries: ["q1", "q2"])
         let model = AppModel(ucp: fake, curator: RuleBasedCurator())
-        model.select(task)
+        model.enterPlan(with: task)
         await model.loadCandidates(for: task)
 
         #expect(model.loadState == .loaded)
@@ -201,7 +402,7 @@ struct CrumbTests {
         let fake = FakeUCP(byQuery: [:], failAll: true)
         let task = Self.fakeTask(queries: ["q1", "q2"])
         let model = AppModel(ucp: fake, curator: RuleBasedCurator())
-        model.select(task)
+        model.enterPlan(with: task)
         await model.loadCandidates(for: task)
 
         #expect(model.loadState == .failed)
@@ -209,17 +410,17 @@ struct CrumbTests {
         #expect(model.candidates.isEmpty)
     }
 
-    @Test("Streaming curate navigates to Curate and settles to the ranked deck")
+    @Test("Streaming curate keeps the mission thread mounted and settles to the ranked deck")
     @MainActor
     func streamingLoadSettlesToRankedDeck() async {
         // A seed mission on the mock: picks stream in, we navigate to Curate on the first, then the
         // deck settles to the curator's ranked order once curation finishes.
         let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator(),
                              tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile))
-        model.enterPlan(with: SeedData.coffee)   // sets selectedTask + route = .plan
+        model.enterPlan(with: SeedData.coffee)   // sets selectedTask + route = .missionThread
         await model.loadCandidates(for: SeedData.coffee)
 
-        #expect(model.route == .curate)                 // navigated (on the first streamed pick)
+        #expect(model.route == .missionThread)          // the workspace stays mounted across phases
         #expect(model.loadState == .loaded)             // then settled
         #expect(!model.deck.isEmpty)
         // No swipes happened, so the settled deck is the full ranked deck — same set and order as
@@ -239,7 +440,7 @@ struct CrumbTests {
         await model.loadCandidates(for: SeedData.coffee)
         // By the time the call returns we've settled; the deck is the model-ranked one (not fallback).
         #expect(model.loadState == .loaded)
-        #expect(model.route == .curate)
+        #expect(model.route == .missionThread)
         #expect(!model.deck.isEmpty)
         #expect(model.curatorTier == .onDevice)          // the slow curation completed in time
         #expect(model.curationRefiningOvertime == false) // reset on settle
@@ -258,7 +459,7 @@ struct CrumbTests {
         await model.loadCandidates(for: SeedData.coffee)
 
         #expect(model.loadState == .loaded)                        // settled, never stuck refining
-        #expect(model.route == .curate)
+        #expect(model.route == .missionThread)
         #expect(!model.deck.isEmpty)                               // the streamed deck is usable
         #expect(model.curatorTier == .ruleBased(.modelNotReady))  // honest fallback note is surfaced
         #expect(model.curatorFallbackNote != nil)
@@ -266,13 +467,17 @@ struct CrumbTests {
 
     @Test("kitCompleteness flags a partial kit and stays nil for a single-product mission (#67)")
     @MainActor
-    func kitCompletenessGuardsCheckout() {
+    func kitCompletenessGuardsCheckout() async {
         func named(_ id: String, _ name: String) -> Product {
             Product(id: id, name: name, shop: Shop(id: "s", name: "Shop"), price: 20, rating: 0,
                     reviews: 0, rationale: "", symbol: "bag", gradient: SeedData.Gradient.pine,
                     variants: [Variant(id: "\(id).v", title: "Standard", price: 20)])
         }
-        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
+        let stick = named("s1", "Lacrosse Stick")
+        let model = AppModel(
+            ucp: FakeUCP(byQuery: ["lacrosse stick": [stick]]),
+            curator: RuleBasedCurator()
+        )
         let kitTask = ShoppingTask(
             id: "lax", title: "Lacrosse gear", subtitle: "",
             plan: ["Lacrosse stick", "Gloves", "Helmet", "Cleats"],
@@ -280,7 +485,8 @@ struct CrumbTests {
             isSingleItem: false
         )
         model.enterPlan(with: kitTask)
-        model.accept(named("s1", "Lacrosse Stick"))   // covers only "Lacrosse stick"
+        await model.loadCandidates(for: kitTask)
+        model.submitMissionOption("add")   // covers only "Lacrosse stick"
 
         let completeness = model.kitCompleteness
         #expect(completeness != nil)
@@ -289,13 +495,14 @@ struct CrumbTests {
 
         // A single-product shortlist mission never gets a completeness panel.
         model.enterPlan(with: kitTask.settingSingleItem(true))   // resets the kit
-        model.accept(named("s1", "Lacrosse Stick"))
+        await model.loadCandidates(for: kitTask.settingSingleItem(true))
+        model.submitMissionOption("add")
         #expect(model.kitCompleteness == nil)
     }
 
-    @Test("A total catalog outage fails without navigating away from Plan")
+    @Test("A total catalog outage fails without navigating away from the mission thread")
     @MainActor
-    func streamingOutageStaysOnPlan() async {
+    func streamingOutageStaysInThread() async {
         let fake = FakeUCP(byQuery: [:], failAll: true)
         let task = Self.fakeTask(queries: ["q1", "q2"])
         let model = AppModel(ucp: fake, curator: RuleBasedCurator())
@@ -304,7 +511,7 @@ struct CrumbTests {
 
         #expect(model.loadState == .failed)
         #expect(model.deck.isEmpty)
-        #expect(model.route == .plan)   // nothing streamed → never navigated
+        #expect(model.route == .missionThread)
     }
 
     @Test("settledDeck keeps undecided cards in ranked order and drops swiped-away ones")
@@ -326,6 +533,7 @@ struct CrumbTests {
         // no-op), carrying a nil url so the view can show the honest "no link" state.
         let model = AppModel(ucp: FakeUCP(byQuery: [:]), curator: RuleBasedCurator())
         let product = Self.fakeProduct("a")
+        model.enterPlan(with: Self.fakeTask(queries: []))
         model.accept(product)
 
         await model.beginHandoff(for: product.shop)
@@ -342,6 +550,7 @@ struct CrumbTests {
         // Both fake products live in the same shop; the per-shop handoff would take both, but the
         // single-product "Buy this" must carry only the one the user chose.
         let model = AppModel(ucp: FakeUCP(byQuery: [:]), curator: RuleBasedCurator())
+        model.enterPlan(with: Self.fakeTask(queries: []))
         model.accept(Self.fakeProduct("a"))
         model.accept(Self.fakeProduct("b"))
         #expect(model.currentCart.items(for: Shop(id: "s", name: "Shop")).count == 2)
@@ -363,6 +572,7 @@ struct CrumbTests {
         let model = AppModel(ucp: client, curator: RuleBasedCurator())
         let products = Self.productsFromDistinctShops(count: 2)
         #expect(products.count == 2)
+        model.enterPlan(with: Self.fakeTask(queries: []))
         products.forEach(model.accept)
 
         await model.startCheckoutWorkflow()
@@ -381,6 +591,7 @@ struct CrumbTests {
         let failedShop = try #require(products.first?.shop)
         let client = CheckoutRecordingUCP(failFirstFor: failedShop.id)
         let model = AppModel(ucp: client, curator: RuleBasedCurator())
+        model.enterPlan(with: Self.fakeTask(queries: []))
         products.forEach(model.accept)
 
         await model.startCheckoutWorkflow()
@@ -598,6 +809,20 @@ struct CrumbTests {
         #expect(!model.canSaveRefinementToTaste)
     }
 
+    @Test("The synchronous refinement entry point commits a thread turn")
+    @MainActor
+    func refinementEntryPointCommitsTurn() async {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
+        )
+        model.enterPlan(with: SeedData.coffee)
+        await model.loadCandidates(for: SeedData.coffee)
+        model.refine("make it cheaper")
+        for _ in 0..<100 where model.refinementTurns.isEmpty { await Task.yield() }
+        #expect(model.refinementTurns == ["make it cheaper"])
+    }
+
     @Test("Entering a new mission clears the refinement conversation (ephemeral)")
     @MainActor
     func enterPlanClearsRefinement() async {
@@ -728,7 +953,8 @@ struct CrumbTests {
 
         // Flip to splurge and re-curate the deck in place.
         model.updateTaste(Self.splurge)
-        await model.recurateCurrentDeck()
+        await Task.yield()
+        while model.isRecurating { await Task.yield() }
 
         let after = model.deck.map(\.id)
         #expect(after == before.sorted(by: >))       // visibly re-ranked (now descending)
@@ -909,7 +1135,7 @@ struct CrumbTests {
 
         // The substance of "plan again": routing the goal back through the planner yields a plan.
         await model.runPlan(goal: entry.goal)
-        #expect(model.route == .plan)
+        #expect(model.route == .missionThread)
         #expect(model.selectedTask != nil)
     }
 
@@ -1346,7 +1572,7 @@ struct DeckAppIntentTests {
             ucp: MockUCPClient(), curator: RuleBasedCurator(),
             tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
         )
-        model.select(SeedData.coffee)
+        model.enterPlan(with: SeedData.coffee)
         await model.loadCandidates(for: SeedData.coffee)
         return model
     }
@@ -1355,7 +1581,7 @@ struct DeckAppIntentTests {
     func entityMapsFields() {
         let product = SeedData.coffeeProducts[0]
         let entity = ProductEntity(product)
-        #expect(entity.id == product.id)
+        #expect(entity.productID == product.id)
         #expect(entity.name == product.name)
         #expect(entity.shopName == product.shop.name)
         #expect(entity.rationale == product.rationale)
@@ -1386,7 +1612,7 @@ struct DeckAppIntentTests {
 
         var intent = AddToKitIntent()
         intent.model = model
-        intent.product = ProductEntity(target)
+        intent.product = ProductEntity(target, threadID: model.activeThreadID, interaction: model.activeThread?.pendingInteraction)
         _ = try await intent.perform()
 
         #expect(model.isInKit(target))                 // kit mutated via AppModel.accept
@@ -1400,7 +1626,7 @@ struct DeckAppIntentTests {
 
         var intent = SkipProductIntent()
         intent.model = model
-        intent.product = ProductEntity(target)
+        intent.product = ProductEntity(target, threadID: model.activeThreadID, interaction: model.activeThread?.pendingInteraction)
         _ = try await intent.perform()
 
         #expect(!model.isInKit(target))

@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 2,
+  "thread": {
+    "id": "fixture-thread-v2",
+    "revision": 1,
+    "originalGoal": "Find a gift",
+    "goal": "Find a gift",
+    "phase": "planning",
+    "plan": [],
+    "candidates": [],
+    "baseCandidates": [],
+    "remainingDeckIDs": [],
+    "kit": [],
+    "decisions": [],
+    "refinementTurns": [],
+    "refinementDirectives": [],
+    "tasteSnapshot": {
+      "vibe": ["thoughtful"],
+      "leanings": ["useful"],
+      "budgetComfort": 0.5,
+      "signatureLine": "warm and useful"
+    },
+    "interactionGeneration": 1,
+    "pendingInteraction": {
+      "id": "fixture-question",
+      "promptEventID": "fixture-prompt",
+      "interactionGeneration": 1,
+      "subjectRevision": 1,
+      "kind": "clarification",
+      "question": "Who is the gift for?",
+      "options": [
+        {"id": "recipient-self", "label": "Me"},
+        {"id": "recipient-other", "label": "Someone else"}
+      ],
+      "selectionMode": "singleChoice",
+      "allowsFreeText": true,
+      "resolver": {"clarification": {"contextID": "gift-recipient"}},
+      "createdAt": 1000
+    },
+    "timeline": [
+      {
+        "id": "fixture-prompt",
+        "sequence": 0,
+        "kind": "assistantMessage",
+        "text": "Who is the gift for?",
+        "createdAt": 1000,
+        "isSuperseded": false,
+        "blocks": [{"text": {"_0": "A little recipient context will help."}}]
+      }
+    ],
+    "createdAt": 1000,
+    "updatedAt": 1000
+  }
+}

@@ -145,6 +145,8 @@ public final class SwiftDataHistoryStore: HistoryStore {
 @Model
 public final class HistoryEntryRecord {
     @Attribute(.unique) public var entryID: String
+    /// Optional scalar only: deleting a thread never cascades to an immutable History receipt.
+    public var threadID: String?
     public var goal: String
     public var title: String
     public var subtitle: String
@@ -164,6 +166,7 @@ public final class HistoryEntryRecord {
 
     public init(_ entry: HistoryEntry) {
         self.entryID = entry.id
+        self.threadID = entry.threadID
         self.goal = entry.goal
         self.title = entry.title
         self.subtitle = entry.subtitle
@@ -183,6 +186,7 @@ public final class HistoryEntryRecord {
     public var entry: HistoryEntry {
         HistoryEntry(
             id: entryID,
+            threadID: threadID,
             goal: goal,
             title: title,
             subtitle: subtitle,
@@ -203,6 +207,7 @@ public final class HistoryEntryRecord {
     /// from the new value, which for a same-session update carry the original's preserved values.
     public func apply(_ entry: HistoryEntry) {
         goal = entry.goal
+        threadID = entry.threadID
         title = entry.title
         subtitle = entry.subtitle
         plan = entry.plan

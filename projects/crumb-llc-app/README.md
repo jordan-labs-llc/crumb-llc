@@ -23,12 +23,12 @@ crumb-llc-app/
 ├── Crumb/               # the multiplatform app target (UI only)
 │   ├── App/             # CrumbApp (@main), AppModel (@Observable), RootView
 │   ├── DesignSystem/    # CrumbColor / CrumbType / CrumbMetrics + Components/
-│   ├── Features/        # Missions → Plan → Curate → Cart, TasteProfile, History, Siri
+│   ├── Features/        # Persistent mission thread → Cart, TasteProfile, History, Siri
 │   ├── Intents/         # CurateKitIntent, ShoppingTaskEntity, CrumbShortcuts
 │   └── Resources/       # Assets.xcassets, Secrets.example.plist
 ├── CrumbKit/            # local Swift package — core logic, no UI, fully testable
 │   ├── Sources/CrumbKit/
-│   │   ├── Models/        # Product, Shop, Variant, ShoppingTask, TasteProfile, …
+│   │   ├── Models/        # MissionThread, Product, Shop, ShoppingTask, TasteProfile, …
 │   │   ├── Services/      # UCPClient (Mock + Live), UCPConfig, persistence stores
 │   │   ├── Curator/       # CuratorEngine + RuleBasedCurator + AppleFoundationCurator + TeaCuration
 │   │   ├── Planner/       # MissionPlanner + RuleBased + AppleFoundation

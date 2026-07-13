@@ -25,14 +25,19 @@ public enum CrumbPersistence {
         RecentMissionRecord.self,
         HistoryEntryRecord.self,
         RecipientRecord.self,
+        MissionThreadRecord.self,
     ]
 
     /// Builds the one shared container over the union schema. `inMemory` keeps everything in
     /// RAM (the path tests and screenshots use). Throws if SwiftData can't open the store — the
     /// caller degrades to in-memory stores so a storage failure never blocks launch.
-    public static func makeContainer(inMemory: Bool = false) throws -> ModelContainer {
+    public static func makeContainer(inMemory: Bool = false, storeURL: URL? = nil) throws -> ModelContainer {
         let schema = Schema(models)
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: inMemory)
+        let configuration = if let storeURL {
+            ModelConfiguration(schema: schema, url: storeURL)
+        } else {
+            ModelConfiguration(schema: schema, isStoredInMemoryOnly: inMemory)
+        }
         do {
             return try ModelContainer(for: schema, configurations: configuration)
         } catch {

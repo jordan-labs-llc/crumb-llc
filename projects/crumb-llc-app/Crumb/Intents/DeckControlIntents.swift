@@ -27,8 +27,20 @@ struct AddToKitIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog & ShowsSnippetView {
-        guard let live = model.sessionProduct(id: product.id) else { throw DeckIntentError.notOnDeck }
-        model.accept(live)
+        guard let threadID = product.threadID, let interactionID = product.interactionID,
+              let generation = product.interactionGeneration, let subjectRevision = product.subjectRevision,
+              model.deckProduct(id: product.productID) != nil,
+              let submission = model.productInteractionSubmission(
+                productID: product.productID, optionID: "add", expectedThreadID: threadID,
+                expectedInteractionID: interactionID, expectedGeneration: generation,
+                expectedSubjectRevision: subjectRevision, expectedVariantID: product.variantID
+              )
+        else { throw DeckIntentError.notOnDeck }
+        switch model.submitMissionAnswer(submission) {
+        case .applied: break
+        case .unsaved: throw DeckIntentError.notSaved
+        case .rejected: throw DeckIntentError.notOnDeck
+        }
         let summary = "^[\(model.kit.count) item](inflect: true) · \(DeckControl.currency(model.kitSubtotal))"
         return .result(
             dialog: "Added \(product.name) to your kit.",
@@ -53,8 +65,20 @@ struct SkipProductIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        guard let live = model.sessionProduct(id: product.id) else { throw DeckIntentError.notOnDeck }
-        model.skip(live)
+        guard let threadID = product.threadID, let interactionID = product.interactionID,
+              let generation = product.interactionGeneration, let subjectRevision = product.subjectRevision,
+              model.deckProduct(id: product.productID) != nil,
+              let submission = model.productInteractionSubmission(
+                productID: product.productID, optionID: "skip", expectedThreadID: threadID,
+                expectedInteractionID: interactionID, expectedGeneration: generation,
+                expectedSubjectRevision: subjectRevision, expectedVariantID: product.variantID
+              )
+        else { throw DeckIntentError.notOnDeck }
+        switch model.submitMissionAnswer(submission) {
+        case .applied: break
+        case .unsaved: throw DeckIntentError.notSaved
+        case .rejected: throw DeckIntentError.notOnDeck
+        }
         return .result(dialog: "Skipped \(product.name).")
     }
 }
@@ -89,10 +113,12 @@ struct ExplainPickIntent: AppIntent {
 /// cold-launched with no deck. Surfaced to Siri/Shortcuts as a plain, honest line.
 enum DeckIntentError: Error, CustomLocalizedStringResourceConvertible {
     case notOnDeck
+    case notSaved
 
     var localizedStringResource: LocalizedStringResource {
         switch self {
         case .notOnDeck: return "That product isn't on your deck anymore."
+        case .notSaved: return "I made that change, but Crumb couldn't save it. Open Crumb to save again or discard it."
         }
     }
 }

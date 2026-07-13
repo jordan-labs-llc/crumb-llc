@@ -26,10 +26,30 @@ struct CrumbApp: App {
         // Screenshots run on the mock catalog so the deck is the deterministic seed set
         // (no network, no live-curator variance) — which also exercises the synthesized
         // `ProductArt`, since seed products carry no real photo.
-        if ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] != nil {
+        let env = ProcessInfo.processInfo.environment
+        if env["CRUMB_SCREENSHOT"] != nil || env["CRUMB_UITEST_PERSISTENT_MOCK"] == "1" {
             ucp = MockUCPClient()
         }
+        let usesDeterministicUITestSeams = env["CRUMB_UITEST_PERSISTENT_MOCK"] == "1"
+        #else
+        let usesDeterministicUITestSeams = false
         #endif
+        let curator: any CuratorEngine = usesDeterministicUITestSeams
+            ? RuleBasedCurator() : AppleFoundationCurator()
+        let tasteExtractor: any TasteExtractor = usesDeterministicUITestSeams
+            ? ManualTasteExtractor() : AppleFoundationTasteExtractor()
+        let planner: any MissionPlanner = usesDeterministicUITestSeams
+            ? RuleBasedMissionPlanner() : AppleFoundationMissionPlanner()
+        let refiner: any RefinementInterpreter = usesDeterministicUITestSeams
+            ? RuleBasedRefinementInterpreter() : AppleFoundationRefinementInterpreter()
+        let chipSuggester: any RefineChipSuggester = usesDeterministicUITestSeams
+            ? RuleBasedRefineChipSuggester() : AppleFoundationRefineChipSuggester()
+        let recapWriter: any RecapWriter = usesDeterministicUITestSeams
+            ? RuleBasedRecapWriter() : AppleFoundationRecapWriter()
+        let relevanceGate: any RelevanceGate = usesDeterministicUITestSeams
+            ? RuleBasedRelevanceGate() : AppleFoundationRelevanceGate()
+        let orchestrator: any MissionOrchestrator = usesDeterministicUITestSeams
+            ? DeterministicMissionOrchestrator() : AppleFoundationMissionOrchestrator()
         // The Apple Foundation Models curator is the "real" voice; it self-degrades to the
         // rule-based engine (and reports why) when no model tier is usable, so it's safe to
         // always inject — mirroring the live/fail-closed catalog choice above.
@@ -43,27 +63,29 @@ struct CrumbApp: App {
         // only its own entity's table), which silently breaks persistence — see `CrumbPersistence`.
         // A build failure degrades all four stores to in-memory (persistence off this session).
         let container = Self.makeSharedContainer()
+        let threadStore = Self.makeThreadStore(container: container)
         let model = AppModel(
             ucp: ucp,
-            curator: AppleFoundationCurator(),
+            curator: curator,
             tasteStore: Self.makeTasteStore(container: container),
-            tasteExtractor: AppleFoundationTasteExtractor(),
-            planner: AppleFoundationMissionPlanner(),
-            refiner: AppleFoundationRefinementInterpreter(),
+            tasteExtractor: tasteExtractor,
+            planner: planner,
+            refiner: refiner,
             // Fits the Curate refine chips to the mission (tea → Organic/Caffeine-free/Bolder);
             // self-degrades to the deterministic category taxonomy when no model tier is usable.
-            chipSuggester: AppleFoundationRefineChipSuggester(),
-            recapWriter: AppleFoundationRecapWriter(),
+            chipSuggester: chipSuggester,
+            recapWriter: recapWriter,
             // Drops clearly off-topic catalog results before curation; deterministic floor first,
             // then a best-effort on-device model pass that self-degrades to that floor.
-            relevanceGate: AppleFoundationRelevanceGate(),
+            relevanceGate: relevanceGate,
             // The model drives the search phase via Tools when a tier is up (searching each part,
             // reaching past the plan, widening a strong fit), degrading to the deterministic
             // fan-out + gate floor otherwise.
-            orchestrator: AppleFoundationMissionOrchestrator(),
+            orchestrator: orchestrator,
             recentsStore: Self.makeRecentsStore(container: container),
             historyStore: Self.makeHistoryStore(container: container),
-            recipientStore: Self.makeRecipientStore(container: container)
+            recipientStore: Self.makeRecipientStore(container: container),
+            threadStore: threadStore
         )
         // Make the app model available to App Intents (`@Dependency`).
         AppDependencyManager.shared.add(dependency: model)
@@ -81,6 +103,20 @@ struct CrumbApp: App {
     private static func makeSharedContainer() -> ModelContainer? {
         #if DEBUG
         if ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] != nil { return nil }
+        if ProcessInfo.processInfo.environment["CRUMB_UITEST_PERSISTENT_MOCK"] == "1" {
+            do {
+                let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("MissionThreadUITests", isDirectory: true)
+                if ProcessInfo.processInfo.environment["CRUMB_UITEST_RESET_STORE"] == "1" {
+                    try? FileManager.default.removeItem(at: root)
+                }
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                return try CrumbPersistence.makeContainer(storeURL: root.appendingPathComponent("crumb-uitest.store"))
+            } catch {
+                log.error("isolated UI-test persistence unavailable: \(error, privacy: .public)")
+                return nil
+            }
+        }
         #endif
         do {
             return try CrumbPersistence.makeContainer()
@@ -101,7 +137,14 @@ struct CrumbApp: App {
         }
         #endif
         guard let container else { return InMemoryTasteStore() }
-        return SwiftDataTasteStore(container: container)
+        let store = SwiftDataTasteStore(container: container)
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["CRUMB_UITEST_SEED_PROFILE"] == "1",
+           store.loadProfile() == nil {
+            store.saveProfile(SeedData.defaultTasteProfile)
+        }
+        #endif
+        return store
     }
 
     /// The SwiftData-backed recent-goals store, degrading to in-memory if the container can't be
@@ -151,6 +194,19 @@ struct CrumbApp: App {
         #endif
         guard let container else { return InMemoryRecipientStore() }
         return SwiftDataRecipientStore(container: container)
+    }
+
+    /// Durable mission conversations use the same shared SwiftData container as every other store.
+    /// Screenshot fixtures remain in memory; persistent mock UI tests intentionally use the real
+    /// on-disk container so terminate/relaunch exercises restoration without a live broker.
+    private static func makeThreadStore(container: ModelContainer?) -> any MissionThreadStore {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] != nil {
+            return InMemoryMissionThreadStore()
+        }
+        #endif
+        guard let container else { return InMemoryMissionThreadStore() }
+        return SwiftDataMissionThreadStore(container: container)
     }
 
     var body: some Scene {
