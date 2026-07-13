@@ -2,13 +2,10 @@ import SwiftUI
 import CrumbKit
 import CrumbArt
 
-/// Home / task entry. A short curator greeting and the **free-text mission composer** — hand
-/// Crumb any goal in your own words and the on-device planner decomposes it into a plan. The
-/// three seed missions are gone as on-screen cards; the composer (with example + recent prompts)
-/// is the only entry now.
+/// The read-only conversation landing page. Starting a mission uses the same response dock as every
+/// later turn, so the input locus never moves from a form in the feed to a composer at the bottom.
 struct MissionsView: View {
     @Environment(AppModel.self) private var model
-    @State private var isShowingSiriDemo = false
 
     var body: some View {
         ScrollView {
@@ -20,16 +17,13 @@ struct MissionsView: View {
                 if !model.threadLoadFailures.isEmpty {
                     ThreadRecoverySection(failures: model.threadLoadFailures)
                 }
-                MissionComposer()
-                siriHint
             }
             .padding(.horizontal, CrumbMetrics.Space.xl)
             .padding(.vertical, CrumbMetrics.Space.l)
         }
         .accessibilityIdentifier("MissionsScreen")
-        .sheet(isPresented: $isShowingSiriDemo) {
-            SiriHandoffView()
-                .crumbCompactSheet()
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            MissionResponseDock(mode: .newMission)
         }
     }
 
@@ -44,33 +38,6 @@ struct MissionsView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.bottom, CrumbMetrics.Space.s)
-    }
-
-    private var siriHint: some View {
-        Button {
-            isShowingSiriDemo = true
-        } label: {
-            HStack(spacing: CrumbMetrics.Space.m) {
-                Image(systemName: "sparkles")
-                    .foregroundStyle(CrumbColor.ochre)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Ask with Siri")
-                        .font(CrumbType.headline)
-                        .foregroundStyle(CrumbColor.ink)
-                    Text("\u{201C}Hey Siri, ask Crumb to set up my pour-over corner\u{201D}")
-                        .font(CrumbType.caption)
-                        .foregroundStyle(CrumbColor.ink2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.bold))
-                    .foregroundStyle(CrumbColor.ink3)
-            }
-            .crumbCard()
-        }
-        .buttonStyle(.plain)
-        .accessibilityHint("Shows how the Siri shortcut routes into Crumb")
     }
 }
 
@@ -108,11 +75,12 @@ private struct ThreadRecoverySection: View {
     }
 }
 
-/// Durable, unfinished mission threads sorted by the model's recency order. Each row is explicit
-/// about resuming versus deleting so backing out of a workspace never strands saved state.
+/// Durable, unfinished mission threads sorted by the model's recency order. Resume is the only
+/// visible row action; destructive management stays available from the context menu and VoiceOver.
 private struct ContinueMissionsSection: View {
     @Environment(AppModel.self) private var model
     let threads: [MissionThread]
+    @State private var pendingDeletion: MissionThread?
 
     var body: some View {
         VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
@@ -121,60 +89,72 @@ private struct ContinueMissionsSection: View {
                 .foregroundStyle(CrumbColor.ink3)
 
             ForEach(threads, id: \.id) { thread in
-                HStack(spacing: CrumbMetrics.Space.s) {
-                    Button {
-                        model.resumeThread(thread)
-                    } label: {
-                        HStack(spacing: CrumbMetrics.Space.m) {
-                            ZStack {
-                                Circle().fill(CrumbColor.pineSoft)
-                                Image(systemName: "arrow.right")
-                                    .font(.caption.weight(.bold))
-                                    .foregroundStyle(CrumbColor.pine)
-                            }
-                            .frame(width: 34, height: 34)
-                            .accessibilityHidden(true)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(thread.task?.title ?? thread.goal)
-                                    .font(CrumbType.headline)
-                                    .foregroundStyle(CrumbColor.ink)
-                                    .lineLimit(2)
-                                Text(status(for: thread.phase))
-                                    .font(CrumbType.caption)
-                                    .foregroundStyle(CrumbColor.ink2)
-                            }
-                            Spacer(minLength: 0)
+                Button {
+                    model.resumeThread(thread)
+                } label: {
+                    HStack(spacing: CrumbMetrics.Space.m) {
+                        ZStack {
+                            Circle().fill(CrumbColor.pineSoft)
+                            Image(systemName: "arrow.right")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(CrumbColor.pine)
                         }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Continue \(thread.task?.title ?? thread.goal)")
-                    .accessibilityIdentifier("continueThread.\(thread.id)")
+                        .frame(width: 34, height: 34)
+                        .accessibilityHidden(true)
 
-                    Button(role: .destructive) {
-                        model.deleteThread(thread)
-                    } label: {
-                        Image(systemName: "trash")
-                            .font(.callout)
-                            .foregroundStyle(CrumbColor.ink3)
-                            .frame(width: 34, height: 34)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(thread.task?.title ?? thread.goal)
+                                .font(CrumbType.headline)
+                                .foregroundStyle(CrumbColor.ink)
+                                .lineLimit(2)
+                            Text(status(for: thread.phase))
+                                .font(CrumbType.caption)
+                                .foregroundStyle(CrumbColor.ink2)
+                        }
+                        Spacer(minLength: 0)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Delete \(thread.task?.title ?? thread.goal)")
-                    .accessibilityIdentifier("deleteThread.\(thread.id)")
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .padding(CrumbMetrics.Space.m)
                 .background(CrumbColor.raised, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous)
                         .strokeBorder(CrumbColor.line, lineWidth: 1)
                 )
-                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Continue \(thread.task?.title ?? thread.goal), \(status(for: thread.phase))")
+                .accessibilityIdentifier("continueThread.\(thread.id)")
+                .contextMenu {
+                    Button("Delete mission", role: .destructive) {
+                        pendingDeletion = thread
+                    }
+                    .accessibilityIdentifier("deleteThread.\(thread.id)")
+                }
+                .accessibilityAction(named: "Delete mission") {
+                    pendingDeletion = thread
+                }
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("continueMissionsSection")
+        .confirmationDialog(
+            "Delete this mission?",
+            isPresented: Binding(
+                get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingDeletion
+        ) { thread in
+            Button("Delete mission", role: .destructive) {
+                model.deleteThread(thread)
+                pendingDeletion = nil
+            }
+            .accessibilityIdentifier("deleteThread.confirm")
+            Button("Cancel", role: .cancel) { pendingDeletion = nil }
+        } message: { thread in
+            Text("This removes \(thread.task?.title ?? thread.goal) from this device.")
+        }
     }
 
     private func status(for phase: MissionThreadPhase) -> String {
@@ -188,189 +168,5 @@ private struct ContinueMissionsSection: View {
         case .completed: "Completed"
         case .abandoned: "Ended"
         }
-    }
-}
-
-/// The free-text composer: a text box, a "Plan it" CTA with a thinking state, a graceful
-/// decline message for non-shopping goals, and quick-tap example + recent prompts.
-struct MissionComposer: View {
-    @Environment(AppModel.self) private var model
-
-    @State private var goal: String = MissionComposer.seededGoal
-    @FocusState private var focused: Bool
-
-    /// Curated starting prompts. The kit/space examples double as the deterministic seed-mission
-    /// triggers (so the mock resolves them to a full deck offline), and at least one **direct
-    /// product** example teaches that finding a single specific thing is a first-class use too —
-    /// not only kit/outfitting missions (#61). The direct-product one resolves against the live
-    /// catalog (the mock has no tea), which is exactly the mode it's demonstrating.
-    private static let examples = [
-        "Find premium jasmine tea",
-        "Set up my pour-over corner",
-        "Pack me for a rainy weekend hike",
-        "Make my desk feel calm",
-        "Cozy reading nook",
-    ]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: CrumbMetrics.Space.m) {
-            RecipientPicker()
-            composerField
-            ctaRow
-
-            if let decline = model.planDecline {
-                declineRow(decline)
-            }
-
-            promptSection(title: "Try one of these", prompts: Self.examples, icon: "wand.and.stars")
-
-            if !model.recentGoals.isEmpty {
-                promptSection(title: "Recent", prompts: model.recentGoals, icon: "clock.arrow.circlepath")
-            }
-        }
-    }
-
-    // MARK: Field
-
-    private var composerField: some View {
-        VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
-            TextField(
-                "Set up my pour-over corner…",
-                text: $goal,
-                axis: .vertical
-            )
-            .textFieldStyle(.plain)
-            .font(CrumbType.body)
-            .foregroundStyle(CrumbColor.ink)
-            .lineLimit(2...5)
-            .focused($focused)
-            .submitLabel(.go)
-            .onSubmit(plan)
-            #if os(iOS)
-            .textInputAutocapitalization(.sentences)
-            #endif
-            .accessibilityIdentifier("composerField")
-        }
-        .padding(CrumbMetrics.Space.l)
-        .background(CrumbColor.raised, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous)
-                .strokeBorder(focused ? CrumbColor.pine : CrumbColor.line, lineWidth: focused ? 1.5 : 1)
-        )
-        .crumbShadow()
-    }
-
-    // MARK: CTA / thinking state
-
-    private var ctaRow: some View {
-        Button(action: plan) {
-            HStack(spacing: CrumbMetrics.Space.s) {
-                Spacer()
-                if model.isPlanning {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.white)
-                    Text("Planning your mission…")
-                        .font(CrumbType.headline)
-                } else {
-                    Image(systemName: "sparkles")
-                    Text("Plan it")
-                        .font(CrumbType.headline)
-                }
-                Spacer()
-            }
-            .foregroundStyle(.white)
-            .padding(CrumbMetrics.Space.l)
-            .background(CrumbColor.pine, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
-            .crumbShadow()
-        }
-        .buttonStyle(.plain)
-        .disabled(goal.trimmed.isEmpty || model.isPlanning)
-        .opacity(goal.trimmed.isEmpty || model.isPlanning ? 0.6 : 1)
-        .accessibilityIdentifier("planButton")
-    }
-
-    private func declineRow(_ text: String) -> some View {
-        HStack(alignment: .top, spacing: CrumbMetrics.Space.s) {
-            Image(systemName: "bubble.left.and.text.bubble.right")
-                .foregroundStyle(CrumbColor.ochre)
-                .accessibilityHidden(true)
-            Text(text)
-                .font(CrumbType.curatorCaption)
-                .foregroundStyle(CrumbColor.ink2)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
-        .padding(CrumbMetrics.Space.m)
-        .background(CrumbColor.pineSoft.opacity(0.5), in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.tile, style: .continuous))
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("composerDecline")
-    }
-
-    // MARK: Prompt chips
-
-    private func promptSection(title: String, prompts: [String], icon: String) -> some View {
-        VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
-            Label(title, systemImage: icon)
-                .font(CrumbType.caption)
-                .foregroundStyle(CrumbColor.ink3)
-            FlexibleWrap(spacing: CrumbMetrics.Space.s) {
-                ForEach(prompts, id: \.self) { prompt in
-                    PromptChip(text: prompt) { start(prompt) }
-                }
-            }
-        }
-        .padding(.top, CrumbMetrics.Space.xs)
-    }
-
-    // MARK: Actions
-
-    private func plan() {
-        let trimmed = goal.trimmed
-        guard !trimmed.isEmpty, !model.isPlanning else { return }
-        focused = false
-        model.planMission(goal: trimmed, for: model.composerRecipient)
-    }
-
-    /// Tapping an example/recent fills the field (so the choice is visible) and plans it for the
-    /// currently chosen recipient (You by default).
-    private func start(_ prompt: String) {
-        guard !model.isPlanning else { return }
-        goal = prompt
-        focused = false
-        model.planMission(goal: prompt, for: model.composerRecipient)
-    }
-
-    /// In DEBUG screenshot mode, pre-fill the field from `CRUMB_GOAL` so the composer can be
-    /// captured "mid-typing" without `simctl` being able to inject keystrokes.
-    private static var seededGoal: String {
-        #if DEBUG
-        let mode = ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"]
-        if mode == "composer" || mode == "composer-gift" {
-            return ProcessInfo.processInfo.environment["CRUMB_GOAL"] ?? ""
-        }
-        #endif
-        return ""
-    }
-}
-
-/// A pill that submits its prompt on tap — the example / recent quick-starts.
-private struct PromptChip: View {
-    let text: String
-    let onTap: () -> Void
-
-    var body: some View {
-        Button(action: onTap) {
-            Text(text)
-                .font(CrumbType.pill)
-                .foregroundStyle(CrumbColor.ink)
-                .lineLimit(1)
-                .padding(.horizontal, CrumbMetrics.Space.m)
-                .padding(.vertical, CrumbMetrics.Space.s)
-                .background(CrumbColor.raised, in: Capsule())
-                .overlay(Capsule().strokeBorder(CrumbColor.line, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Plan: \(text)")
     }
 }

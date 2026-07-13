@@ -7,6 +7,7 @@ import CrumbArt
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isShowingSiriDemo = false
 
     var body: some View {
         @Bindable var model = model
@@ -16,9 +17,11 @@ struct RootView: View {
 
             VStack(spacing: 0) {
                 // Onboarding is a self-contained first-run flow with its own header and skip,
-                // so the app chrome (back / taste button) stays out of its way.
+                // so the app navigation header stays out of its way.
                 if model.route != .onboarding {
-                    AppHeader()
+                    AppHeader {
+                        isShowingSiriDemo = true
+                    }
                 }
                 routedContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -71,12 +74,15 @@ struct RootView: View {
             case "composer-gift": model.presentComposerGiftForScreenshot()
             case "gift": await model.presentGiftCurateForScreenshot(missionID: mission)
             case "history-gift": model.presentGiftHistoryForScreenshot()
-            // "composer" (and anything else) lands on Missions; the composer pre-fills its
-            // field from `CRUMB_GOAL` since `simctl` can't inject keystrokes.
+            // "composer" (and anything else) lands on the new-mission conversation dock.
             default: break
             }
         }
         #endif
+        .sheet(isPresented: $isShowingSiriDemo) {
+            SiriHandoffView()
+                .crumbCompactSheet()
+        }
         .sheet(isPresented: $model.isShowingTasteProfile) {
             TasteProfileView(initial: model.tasteProfile)
                 .crumbExpandableSheet()
@@ -121,11 +127,12 @@ struct RootView: View {
     }
 }
 
-/// Slim top bar: a back affordance (when not at the root), the wordmark, and a taste
-/// profile button.
+/// Slim top bar: back, brand, and one menu for secondary destinations. Keeping History, People,
+/// taste, and Siri behind one labeled affordance avoids a row of icon-only pseudo-tabs.
 struct AppHeader: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let onShowSiri: () -> Void
 
     var body: some View {
         HStack(spacing: CrumbMetrics.Space.m) {
@@ -157,45 +164,43 @@ struct AppHeader: View {
 
             Spacer()
 
-            // People you shop for — the gift roster. Hidden while already on the People screen.
-            if model.route != .people {
-                Button {
-                    model.openPeople()
-                } label: {
-                    Image(systemName: "person.2")
-                        .font(.title3)
-                        .foregroundStyle(CrumbColor.ink2)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("People you shop for")
-                .accessibilityIdentifier("peopleButton")
-                .transition(.opacity)
-            }
-
-            // History — the record of past missions. Hidden while already in History (you're there).
-            if model.route != .history && model.route != .historyDetail {
+            Menu {
                 Button {
                     model.openHistory()
                 } label: {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.title3)
-                        .foregroundStyle(CrumbColor.ink2)
+                    Label("Mission history", systemImage: "clock.arrow.circlepath")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Your mission history")
                 .accessibilityIdentifier("historyButton")
-                .transition(.opacity)
-            }
 
-            Button {
-                model.isShowingTasteProfile = true
+                Button {
+                    model.openPeople()
+                } label: {
+                    Label("People you shop for", systemImage: "person.2")
+                }
+                .accessibilityIdentifier("peopleButton")
+
+                Button {
+                    model.isShowingTasteProfile = true
+                } label: {
+                    Label("Taste profile", systemImage: "person.crop.circle")
+                }
+                .accessibilityIdentifier("tasteProfileButton")
+
+                Button(action: onShowSiri) {
+                    Label("Ask with Siri", systemImage: "sparkles")
+                }
+                .accessibilityIdentifier("siriButton")
             } label: {
-                Image(systemName: "person.crop.circle")
-                    .font(.title2)
+                Label("More", systemImage: "ellipsis.circle")
+                    .font(CrumbType.captionStrong)
                     .foregroundStyle(CrumbColor.ink2)
+                    .padding(.horizontal, CrumbMetrics.Space.s)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Your taste profile")
+            .accessibilityLabel("More options")
+            .accessibilityHint("Shows mission history, people, taste profile, and Siri")
+            .accessibilityIdentifier("moreMenu")
         }
         // Navigation chrome must remain recognizable at the largest accessibility sizes. Mission
         // content and the response dock continue to use the user's full setting; only this fixed-
