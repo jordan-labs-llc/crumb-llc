@@ -431,6 +431,12 @@ final class AppModel {
     /// the app wires ``AppleFoundationMissionOrchestrator``, which lets the model *drive* the search
     /// via Tools when one is up and degrades to this floor otherwise.
     let orchestrator: any MissionOrchestrator
+    /// The direct-mission prototype (`CRUMB_DIRECT_MISSIONS`): a planned goal skips the plan-approval
+    /// turn and goes straight to gathering, so the agentic orchestrator — not an upfront decomposed
+    /// plan — decides what the catalog is asked for. The injected planner still builds the mission
+    /// shell (title, single query, single-item framing, declines); with the flag on the app injects
+    /// the deterministic planner, so no model runs before the gather.
+    let directMissions: Bool
     private let tasteStore: any TasteStore
     private let recentsStore: any RecentMissionsStore
     private let historyStore: any HistoryStore
@@ -467,6 +473,7 @@ final class AppModel {
         recapWriter: any RecapWriter = RuleBasedRecapWriter(),
         relevanceGate: any RelevanceGate = RuleBasedRelevanceGate(),
         orchestrator: any MissionOrchestrator = DeterministicMissionOrchestrator(),
+        directMissions: Bool = false,
         recentsStore: any RecentMissionsStore = InMemoryRecentMissionsStore(),
         historyStore: any HistoryStore = InMemoryHistoryStore(),
         recipientStore: any RecipientStore = InMemoryRecipientStore(),
@@ -483,6 +490,7 @@ final class AppModel {
         self.recapWriter = recapWriter
         self.relevanceGate = relevanceGate
         self.orchestrator = orchestrator
+        self.directMissions = directMissions
         self.recentsStore = recentsStore
         self.historyStore = historyStore
         self.recipientStore = recipientStore
@@ -1533,6 +1541,25 @@ final class AppModel {
             recentsStore.addRecent(trimmed)
             recentGoals = recentsStore.loadRecents()
             plannerTier = planned.tier
+            if directMissions {
+                // Direct mission: no plan to review — commit the shell and go shopping. The
+                // planning receipt (`pendingOperation`) deliberately survives this transaction so
+                // every persisted intermediate state stays crash-recoverable (recovery re-offers
+                // planning); `loadCandidates` replaces it with the gathering receipt in its own
+                // transaction, and its working question supersedes the planning one. From here the
+                // agentic orchestrator decides the catalog calls.
+                mutateActiveThread {
+                    $0.task = task
+                    $0.plan = Self.draftParts(from: task)
+                }
+                planDirty = true
+                // The direct chain keeps running inside the task launched under the planning
+                // slot; hand the handle to the gathering slot so a retry's `startCurating()`
+                // supersedes this in-flight chain instead of a long-finished planning turn.
+                launchedOperationTasks[.gathering] = launchedOperationTasks.removeValue(forKey: .planning)
+                await beginCuration()
+                return
+            }
             mutateActiveThread {
                 $0.task = task
                 $0.plan = Self.draftParts(from: task)
@@ -1560,8 +1587,16 @@ final class AppModel {
     /// remains unchanged and the returned plan is presented for a fresh explicit approval.
     private func applyPlanChange(text: String) async {
         let change = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !change.isEmpty, let threadID = activeThreadID,
-              let goal = activeThread?.goal, let operationID = beginOperation(.planning) else { return }
+        guard !change.isEmpty, let goal = activeThread?.goal else { return }
+        if directMissions {
+            // No plan artifact to edit in direct mode: fold the request into the goal and re-run
+            // the direct chain (which shops immediately). The wrapper prompt below is a model
+            // instruction — the deterministic shell planner would search it verbatim.
+            await retryPlanningInActiveThread(goal: "\(goal), \(change)", appendUserEvent: false)
+            return
+        }
+        guard let threadID = activeThreadID,
+              let operationID = beginOperation(.planning) else { return }
         isPlanning = true
         let retry = MissionRetryDescriptor(kind: .planning, input: change, taskRevision: activeThread?.revision, returnPhase: .planReady)
         mutateActiveThread {
