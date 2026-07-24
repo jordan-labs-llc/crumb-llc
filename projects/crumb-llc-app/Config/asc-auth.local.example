@@ -1,0 +1,19 @@
+# App Store Connect API auth for scripts/testflight.sh — LOCAL, never committed.
+#
+# Copy this file to `asc-auth.local` (same directory) and fill in your team's values.
+# `scripts/testflight.sh upload` sources it automatically, so a normal upload needs no
+# environment variables. Explicit ASC_* environment variables always override this file.
+#
+# The key must belong to an API key with the ADMIN role: App Manager cannot access the
+# cloud-managed distribution certificate that `signingStyle=automatic` export requires.
+# Create one at App Store Connect -> Users and Access -> Integrations -> Team Keys.
+
+# 10-character key ID shown on the key's row.
+ASC_KEY_ID=XXXXXXXXXX
+
+# Per-team issuer UUID shown above the Team Keys list (same for every key on the team).
+ASC_ISSUER_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+# Optional: path to the downloaded .p8. Omit to auto-resolve from
+# ~/.appstoreconnect/private_keys/AuthKey_<ASC_KEY_ID>.p8 (where Apple/xcodebuild expect it).
+# ASC_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_XXXXXXXXXX.p8"

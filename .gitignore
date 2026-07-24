@@ -38,8 +38,11 @@ Package.resolved
 Secrets.plist
 *.secrets.xcconfig
 *.xcconfig.local
+# App Store Connect API auth for scripts/testflight.sh (holds key IDs / .p8 path):
+asc-auth.local
 # Keep example/template configs:
 !Secrets.example.plist
+!asc-auth.local.example
 
 # ---- Node (future projects under projects/) ----
 node_modules/
