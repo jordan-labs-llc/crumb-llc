@@ -80,29 +80,30 @@ final class JasmineTeaJourneyTests: XCTestCase {
 
         XCTAssertTrue(waitTap(el("missionResponseSend"), 5, "missionResponseSend"), "send is unavailable")
 
-        // ---- Step 2: plan artifact inside the stable mission thread ----
+        // ---- Step 2: the thread mounts and shops immediately (direct missions: no plan turn) ----
         let threadScreen = el("MissionThreadScreen")
-        if threadScreen.waitForExistence(timeout: 60),
-           prefixed("missionArtifact.plan.").waitForExistence(timeout: 12) {
+        if threadScreen.waitForExistence(timeout: 60) {
             usleep(600_000)   // let the route transition settle before auditing the hierarchy
-            snap("03-plan")
+            snap("03-thread")
             // #66 regression guard: once the thread is up, the Missions/composer surface must be
             // fully gone — not ghosted behind it. The old crossfade left both mounted at once, so the
-            // Plan title collided with "What are we shopping for?" and "Ask with Siri".
+            // thread title collided with "What are we shopping for?" and "Ask with Siri".
             XCTAssertFalse(el("MissionsScreen").exists,
                            "#66: MissionsScreen still in the hierarchy behind MissionThreadScreen (ghosting)")
             XCTAssertFalse(app.staticTexts["What are we shopping for?"].exists,
-                           "#66: composer greeting still ghosted behind the Plan screen")
+                           "#66: composer greeting still ghosted behind the mission thread")
             XCTAssertFalse(app.staticTexts["Ask with Siri"].exists,
-                           "#66: 'Ask with Siri' still ghosted behind the Plan screen")
+                           "#66: 'Ask with Siri' still ghosted behind the mission thread")
             XCTAssertTrue(el("missionResponseDock").exists)
-            XCTAssertTrue(waitTap(option("start-shopping"), 12, "Start shopping"))
+            // A single-intent goal never posts a plan artifact or an approval turn.
+            XCTAssertFalse(option("start-shopping").exists,
+                           "the removed plan-approval turn resurfaced for a single-intent goal")
         } else if app.staticTexts["composerDecline"].exists || el("composerDecline").exists {
-            snap("03-plan-declined")
+            snap("03-declined")
             XCTFail("premium jasmine tea was incorrectly declined")
         } else {
-            snap("03-plan-timeout")
-            XCTFail("Mission thread plan artifact never appeared")
+            snap("03-thread-timeout")
+            XCTFail("Mission thread never appeared")
         }
 
         // ---- Step 3: frozen product question in the same conversation ----
@@ -154,5 +155,72 @@ final class JasmineTeaJourneyTests: XCTestCase {
             snap("08-checkout-missing")
         }
         snap("09-final")
+    }
+
+    // MARK: - direct-mission guarantees (live)
+
+    private func textContaining(_ text: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS[c] %@", text))
+            .firstMatch
+    }
+
+    /// Launches to the Missions composer (skipping onboarding when it appears) and sends `goal`.
+    @MainActor
+    private func launchAndSend(goal: String) {
+        app.launch()
+        _ = el("onboardingSkip").waitForExistence(timeout: 20)
+        var skip = app.buttons["onboardingSkip"]
+        if !skip.exists { skip = app.buttons["Skip"] }
+        waitTap(skip, 5, "onboardingSkip")
+        XCTAssertTrue(el("missionResponseDock").waitForExistence(timeout: 15))
+        let field = el("missionResponseField")
+        XCTAssertTrue(waitTap(field, 10, "missionResponseField"), "composer field is unavailable")
+        field.typeText(goal)
+        XCTAssertTrue(waitTap(el("missionResponseSend"), 5, "missionResponseSend"), "send is unavailable")
+    }
+
+    /// Free text typed while the live gather is still searching must never cancel it or wedge the
+    /// thread — it buffers and applies as a refinement the moment the picks land.
+    @MainActor
+    func testMidGatherRefinementBuffersAndApplies() {
+        launchAndSend(goal: "premium jasmine tea")
+        XCTAssertTrue(el("MissionThreadScreen").waitForExistence(timeout: 60))
+        snap("mid-01-thread")
+
+        // The dock stays conversational during the search — type the refinement right away.
+        let field = el("missionResponseField")
+        XCTAssertTrue(waitTap(field, 15, "mid-gather response field"))
+        field.typeText("under $50")
+        XCTAssertTrue(waitTap(el("missionResponseSend"), 5, "send mid-gather refinement"))
+        snap("mid-02-sent")
+
+        // Buffered (search still running) or applied directly (deck already settled) — either is
+        // wedge-free; a live gather is normally slow enough that the buffered ack shows first.
+        let ack = textContaining("as soon as the picks land")
+        let applied = textContaining("updated the picks")
+        XCTAssertTrue(ack.waitForExistence(timeout: 5) || applied.waitForExistence(timeout: 90),
+                      "mid-gather text produced neither the buffered ack nor an applied refinement")
+        if ack.exists { snap("mid-03-buffered-ack") }
+
+        XCTAssertTrue(applied.waitForExistence(timeout: 180),
+                      "the refinement never applied — the mid-gather wedge is back")
+        XCTAssertTrue(option("add").waitForExistence(timeout: 30),
+                      "no actionable product question after the buffered refinement")
+        snap("mid-04-applied")
+    }
+
+    /// A non-shopping goal declines gracefully in the thread — the guided triage (or its
+    /// heuristic floor) must catch it before any search runs.
+    @MainActor
+    func testNonShoppingGoalDeclines() {
+        launchAndSend(goal: "what is the weather?")
+        XCTAssertTrue(el("MissionThreadScreen").waitForExistence(timeout: 60))
+
+        let declined = textContaining("What would you like to shop for instead?")
+        XCTAssertTrue(declined.waitForExistence(timeout: 60),
+                      "non-shopping goal was not declined")
+        XCTAssertFalse(option("add").exists, "a weather question produced a product deck")
+        snap("decline-01")
     }
 }

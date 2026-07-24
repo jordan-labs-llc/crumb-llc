@@ -1,8 +1,8 @@
 import AppIntents
 
 /// The "Hey Siri, ask Crumb to <any goal>" entry point. Opens the app and routes the spoken
-/// goal through the same on-device ``MissionPlanner`` the in-app composer uses, so Siri can
-/// decompose an open-ended goal into an editable plan — not just match a fixed mission.
+/// goal through the same direct-mission chain the in-app composer uses: Crumb starts shopping
+/// the goal right away — the agentic curator decides the catalog searches, no plan review.
 struct CurateKitIntent: AppIntent {
     static let title: LocalizedStringResource = "Curate a kit"
     static let openAppWhenRun = true

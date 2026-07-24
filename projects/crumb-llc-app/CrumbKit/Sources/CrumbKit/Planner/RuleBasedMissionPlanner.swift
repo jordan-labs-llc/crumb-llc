@@ -94,8 +94,8 @@ public struct RuleBasedMissionPlanner: MissionPlanner {
     private static let sportsKits: [SportKit] = [
         SportKit(
             term: "lacrosse",
-            assumption: "Assuming a high-school field player. Reword or trim any part if this is for "
-                + "a goalie or girls' lacrosse — then I'll go find each piece.",
+            assumption: "Assuming a high-school field player. Tell me if this is for a goalie or "
+                + "girls' lacrosse and I'll rework the picks.",
             parts: [
                 (label: "Lacrosse stick", query: "lacrosse stick complete"),
                 (label: "Helmet", query: "lacrosse helmet"),
@@ -123,15 +123,33 @@ public struct RuleBasedMissionPlanner: MissionPlanner {
             "set up", "setup", "set-up", "pack ", "outfit", "build ", "make my", "make me",
             "make the", "plan ", "prep ", "prepare", "stock ", "everything for", "essentials for",
             "gear for", "kit ", " kit", "corner", "nook", "station", "trip", "weekend", "getaway",
-            "office", "desk", "kitchen", "nursery", "wardrobe", "closet", "for a ", "for my ",
-            "for the ", "for our ",
+            "office", "desk", "kitchen", "nursery", "wardrobe", "closet",
             // "<X> gear/equipment/supplies/essentials/loadout" is a complete kit, not a lone item.
             "gear", "equipment", "supplies", "essentials", "loadout",
         ]
         if kitCues.contains(where: lowered.contains) { return false }
+        // A trailing recipient clause ("… for my wife", "… for a friend") says who it's for,
+        // not what it is — don't let gift phrasing inflate one product past the word cutoff
+        // (the drift class that would silence the narrow relevance gate for a gift-phrased
+        // single-item goal).
+        let head = strippingRecipientClause(from: lowered)
         // Otherwise a short, concrete noun phrase reads as one product to buy.
-        let wordCount = lowered.split(whereSeparator: \.isWhitespace).count
+        let wordCount = head.split(whereSeparator: \.isWhitespace).count
         return wordCount <= 5
+    }
+
+    /// Cuts a trailing "for my/our/his/her/a/the …" clause off a goal, returning the head — used
+    /// only by the single-item judgment so "premium jasmine tea for my wife" reads at the same
+    /// altitude as "premium jasmine tea". Keeps the whole goal when nothing precedes the clause,
+    /// so a goal that *leads* with "for …" is never emptied. Pure — unit-tested.
+    static func strippingRecipientClause(from lowered: String) -> String {
+        for marker in [" for my ", " for our ", " for his ", " for her ", " for a ", " for the "] {
+            if let range = lowered.range(of: marker) {
+                let head = String(lowered[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
+                if !head.isEmpty { return head }
+            }
+        }
+        return lowered
     }
 
     // MARK: - Shared pure helpers (used by AppleFoundationMissionPlanner too)
@@ -207,11 +225,11 @@ public struct RuleBasedMissionPlanner: MissionPlanner {
     /// and quiet — it frames the plan without inventing specifics about the goal.
     static func curatorNote(forParts parts: [String]) -> String {
         if parts.count <= 1 {
-            return "Here's where I'd start. Tweak the plan if you want, then I'll go find the "
-                + "pieces across the shops."
+            return "Here's where I'd start. Tell me what to change at any point, and I'll "
+                + "rework the picks."
         }
-        return "Here's how I'd break this down — \(parts.count) parts. Reword or trim anything, "
-            + "then I'll go find the pieces across the shops."
+        return "Here's how I'd break this down — \(parts.count) parts. Tell me what to change, "
+            + "and I'll go find the pieces across the shops."
     }
 
     /// The friendly answer when a goal isn't something Crumb can shop for.

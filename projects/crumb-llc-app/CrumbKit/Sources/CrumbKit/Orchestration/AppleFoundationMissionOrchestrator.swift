@@ -159,7 +159,7 @@ struct CatalogSearchTool: Tool {
         // Preserve transport/configuration failures. Turning them into an empty success prevents
         // the safety net from recognizing a total broker outage and produces a misleading empty deck.
         let raw = try await ucp.searchCatalog(query, placements: [.organic])
-        let kept = GatherToolSupport.onTopic(raw, for: mission)
+        let kept = GatherToolSupport.onTopic(raw, for: mission, query: query)
         await collector.add(kept)
         let total = await collector.count
         return GatherToolSupport.summary(kept: kept, dropped: raw.count - kept.count) + " Pool now holds \(total)."
@@ -186,7 +186,7 @@ struct FindSimilarTool: Tool {
         let query = GatherToolSupport.cleanedQuery(arguments.descriptor)
         guard !query.isEmpty else { return "Empty descriptor — describe the kind of product." }
         let raw = try await ucp.searchCatalog(query, placements: [.organic])
-        let kept = GatherToolSupport.onTopic(raw, for: mission)
+        let kept = GatherToolSupport.onTopic(raw, for: mission, query: query)
         await collector.add(kept)
         let total = await collector.count
         return GatherToolSupport.summary(kept: kept, dropped: raw.count - kept.count) + " Pool now holds \(total)."
