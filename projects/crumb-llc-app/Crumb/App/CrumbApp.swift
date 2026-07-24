@@ -31,14 +31,20 @@ struct CrumbApp: App {
             ucp = MockUCPClient()
         }
         let usesDeterministicUITestSeams = env["CRUMB_UITEST_PERSISTENT_MOCK"] == "1"
+        // Direct-mission prototype: skip the on-device plan decomposition + approval turn and let
+        // the agentic orchestrator decide the catalog calls from the raw goal.
+        let directMissions = env["CRUMB_DIRECT_MISSIONS"] == "1"
         #else
         let usesDeterministicUITestSeams = false
+        let directMissions = false
         #endif
         let curator: any CuratorEngine = usesDeterministicUITestSeams
             ? RuleBasedCurator() : AppleFoundationCurator()
         let tasteExtractor: any TasteExtractor = usesDeterministicUITestSeams
             ? ManualTasteExtractor() : AppleFoundationTasteExtractor()
-        let planner: any MissionPlanner = usesDeterministicUITestSeams
+        // With direct missions on, the planner only builds the deterministic mission shell (title,
+        // single query, single-item framing) — no model runs before the gather.
+        let planner: any MissionPlanner = (usesDeterministicUITestSeams || directMissions)
             ? RuleBasedMissionPlanner() : AppleFoundationMissionPlanner()
         let refiner: any RefinementInterpreter = usesDeterministicUITestSeams
             ? RuleBasedRefinementInterpreter() : AppleFoundationRefinementInterpreter()
@@ -82,6 +88,7 @@ struct CrumbApp: App {
             // reaching past the plan, widening a strong fit), degrading to the deterministic
             // fan-out + gate floor otherwise.
             orchestrator: orchestrator,
+            directMissions: directMissions,
             recentsStore: Self.makeRecentsStore(container: container),
             historyStore: Self.makeHistoryStore(container: container),
             recipientStore: Self.makeRecipientStore(container: container),

@@ -206,6 +206,66 @@ struct CrumbTests {
         #expect(store.load().threads.first?.pendingInteraction == interaction)
     }
 
+    // MARK: - Direct missions (no plan step — the orchestrator decides the catalog calls)
+
+    @Test("A direct mission skips plan approval and lands on a ready deck")
+    @MainActor
+    func directMissionSkipsPlanApproval() async throws {
+        let store = InMemoryMissionThreadStore()
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            directMissions: true, threadStore: store
+        )
+
+        // A goal the mock catalog resolves (matches the pour-over seed mission); the live
+        // jasmine-tea scenario is exercised against the real broker on the simulator.
+        await model.runPlan(goal: "pour-over kettle")
+
+        #expect(model.route == .missionThread)
+        #expect(model.selectedTask != nil)
+        #expect(model.loadState == .loaded)
+        #expect(model.activeThread?.phase == .deckReady)
+        #expect(!model.deck.isEmpty)
+        // No plan-approval turn ever appears — the pending question is the deck's, not the plan's.
+        let interaction = try #require(model.activeThread?.pendingInteraction)
+        #expect(interaction.kind != .planApproval)
+        #expect(model.activeThread?.timeline.contains { $0.kind == .planReady } == false)
+        #expect(model.recentGoals.first == "pour-over kettle")
+    }
+
+    @Test("A failed direct gather lands on a retry question, never a plan approval")
+    @MainActor
+    func directMissionFailureOffersRetry() async throws {
+        let model = AppModel(
+            ucp: UnconfiguredUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            directMissions: true
+        )
+        await model.runPlan(goal: "pour-over kettle")
+
+        #expect(model.loadState == .failed)
+        #expect(model.activeThread?.phase == .failed)
+        let interaction = try #require(model.activeThread?.pendingInteraction)
+        #expect(interaction.kind == .retry)
+        #expect(model.activeThread?.timeline.contains { $0.kind == .planReady } == false)
+    }
+
+    @Test("A direct mission still declines a non-shopping goal")
+    @MainActor
+    func directMissionStillDeclines() async {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            directMissions: true
+        )
+        await model.runPlan(goal: "what is the weather?")
+
+        #expect(model.selectedTask == nil)
+        #expect(model.planDecline != nil)
+        #expect(model.activeThread?.phase == .declined)
+    }
+
     @Test("A product answer is idempotent and advances to exactly one next question")
     @MainActor
     func productReducerIsIdempotent() async throws {
