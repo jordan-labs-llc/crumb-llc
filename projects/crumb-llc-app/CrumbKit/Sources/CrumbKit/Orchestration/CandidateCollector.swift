@@ -2,8 +2,11 @@ import Foundation
 
 /// Accumulates the products the agentic gather's Tools discover across the tool-calling loop —
 /// deduped by id and capped — so repeated or overlapping searches can't double-count or grow the
-/// pool unbounded. The relevance guard runs in each Tool *before* handing results here, so the
-/// collector only ever holds on-topic, first-seen products in discovery order.
+/// pool unbounded. The relevance guard runs *before* anything is handed here — in each agentic
+/// Tool, and per-batch in the deterministic gather — so the collector only ever holds on-topic,
+/// first-seen products in discovery order (plus the deterministic floor's top-up, which is added
+/// deliberately when too few matched). This matters beyond the stream: the gather safety net
+/// settles on the collector snapshot, so an ungated add would reach the deck unfiltered.
 ///
 /// An `actor` because the model may fan tool calls out concurrently; the dedupe/cap must be atomic.
 public actor CandidateCollector {
