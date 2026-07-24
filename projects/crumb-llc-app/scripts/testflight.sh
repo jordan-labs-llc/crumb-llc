@@ -33,9 +33,12 @@ Environment:
   ALLOW_MOCK_TESTFLIGHT=1
                      Permit an intentional mock-catalog TestFlight build.
   SECRETS_PATH       Broker plist to validate (default: Crumb/Resources/Secrets.plist).
-  ASC_KEY_PATH       Optional App Store Connect API private-key path.
-  ASC_KEY_ID         API key ID; required with ASC_KEY_PATH.
-  ASC_ISSUER_ID      API issuer ID; required with ASC_KEY_PATH.
+  ASC_AUTH_FILE      Local App Store Connect API auth file, sourced when the ASC_*
+                     variables are unset (default: Config/asc-auth.local, gitignored).
+  ASC_KEY_ID         API key ID (10 chars). Overrides the auth file when set.
+  ASC_ISSUER_ID      API issuer ID (per-team UUID). Overrides the auth file when set.
+  ASC_KEY_PATH       API private-key .p8 path. Auto-resolved from ASC_KEY_ID under
+                     ~/.appstoreconnect/private_keys when unset.
 USAGE
 }
 
@@ -319,11 +322,50 @@ archive() {
   validate_archive
 }
 
+ASC_AUTH_FILE="${ASC_AUTH_FILE:-$ROOT/Config/asc-auth.local}"
+
+# Populate ASC_KEY_PATH / ASC_KEY_ID / ASC_ISSUER_ID from a gitignored local file so a
+# normal `upload` needs no per-invocation environment variables. The file is user-owned,
+# never committed (see .gitignore), and sourced as shell — keep it to KEY=value lines.
+# Explicit environment variables ALWAYS win, so CI can override without touching the file.
+load_asc_auth_file() {
+  [[ -f "$ASC_AUTH_FILE" ]] || return 0
+  local pre_path="${ASC_KEY_PATH:-}" pre_id="${ASC_KEY_ID:-}" pre_issuer="${ASC_ISSUER_ID:-}"
+  # shellcheck disable=SC1090
+  source "$ASC_AUTH_FILE"
+  [[ -n "$pre_path" ]] && ASC_KEY_PATH="$pre_path"
+  [[ -n "$pre_id" ]] && ASC_KEY_ID="$pre_id"
+  [[ -n "$pre_issuer" ]] && ASC_ISSUER_ID="$pre_issuer"
+  return 0
+}
+
+# When only the key ID is known, resolve the .p8 from the locations xcodebuild itself
+# searches, so the file (or CI) need not spell out an absolute path.
+resolve_asc_key_path() {
+  [[ -n "${ASC_KEY_PATH:-}" || -z "${ASC_KEY_ID:-}" ]] && return 0
+  local candidate
+  for candidate in \
+    "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
+    "$HOME/.private_keys/AuthKey_${ASC_KEY_ID}.p8" \
+    "$ROOT/private_keys/AuthKey_${ASC_KEY_ID}.p8"; do
+    [[ -f "$candidate" ]] && { ASC_KEY_PATH="$candidate"; return 0; }
+  done
+  return 0
+}
+
 authentication_args=()
 configure_authentication() {
+  load_asc_auth_file
+  resolve_asc_key_path
   if [[ -n "${ASC_KEY_PATH:-}${ASC_KEY_ID:-}${ASC_ISSUER_ID:-}" ]]; then
     [[ -n "${ASC_KEY_PATH:-}" && -n "${ASC_KEY_ID:-}" && -n "${ASC_ISSUER_ID:-}" ]] || {
-      echo "error: ASC_KEY_PATH, ASC_KEY_ID, and ASC_ISSUER_ID must be supplied together" >&2
+      echo "error: App Store Connect API auth is incomplete." >&2
+      echo "       Need ASC_KEY_ID, ASC_ISSUER_ID, and a resolvable ASC_KEY_PATH" >&2
+      echo "       (set them in $ASC_AUTH_FILE, or export them for this invocation)." >&2
+      exit 2
+    }
+    [[ -f "$ASC_KEY_PATH" ]] || {
+      echo "error: App Store Connect API key not found: $ASC_KEY_PATH" >&2
       exit 2
     }
     authentication_args=(

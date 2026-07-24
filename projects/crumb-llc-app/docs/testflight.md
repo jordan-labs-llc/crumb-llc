@@ -119,10 +119,26 @@ BUILD_NUMBER="$(date -u +%Y%m%d%H%M)" ./scripts/testflight.sh archive
 BUILD_NUMBER="$(date -u +%Y%m%d%H%M)" ./scripts/testflight.sh submit
 ```
 
-The default upload uses the developer account signed into Xcode. For CI, provide
-`ASC_KEY_PATH`, `ASC_KEY_ID`, and `ASC_ISSUER_ID` together. The private key remains outside the
-repository. `BUILD_NUMBER` defaults to a UTC timestamp when omitted, but setting it explicitly
-makes archive provenance easier to record.
+Upload authenticates with an **App Store Connect API key**. Put the credentials in
+`Config/asc-auth.local` (gitignored; copy `Config/asc-auth.local.example`) and `upload` reads
+them automatically — no per-invocation environment variables:
+
+```
+ASC_KEY_ID=XXXXXXXXXX
+ASC_ISSUER_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# ASC_KEY_PATH auto-resolves from ~/.appstoreconnect/private_keys/AuthKey_<ASC_KEY_ID>.p8
+```
+
+The key must have the **Admin** role. App Manager authenticates but fails export with
+*"Cloud signing permission error … cloud-managed distribution certificates"*, because
+`ExportOptions-TestFlight.plist` uses `signingStyle=automatic` and automatic export needs
+distribution-certificate access that only Admin/Account Holder have. API keys are immutable —
+regenerate rather than trying to widen an existing key's role.
+
+For CI, export `ASC_KEY_PATH`, `ASC_KEY_ID`, and `ASC_ISSUER_ID` (or point `ASC_AUTH_FILE` at a
+provisioned file); explicit environment variables override the local file. The `.p8` always
+stays outside the repository. `BUILD_NUMBER` defaults to a UTC timestamp when omitted, but
+setting it explicitly makes archive provenance easier to record.
 
 For an intentional mock-only build, set `ALLOW_MOCK_TESTFLIGHT=1`; never use that override by
 accident. The normal path requires `Crumb/Resources/Secrets.plist` with an HTTPS
