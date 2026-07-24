@@ -29,8 +29,12 @@ struct MissionPlannerTests {
 
     @Test("isSingleItem: a concrete product goal is single; outfitting a space/activity is a kit")
     func isSingleItemHeuristic() {
-        // Single specific products.
-        for goal in ["premium jasmine tea", "a cast iron skillet", "wool beanie", "gooseneck kettle"] {
+        // Single specific products — including gift phrasing, whose trailing recipient clause
+        // ("for my wife") says who it's for, not what it is.
+        for goal in [
+            "premium jasmine tea", "a cast iron skillet", "wool beanie", "gooseneck kettle",
+            "premium jasmine tea for my wife", "a cast iron skillet for a friend",
+        ] {
             #expect(RuleBasedMissionPlanner.isSingleItem(goal: goal), "\(goal) should be single-item")
         }
         // Outfitting a space or activity, or a "gear/equipment" goal — a multi-part kit.

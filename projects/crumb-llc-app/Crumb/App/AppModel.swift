@@ -41,9 +41,10 @@ enum MissionSubmissionResult: Equatable {
     case rejected
 }
 
-/// One editable row of a generated plan: a human label plus the catalog query that finds it.
-/// The composer's planner produces these; ``PlanView`` lets the user reword / add / remove them
-/// before curating. Rewording a label re-derives its query (see ``AppModel/updatePart(_:label:)``).
+/// One row of a mission's plan: a human label plus the catalog query that finds it. The planner
+/// produces these; the thread renders them as a read-only in-thread notice (multi-part kits
+/// only), and plan feedback flows conversationally — typed text folds into the goal or reworks
+/// the picks — rather than through editing controls.
 typealias PlanPart = MissionPlanPart
 
 extension ShoppingTask {
@@ -431,12 +432,6 @@ final class AppModel {
     /// the app wires ``AppleFoundationMissionOrchestrator``, which lets the model *drive* the search
     /// via Tools when one is up and degrades to this floor otherwise.
     let orchestrator: any MissionOrchestrator
-    /// The direct-mission prototype (`CRUMB_DIRECT_MISSIONS`): a planned goal skips the plan-approval
-    /// turn and goes straight to gathering, so the agentic orchestrator — not an upfront decomposed
-    /// plan — decides what the catalog is asked for. The injected planner still builds the mission
-    /// shell (title, single query, single-item framing, declines); with the flag on the app injects
-    /// the deterministic planner, so no model runs before the gather.
-    let directMissions: Bool
     private let tasteStore: any TasteStore
     private let recentsStore: any RecentMissionsStore
     private let historyStore: any HistoryStore
@@ -473,7 +468,6 @@ final class AppModel {
         recapWriter: any RecapWriter = RuleBasedRecapWriter(),
         relevanceGate: any RelevanceGate = RuleBasedRelevanceGate(),
         orchestrator: any MissionOrchestrator = DeterministicMissionOrchestrator(),
-        directMissions: Bool = false,
         recentsStore: any RecentMissionsStore = InMemoryRecentMissionsStore(),
         historyStore: any HistoryStore = InMemoryHistoryStore(),
         recipientStore: any RecipientStore = InMemoryRecipientStore(),
@@ -490,7 +484,6 @@ final class AppModel {
         self.recapWriter = recapWriter
         self.relevanceGate = relevanceGate
         self.orchestrator = orchestrator
-        self.directMissions = directMissions
         self.recentsStore = recentsStore
         self.historyStore = historyStore
         self.recipientStore = recipientStore
@@ -670,7 +663,7 @@ final class AppModel {
         if isReworking { return "Reworking your picks…" }
         switch thread.phase {
         case .declined: return "Try another shopping goal…"
-        case .planReady: return "Edit the plan above"
+        case .planReady: return "Pick the search back up above"
         case .deckReady: return "Tell Crumb what to change…"
         case .failed: return "Retry from the message above"
         default: return "Crumb is working…"
@@ -859,7 +852,9 @@ final class AppModel {
             title = "Reworking the picks…"
         case .retry(let descriptor):
             retry = descriptor
-            title = "Trying that turn again…"
+            // A resumed/retried gather is just the search again — say so, rather than showing
+            // generic retry copy on a seed mission's very first search.
+            title = descriptor.kind == .gathering ? "Searching the shops…" : "Trying that turn again…"
         case .saveTaste:
             retry = MissionRetryDescriptor(kind: .chips, input: "save-to-taste", taskRevision: thread.revision, returnPhase: .deckReady)
             title = "Saving this to taste…"
@@ -904,6 +899,8 @@ final class AppModel {
 
         switch interaction.resolver {
         case .plan:
+            // Legacy only: nothing installs a plan-approval turn anymore, but a thread persisted
+            // before direct missions may resume with one — honor its answers rather than strand it.
             if option == "start-shopping" { effect = .beginCuration }
             else if option == "start-over" {
                 thread.phase = .abandoned
@@ -1019,10 +1016,32 @@ final class AppModel {
                 thread.pendingOperation = nil
                 thread.retry = nil
                 thread.phase = thread.task == nil ? .declined : (thread.candidates.isEmpty ? .planReady : .deckReady)
+                // The stopped gather leaves the load flag mid-flight; settle it so the composer
+                // and the resume question tell one story.
+                loadState = thread.candidates.isEmpty ? .idle : .loaded
                 thread.appendEvent(kind: .notice, text: "Stopped that work.", createdAt: clock())
+                // Stop halts everything, including text queued for the settle that now won't
+                // come — dropping it silently would break the "I'll fold it in" promise, and
+                // draining it later (a retry weeks on) would apply a forgotten constraint.
+                if let queued = thread.queuedRefinements, !queued.isEmpty {
+                    thread.queuedRefinements = nil
+                    thread.appendEvent(
+                        kind: .notice,
+                        text: "I set aside \u{201C}\(queued.joined(separator: ". "))\u{201D} — send it again whenever you want it applied.",
+                        createdAt: clock()
+                    )
+                }
                 installQuestionForStableState(in: &thread)
             } else if context == "declined", let text { effect = .replaceGoal(text) }
             else if context == "plan-change", let text { effect = .changePlan(text) }
+            else if context == "working:gathering", let text, thread.task != nil {
+                // Mid-search free text must not cancel the gather — and on an empty deck it used
+                // to queue a "Reworking the picks…" turn that could never run (the refinement
+                // bails without candidates), wedging the thread. Hold the text instead and apply
+                // it as a refinement the moment the deck settles (see `loadCandidates`).
+                thread.queuedRefinements = (thread.queuedRefinements ?? []) + [text]
+                installQueuedRefinementNotice(in: &thread, text: text)
+            }
             else if context.hasPrefix("working:"), let text {
                 cancelOperations()
                 thread.pendingOperation = nil
@@ -1035,7 +1054,9 @@ final class AppModel {
         switch retry.kind {
         case .planning: Task { @MainActor [weak self] in await self?.retryPlanningInActiveThread(goal: retry.input, appendUserEvent: false) }
         case .gathering, .curation:
-            if let task = selectedTask { Task { @MainActor [weak self] in await self?.loadCandidates(for: task) } }
+            // Through beginCuration (not a bare loadCandidates) so a resume re-commits the shell
+            // exactly like the original chain — one path whether shopping starts, retries, or resumes.
+            if selectedTask != nil { startCurating() }
         case .refinement: Task { @MainActor [weak self] in await self?.applyRefinement(text: retry.input, appendUserEvent: false) }
         case .chips where retry.input == "save-to-taste":
             Task { @MainActor [weak self] in await self?.performQueuedTasteSave() }
@@ -1082,33 +1103,81 @@ final class AppModel {
         }
     }
 
-    private func installPlanApprovalQuestion(in thread: inout MissionThread) {
-        guard let task = thread.task, !thread.plan.isEmpty else { return }
-        thread.supersedePendingInteraction()
+    /// The in-thread notice for a mission that kept a real multi-part plan (the deterministic
+    /// kit expansions — e.g. the lacrosse safety/fit kit and its stated assumption). A read-only
+    /// timeline attachment the user can talk back to, **never** a blocking approval turn: the
+    /// search starts immediately, and free text (mid-search or after) reworks the picks or the
+    /// goal. One-part shells stay notice-free — the deck is the first artifact they see.
+    private func installKitPlanNotice(in thread: inout MissionThread, task: ShoppingTask) {
+        guard thread.plan.count > 1 else { return }
         let snapshot = MissionPlanSnapshot(
             id: "plan-\(thread.id)-\(thread.revision)", revision: thread.revision,
             title: task.title, parts: thread.plan
         )
         thread.appendEvent(
             kind: .planReady,
-            text: "Here’s the plan. Should I shop it?",
+            text: task.curatorNote,
             createdAt: clock(),
             blocks: [.plan(snapshot)]
         )
+    }
+
+    /// The direct-mode replacement for the old plan-approval turn on a shell that hasn't gathered
+    /// yet (a stopped search, a recovered interruption, a fresh seed mission): a lightweight
+    /// confirmation whose accept re-runs the shopping chain (``beginCuration()`` via the retry
+    /// resolver) — never a blocking plan review.
+    private func installResumeShoppingQuestion(
+        in thread: inout MissionThread,
+        question: String = "Want me to pick the search back up?",
+        actionLabel: String = "Resume shopping"
+    ) {
+        // Same guard shape as the plan-approval question this replaces: a planless shell (the
+        // test fixtures' kit-container threads) has nothing to resume, and installing a question
+        // there would block the legacy direct add/skip paths.
+        guard let task = thread.task, !thread.plan.isEmpty else { return }
+        thread.supersedePendingInteraction()
+        thread.appendEvent(kind: .assistantMessage, text: question, createdAt: clock())
         guard let promptID = thread.timeline.last?.id else { return }
+        let retry = MissionRetryDescriptor(
+            kind: .gathering,
+            input: task.searchQueries.joined(separator: "\n"),
+            taskRevision: thread.revision,
+            returnPhase: .planReady
+        )
         requireInteraction {
             try thread.installInteraction(
             promptEventID: promptID,
             subjectRevision: thread.revision,
-            kind: .planApproval,
-            question: "Should I shop this plan?",
+            kind: .retry,
+            question: question,
             options: [
-                MissionInteractionOption(id: "start-shopping", label: "Start shopping"),
-                MissionInteractionOption(id: "change-plan", label: "Change the plan"),
-                MissionInteractionOption(id: "start-over", label: "Start over"),
+                MissionInteractionOption(id: "retry", label: actionLabel),
+                MissionInteractionOption(id: "cancel", label: "End mission"),
             ],
             allowsFreeText: true,
-            resolver: .plan(planRevision: thread.revision),
+            resolver: .retry(retry),
+            createdAt: clock()
+            )
+        }
+    }
+
+    /// Acknowledges free text typed while the gather is still searching: the text was queued
+    /// (see ``MissionThread/queuedRefinements``) and the search keeps running, so this re-arms
+    /// the same working-style question (Stop + free text) the answer just resolved.
+    private func installQueuedRefinementNotice(in thread: inout MissionThread, text: String) {
+        thread.appendEvent(
+            kind: .assistantMessage,
+            text: "Got it — I’ll fold \u{201C}\(text)\u{201D} in as soon as the picks land.",
+            createdAt: clock()
+        )
+        guard let promptID = thread.timeline.last?.id else { return }
+        requireInteraction {
+            try thread.installInteraction(
+            promptEventID: promptID, subjectRevision: thread.revision,
+            kind: .clarification, question: "Searching the shops…",
+            options: [MissionInteractionOption(id: "stop", label: "Stop")],
+            allowsFreeText: true,
+            resolver: .clarification(contextID: "working:gathering"),
             createdAt: clock()
             )
         }
@@ -1289,7 +1358,7 @@ final class AppModel {
 
     private func installQuestionForStableState(in thread: inout MissionThread) {
         switch thread.phase {
-        case .planReady: installPlanApprovalQuestion(in: &thread)
+        case .planReady: installResumeShoppingQuestion(in: &thread)
         case .deckReady, .completed: installNextProductOrKitQuestion(in: &thread)
         case .declined: installDeclinedQuestion(in: &thread)
         case .failed:
@@ -1385,11 +1454,8 @@ final class AppModel {
                 await self.retryPlanningInActiveThread(goal: retry.input)
             }
         case .gathering, .curation:
-            guard let task = selectedTask else { return }
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                await self.loadCandidates(for: task)
-            }
+            guard selectedTask != nil else { return }
+            startCurating()
         case .refinement:
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -1541,34 +1607,28 @@ final class AppModel {
             recentsStore.addRecent(trimmed)
             recentGoals = recentsStore.loadRecents()
             plannerTier = planned.tier
-            if directMissions {
-                // Direct mission: no plan to review — commit the shell and go shopping. The
-                // planning receipt (`pendingOperation`) deliberately survives this transaction so
-                // every persisted intermediate state stays crash-recoverable (recovery re-offers
-                // planning); `loadCandidates` replaces it with the gathering receipt in its own
-                // transaction, and its working question supersedes the planning one. From here the
-                // agentic orchestrator decides the catalog calls.
-                mutateActiveThread {
-                    $0.task = task
-                    $0.plan = Self.draftParts(from: task)
-                }
-                planDirty = true
-                // The direct chain keeps running inside the task launched under the planning
-                // slot; hand the handle to the gathering slot so a retry's `startCurating()`
-                // supersedes this in-flight chain instead of a long-finished planning turn.
-                launchedOperationTasks[.gathering] = launchedOperationTasks.removeValue(forKey: .planning)
-                await beginCuration()
-                return
-            }
+            // Direct mission: no plan to review — commit the shell and go shopping. The
+            // planning receipt (`pendingOperation`) deliberately survives this transaction so
+            // every persisted intermediate state stays crash-recoverable (recovery re-offers
+            // planning); `loadCandidates` replaces it with the gathering receipt in its own
+            // transaction, and its working question supersedes the planning one. From here the
+            // agentic orchestrator decides the catalog calls.
             mutateActiveThread {
                 $0.task = task
                 $0.plan = Self.draftParts(from: task)
-                $0.phase = .planReady
-                $0.pendingOperation = nil
-                $0.retry = nil
-                installPlanApprovalQuestion(in: &$0)
+                installKitPlanNotice(in: &$0, task: task)
             }
             planDirty = true
+            // The direct chain keeps running inside the task launched under the planning
+            // slot; hand the handle to the gathering slot so a retry's `startCurating()`
+            // supersedes this in-flight chain instead of a long-finished planning turn. Only
+            // when such a handle exists — re-plans that run *inside* the gathering slot (the
+            // queued-refinement fold on an empty settle) must not nil out their own handle,
+            // which would make the in-flight chain uncancellable.
+            if let planningHandle = launchedOperationTasks.removeValue(forKey: .planning) {
+                launchedOperationTasks[.gathering] = planningHandle
+            }
+            await beginCuration()
         } else {
             let decline = planned.decline ?? "I'm a shopping curator — hand me something to shop for."
             planDecline = decline
@@ -1582,54 +1642,14 @@ final class AppModel {
         }
     }
 
-    /// Applies conversational plan feedback without editing controls in the transcript. The model
-    /// receives the original goal plus the requested change, while the authoritative mission goal
-    /// remains unchanged and the returned plan is presented for a fresh explicit approval.
+    /// Applies conversational plan feedback: with no upfront plan artifact to edit, the request is
+    /// folded into the goal and the direct chain re-runs (which shops immediately). Kept as its own
+    /// entry point because persisted retry descriptors (`kind: .planning, returnPhase: .planReady`)
+    /// and pre-direct plan interactions still route here.
     private func applyPlanChange(text: String) async {
         let change = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !change.isEmpty, let goal = activeThread?.goal else { return }
-        if directMissions {
-            // No plan artifact to edit in direct mode: fold the request into the goal and re-run
-            // the direct chain (which shops immediately). The wrapper prompt below is a model
-            // instruction — the deterministic shell planner would search it verbatim.
-            await retryPlanningInActiveThread(goal: "\(goal), \(change)", appendUserEvent: false)
-            return
-        }
-        guard let threadID = activeThreadID,
-              let operationID = beginOperation(.planning) else { return }
-        isPlanning = true
-        let retry = MissionRetryDescriptor(kind: .planning, input: change, taskRevision: activeThread?.revision, returnPhase: .planReady)
-        mutateActiveThread {
-            $0.phase = .planning
-            $0.pendingOperation = MissionPendingOperation(id: operationID, retry: retry, startedAt: clock())
-            $0.retry = nil
-            installWorkingQuestion(in: &$0, operationID: operationID, title: "Updating the plan…", context: "plan-change")
-        }
-        let request = "\(goal). Update the shopping plan with this request: \(change)"
-        let result = await planner.plan(goal: request, profile: activeTaste)
-        guard operationIsCurrent(.planning, id: operationID, threadID: threadID) else { return }
-        isPlanning = false
-        finishOperation(.planning, id: operationID)
-        if let task = result.task {
-            plannerTier = result.tier
-            mutateActiveThread {
-                $0.task = task
-                $0.plan = Self.draftParts(from: task)
-                $0.phase = .planReady
-                $0.pendingOperation = nil
-                $0.retry = nil
-                installPlanApprovalQuestion(in: &$0)
-            }
-            planDirty = true
-        } else {
-            mutateActiveThread {
-                $0.phase = .planReady
-                $0.pendingOperation = nil
-                $0.retry = nil
-                $0.appendEvent(kind: .assistantMessage, text: "I couldn’t make that change safely, so I kept the last plan.", createdAt: clock())
-                installPlanApprovalQuestion(in: &$0)
-            }
-        }
+        await retryPlanningInActiveThread(goal: "\(goal), \(change)", appendUserEvent: false)
     }
 
     /// Sets up the Plan screen for `task`: seeds the editable parts, resets the deck, and routes
@@ -1643,7 +1663,8 @@ final class AppModel {
         thread.plan = Self.draftParts(from: task)
         thread.phase = .planReady
         thread.appendEvent(kind: .userMessage, text: task.title, createdAt: clock())
-        installPlanApprovalQuestion(in: &thread)
+        installKitPlanNotice(in: &thread, task: task)
+        installResumeShoppingQuestion(in: &thread, question: "Should I start shopping?", actionLabel: "Start shopping")
         installActiveThread(thread)
         curatorTier = nil
         refinementTier = nil
@@ -1750,7 +1771,11 @@ final class AppModel {
     /// clean, already-loaded plan (e.g. returning from Curate without edits) skips the reload.
     func beginCuration() async {
         guard let base = selectedTask else { return }
-        if !planDirty, loadState == .loaded, !candidates.isEmpty {
+        // Reuse the loaded deck only when nothing is *waiting* on this run: a queued answer
+        // (retry/resume) installs a pending operation + working question that only a real
+        // reload clears — early-returning under one would wedge the thread on a spinner
+        // question with nothing running (the crash-recovered-retry case).
+        if !planDirty, loadState == .loaded, !candidates.isEmpty, activeThread?.pendingOperation == nil {
             route = .missionThread
             return
         }
@@ -1788,7 +1813,7 @@ final class AppModel {
         for product in deck { accept(product) }
     }
 
-    /// Screenshot hook: land on the editable Plan screen for a seed mission (which carries a
+    /// Screenshot hook: land on the pre-gather mission thread for a seed mission (which carries a
     /// rich multi-part plan), so the plan-editor surface can be captured headlessly. The live
     /// composer can't be typed into via `simctl`; this stands in for a freshly planned mission.
     func presentPlanForScreenshot(missionID: String) {
@@ -2073,8 +2098,8 @@ final class AppModel {
         reshopEntry = entry
     }
 
-    /// Routes a past entry's goal back through the planner into a fresh, editable plan — "Plan this
-    /// again". A new session, so building a kit from it becomes a new history entry.
+    /// Routes a past entry's goal back through the direct planning chain — "Plan this again"
+    /// shops it immediately. A new session, so building a kit from it becomes a new history entry.
     func planAgain(_ entry: HistoryEntry) {
         reshopEntry = nil
         selectedHistoryEntry = nil
@@ -2622,6 +2647,21 @@ final class AppModel {
         // Note: the refinement conversation is reset by `enterPlan` (a new mission) and the
         // screenshot hook, NOT here — clearing it on every (re)load would race a refinement that
         // arrived while an earlier load was still settling.
+
+        // Free text typed while we were searching was queued rather than cancelling the gather —
+        // run it now that the deck has settled. With nothing gathered there's no deck to rework,
+        // so the ask folds into the goal and the direct chain searches again.
+        let queued = activeThread?.queuedRefinements ?? []
+        if !queued.isEmpty {
+            mutateActiveThread { $0.queuedRefinements = nil }
+            let text = queued.joined(separator: ". ")
+            if candidates.isEmpty {
+                let goal = activeThread?.goal ?? task.title
+                await retryPlanningInActiveThread(goal: "\(goal), \(text)", appendUserEvent: false)
+            } else {
+                await applyRefinement(text: text, appendUserEvent: false)
+            }
+        }
     }
 
     /// Arms the settle watchdog for `task`: if the load is still ``LoadState/refining`` after

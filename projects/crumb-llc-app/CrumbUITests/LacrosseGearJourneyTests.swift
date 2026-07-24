@@ -58,6 +58,12 @@ final class LacrosseGearJourneyTests: XCTestCase {
 
     private func option(_ id: String) -> XCUIElement { el("missionResponseOption.\(id)") }
 
+    private func textContaining(_ text: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS[c] %@", text))
+            .firstMatch
+    }
+
     @discardableResult
     private func waitTap(_ e: XCUIElement, _ t: TimeInterval, _ label: String) -> Bool {
         guard e.waitForExistence(timeout: t) else {
@@ -95,16 +101,23 @@ final class LacrosseGearJourneyTests: XCTestCase {
         }
         waitTap(el("missionResponseSend"), 5, "missionResponseSend")
 
-        // ---- Plan artifact inside the stable mission thread ----
+        // ---- Kit plan notice inside the stable mission thread (direct missions: the search
+        // starts immediately; the deterministic player kit surfaces as a read-only notice with
+        // its stated assumption, never a blocking approval turn). ----
         if el("MissionThreadScreen").waitForExistence(timeout: 60),
            prefixed("missionArtifact.plan.").waitForExistence(timeout: 12) {
             usleep(600_000)
-            snap("03-plan")
+            snap("03-plan-notice")
             XCTAssertFalse(el("MissionsScreen").exists,
                            "Missions remained exposed behind the mission thread")
-            XCTAssertTrue(prefixed("missionArtifact.plan.").label.localizedCaseInsensitiveContains("helmet"),
+            // The parts are the plan card's child rows (the container's own label is just
+            // "Shopping plan"), so assert on the descendant text.
+            XCTAssertTrue(prefixed("missionArtifact.plan.").staticTexts["Helmet"].waitForExistence(timeout: 5),
                           "#68: lacrosse gear plan should contain concrete safety/fit parts")
-            waitTap(option("start-shopping"), 12, "Start shopping")
+            XCTAssertTrue(textContaining("field player").waitForExistence(timeout: 5),
+                          "the kit's stated assumption should be visible in the thread")
+            XCTAssertFalse(option("start-shopping").exists,
+                           "the removed plan-approval turn resurfaced for a kit goal")
         } else {
             snap("03-plan-timeout"); return
         }

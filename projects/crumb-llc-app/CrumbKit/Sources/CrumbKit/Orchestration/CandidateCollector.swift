@@ -79,14 +79,25 @@ public enum GatherToolSupport {
     /// the clearly off-topic. `floor: 0` means "keep exactly the on-topic set" (no top-up) — the
     /// overall floor is guaranteed later by the orchestrator's union with the deterministic gather.
     ///
-    /// For a **narrow** mission this also enforces the distinctive core term, so a whole drifted
-    /// batch — the model searched "premium black tea" for a jasmine mission — is dropped at the
-    /// tool boundary before it can pool. Reuses ``RuleBasedRelevanceGate`` so tool-time filtering
-    /// and the gate agree. Pure.
-    public static func onTopic(_ products: [Product], for mission: ShoppingTask) -> [Product] {
-        RuleBasedRelevanceGate.keep(
+    /// For a **narrow** (single-item) mission this also enforces the distinctive core term, so a
+    /// whole drifted batch — the model searched "premium black tea" for a jasmine mission — is
+    /// dropped at the tool boundary before it can pool.
+    ///
+    /// For a **kit-breadth** mission (`isSingleItem == false`) the searched `query`'s own words
+    /// join the mission keywords: the orchestrator is *instructed* to reach beyond the listed
+    /// parts ("dorm room refresh" → a desk lamp search), so results matching the search it just
+    /// ran must not be dropped at the tool boundary for sharing no word with the goal text. A
+    /// single-item mission deliberately ignores `query` — that's the drift protection.
+    ///
+    /// Reuses ``RuleBasedRelevanceGate`` so tool-time filtering and the gate agree. Pure.
+    public static func onTopic(_ products: [Product], for mission: ShoppingTask, query: String = "") -> [Product] {
+        var keywords = RuleBasedRelevanceGate.keywords(for: mission)
+        if !mission.isSingleItem {
+            keywords.formUnion(RuleBasedRelevanceGate.tokens(query))
+        }
+        return RuleBasedRelevanceGate.keep(
             products,
-            matching: RuleBasedRelevanceGate.keywords(for: mission),
+            matching: keywords,
             core: RuleBasedRelevanceGate.coreTerms(for: mission),
             floor: 0,
             excludePets: !RuleBasedRelevanceGate.missionMentionsPets(mission)

@@ -509,6 +509,11 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
     public var decisions: [MissionProductDecision]
     public var refinementTurns: [String]
     public var refinementDirectives: [RefinementDirective]
+    /// Free text the user sent while a gather was still searching, held to run as a refinement
+    /// the moment the deck settles — so typing "under $50" mid-search never cancels the search
+    /// or wedges an empty deck. Optional so threads persisted before this field decode
+    /// unchanged (`nil` == none queued).
+    public var queuedRefinements: [String]?
     /// Full immutable-at-mission-start snapshot; its id still lets AppModel target a live roster edit.
     public var recipient: Recipient?
     public var tasteSnapshot: TasteProfile
@@ -577,6 +582,7 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
         decisions: [MissionProductDecision],
         refinementTurns: [String],
         refinementDirectives: [RefinementDirective],
+        queuedRefinements: [String]? = nil,
         recipient: Recipient?,
         tasteSnapshot: TasteProfile,
         pendingOperation: MissionPendingOperation?,
@@ -603,6 +609,7 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
         self.decisions = decisions
         self.refinementTurns = refinementTurns
         self.refinementDirectives = refinementDirectives
+        self.queuedRefinements = queuedRefinements
         self.recipient = recipient
         self.tasteSnapshot = tasteSnapshot
         self.pendingOperation = pendingOperation

@@ -160,7 +160,7 @@ private struct ContinueMissionsSection: View {
     private func status(for phase: MissionThreadPhase) -> String {
         switch phase {
         case .planning: "Planning"
-        case .planReady: "Plan ready"
+        case .planReady: "Ready to shop"
         case .gathering: "Searching shops"
         case .deckReady: "Picks ready"
         case .failed: "Needs attention"

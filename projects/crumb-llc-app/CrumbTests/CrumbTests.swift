@@ -25,9 +25,9 @@ struct CrumbTests {
 
     // MARK: - Free-text planning (the composer / Siri entry)
 
-    @Test("Planning a shoppable goal routes to a thread with an editable plan and records a recent")
+    @Test("Planning a shoppable goal shops it immediately in its thread and records a recent")
     @MainActor
-    func planRoutesToEditablePlan() async {
+    func planShopsGoalImmediately() async {
         let recents = InMemoryRecentMissionsStore()
         let model = AppModel(
             ucp: MockUCPClient(), curator: RuleBasedCurator(),
@@ -38,8 +38,10 @@ struct CrumbTests {
 
         #expect(model.route == .missionThread)
         #expect(model.selectedTask != nil)
-        #expect(!model.draftParts.isEmpty)              // an editable plan was produced
         #expect(model.planDecline == nil)
+        #expect(model.loadState == .loaded)             // direct: the search ran without an approval turn
+        #expect(model.activeThread?.phase == .deckReady)
+        #expect(!model.deck.isEmpty)
         #expect(model.recentGoals.first == "Set up my pour-over corner") // recorded, most-recent-first
     }
 
@@ -69,7 +71,7 @@ struct CrumbTests {
 
         await model.runOnboardingGoal("Set up my pour-over corner")
 
-        #expect(model.route == .missionThread)         // led straight into the thread's editable plan
+        #expect(model.route == .missionThread)         // led straight into the shopping thread
         #expect(model.selectedTask != nil)
         #expect(store.loadProfile() != nil)            // onboarding completed + persisted (won't reappear)
     }
@@ -180,42 +182,24 @@ struct CrumbTests {
         let thread = try #require(model.activeThread)
         #expect(model.route == .missionThread)
         #expect(thread.originalGoal == "Set up my pour-over corner")
-        #expect(thread.phase == .planReady)
+        #expect(thread.phase == .deckReady)             // direct: planning flows straight into the deck
         #expect(thread.timeline.map(\.kind).contains(.userMessage))
         #expect(thread.timeline.map(\.kind).contains(.planningStarted))
-        #expect(thread.timeline.map(\.kind).contains(.planReady))
+        #expect(thread.timeline.map(\.kind).contains(.gatheringStarted))
+        #expect(thread.timeline.map(\.kind).contains(.gatheringCompleted))
         #expect(thread.timeline.map(\.sequence) == Array(0..<thread.timeline.count))
         #expect(threadStore.load().threads.first?.id == thread.id)
     }
 
-    @Test("Planning always ends with one durable plan approval interaction")
+    // MARK: - Direct missions (no plan step — the orchestrator decides the catalog calls)
+
+    @Test("Planning never installs a plan approval — the first durable question is the deck's")
     @MainActor
-    func planningInstallsPlanApproval() async throws {
+    func planningSkipsPlanApproval() async throws {
         let store = InMemoryMissionThreadStore()
         let model = AppModel(
             ucp: MockUCPClient(), curator: RuleBasedCurator(),
             tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile), threadStore: store
-        )
-
-        await model.runPlan(goal: "Set up my pour-over corner")
-
-        let interaction = try #require(model.activeThread?.pendingInteraction)
-        #expect(interaction.kind == .planApproval)
-        #expect(interaction.options.map(\.id) == ["start-shopping", "change-plan", "start-over"])
-        #expect(model.missionDockState.interaction == interaction)
-        #expect(store.load().threads.first?.pendingInteraction == interaction)
-    }
-
-    // MARK: - Direct missions (no plan step — the orchestrator decides the catalog calls)
-
-    @Test("A direct mission skips plan approval and lands on a ready deck")
-    @MainActor
-    func directMissionSkipsPlanApproval() async throws {
-        let store = InMemoryMissionThreadStore()
-        let model = AppModel(
-            ucp: MockUCPClient(), curator: RuleBasedCurator(),
-            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
-            directMissions: true, threadStore: store
         )
 
         // A goal the mock catalog resolves (matches the pour-over seed mission); the live
@@ -230,17 +214,18 @@ struct CrumbTests {
         // No plan-approval turn ever appears — the pending question is the deck's, not the plan's.
         let interaction = try #require(model.activeThread?.pendingInteraction)
         #expect(interaction.kind != .planApproval)
+        // A single-intent goal posts no plan notice either — the deck is the first artifact.
         #expect(model.activeThread?.timeline.contains { $0.kind == .planReady } == false)
         #expect(model.recentGoals.first == "pour-over kettle")
+        #expect(store.load().threads.first?.pendingInteraction == interaction)
     }
 
-    @Test("A failed direct gather lands on a retry question, never a plan approval")
+    @Test("A failed gather lands on a retry question, never a plan approval")
     @MainActor
-    func directMissionFailureOffersRetry() async throws {
+    func gatherFailureOffersRetry() async throws {
         let model = AppModel(
             ucp: UnconfiguredUCPClient(), curator: RuleBasedCurator(),
-            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
-            directMissions: true
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
         )
         await model.runPlan(goal: "pour-over kettle")
 
@@ -251,19 +236,165 @@ struct CrumbTests {
         #expect(model.activeThread?.timeline.contains { $0.kind == .planReady } == false)
     }
 
-    @Test("A direct mission still declines a non-shopping goal")
+    @Test("A non-shopping goal still declines inside the direct chain")
     @MainActor
-    func directMissionStillDeclines() async {
+    func directChainStillDeclines() async {
         let model = AppModel(
             ucp: MockUCPClient(), curator: RuleBasedCurator(),
-            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
-            directMissions: true
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
         )
         await model.runPlan(goal: "what is the weather?")
 
         #expect(model.selectedTask == nil)
         #expect(model.planDecline != nil)
         #expect(model.activeThread?.phase == .declined)
+    }
+
+    @Test("A kit-cue goal keeps its deterministic plan as an in-thread notice, never an approval turn")
+    @MainActor
+    func kitGoalPostsPlanNoticeAndShopsImmediately() async throws {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
+        )
+        await model.runPlan(goal: "lacrosse gear for my son")
+
+        // The deterministic player kit survived as the mission's plan…
+        #expect((model.selectedTask?.plan.count ?? 0) >= 4)
+        #expect(model.selectedTask?.isSingleItem == false)
+        // …surfaced as a read-only timeline notice carrying the stated assumption + the parts…
+        let notice = try #require(model.activeThread?.timeline.first { $0.kind == .planReady })
+        #expect(notice.text.localizedCaseInsensitiveContains("field player"))
+        #expect(notice.blocks.contains { if case .plan = $0 { return true } else { return false } })
+        // …and the search started without a blocking approval turn.
+        #expect(model.activeThread?.pendingInteraction?.kind != .planApproval)
+        #expect(model.activeThread?.timeline.map(\.kind).contains(.gatheringStarted) == true)
+    }
+
+    @Test("Free text typed mid-search buffers and applies as a refinement once the deck settles (no wedge)")
+    @MainActor
+    func midGatherTextBuffersThenRefines() async throws {
+        let model = AppModel(
+            ucp: MockUCPClient(simulatedLatency: 200_000_000), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            refiner: ScriptedRefiner(.init(priceDirection: .cheaper))
+        )
+        model.enterPlan(with: SeedData.hike)
+        let load = Task { @MainActor in await model.loadCandidates(for: SeedData.hike) }
+        for _ in 0..<200 where model.activeThread?.pendingInteraction?.question != "Searching the shops…" {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(model.activeThread?.pendingInteraction?.question == "Searching the shops…")
+
+        model.submitMissionText("under $50")
+
+        // The gather was NOT cancelled into a rework: the text is queued and acknowledged.
+        #expect(model.activeThread?.queuedRefinements == ["under $50"])
+        #expect(model.isReworking == false)
+        #expect(model.activeThread?.pendingInteraction?.allowsFreeText == true)   // still conversational
+
+        await load.value
+
+        // The buffered text ran as a refinement after settle — no stuck "Reworking the picks…".
+        #expect(model.refinementTurns == ["under $50"])
+        #expect((model.activeThread?.queuedRefinements ?? []).isEmpty)
+        #expect(model.loadState == .loaded)
+        #expect(model.isReworking == false)
+        #expect(model.activeThread?.pendingInteraction != nil)
+        let prices = model.deck.map(\.price)
+        #expect(prices == prices.sorted(by: <))   // the cheaper directive visibly applied
+    }
+
+    @Test("Stop mid-search offers a resume-shopping confirmation — never a plan approval — and resume re-gathers")
+    @MainActor
+    func stopMidGatherOffersResume() async throws {
+        let model = AppModel(
+            ucp: MockUCPClient(simulatedLatency: 200_000_000), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
+        )
+        model.enterPlan(with: SeedData.hike)
+        let load = Task { @MainActor in await model.loadCandidates(for: SeedData.hike) }
+        for _ in 0..<200 where model.activeThread?.pendingInteraction?.question != "Searching the shops…" {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        // Text typed just before Stop is buffered; Stop must set it aside honestly (never a
+        // silent drop, never a surprise application on a much-later re-gather).
+        model.submitMissionText("under $50")
+        #expect(model.activeThread?.queuedRefinements == ["under $50"])
+
+        model.submitMissionOption("stop")
+
+        #expect((model.activeThread?.queuedRefinements ?? []).isEmpty)
+        #expect(model.activeThread?.timeline.contains {
+            $0.kind == .notice && $0.text.contains("set aside")
+        } == true)
+        #expect(model.activeThread?.phase == .planReady)
+        let interaction = try #require(model.activeThread?.pendingInteraction)
+        #expect(interaction.kind == .retry)                          // resume confirmation…
+        #expect(interaction.kind != .planApproval)                   // …not the removed approval turn
+        #expect(interaction.options.map(\.id) == ["retry", "cancel"])
+        #expect(interaction.options.first?.label == "Resume shopping")
+        await load.value                                              // the stopped load exits quietly
+        #expect(model.activeThread?.phase == .planReady)              // its late settle was rejected
+
+        model.submitMissionOption("retry")
+        for _ in 0..<400 where model.loadState != .loaded {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(model.loadState == .loaded)
+        #expect(model.activeThread?.phase == .deckReady)
+        #expect(!model.deck.isEmpty)
+    }
+
+    @Test("Retrying a crash-interrupted gather re-runs the search instead of wedging (recovered deck)")
+    @MainActor
+    func recoveredGatherRetryRegathers() async throws {
+        // A thread persisted mid-gather WITH streamed candidates — the crash-recovery state
+        // whose resume (loadState .loaded, planDirty false, candidates non-empty) used to
+        // satisfy beginCuration's reuse shortcut and wedge the retry behind a working
+        // question with nothing running.
+        let store = InMemoryMissionThreadStore()
+        let task = SeedData.hike
+        let products = SeedData.hikeProducts
+        var thread = MissionThread(goal: task.title, taste: SeedData.defaultTasteProfile, now: Date())
+        thread.task = task
+        thread.plan = task.plan.enumerated().map { index, label in
+            MissionPlanPart(label: label, query: index < task.searchQueries.count ? task.searchQueries[index] : label)
+        }
+        thread.phase = .gathering
+        thread.candidates = products
+        thread.baseCandidates = products
+        thread.remainingDeckIDs = products.map(\.id)
+        thread.appendEvent(kind: .userMessage, text: task.title, createdAt: Date())
+        thread.pendingOperation = MissionPendingOperation(
+            retry: MissionRetryDescriptor(
+                kind: .gathering, input: task.searchQueries.joined(separator: "\n"),
+                taskRevision: thread.revision, returnPhase: .planReady
+            ),
+            startedAt: Date()
+        )
+        try store.save(thread)
+
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile), threadStore: store
+        )
+        let persisted = try #require(model.incompleteThreads.first)
+        model.resumeThread(persisted)
+        let interaction = try #require(model.activeThread?.pendingInteraction)
+        #expect(interaction.kind == .retry)
+
+        model.submitMissionOption("retry")
+        for _ in 0..<400 where model.activeThread?.pendingOperation != nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        #expect(model.activeThread?.pendingOperation == nil)   // the retry genuinely re-ran
+        #expect(model.loadState == .loaded)
+        #expect(model.activeThread?.phase == .deckReady)
+        let next = try #require(model.activeThread?.pendingInteraction)
+        #expect(next.kind == .productDecision || next.kind == .cartReview)  // never a dead working question
     }
 
     @Test("A product answer is idempotent and advances to exactly one next question")
@@ -1176,7 +1307,7 @@ struct CrumbTests {
         #expect(model.historyEntries.isEmpty)
     }
 
-    @Test("Plan-this-again re-plans the goal into an editable plan and clears the detail state")
+    @Test("Plan-this-again re-plans the goal into a fresh shopping thread and clears the detail state")
     @MainActor
     func planAgainReplansGoal() async {
         let seeded = SeedData.historyEntries(now: Date())

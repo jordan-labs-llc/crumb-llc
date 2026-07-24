@@ -88,15 +88,17 @@ checkout are a separate transactional context and may use conventional controls.
 
 ## Example mission
 
-### Goal and plan
+### Goal and search (direct missions)
 
-The user enters “Set up my pour-over corner” in the dock. Crumb posts a plan as an assistant turn
-with a read-only plan attachment, then asks, “Should I shop this plan?” The dock offers **Start
-shopping**, **Change the plan**, and **Start over**, while its field says “Tell Crumb what to
-change…”. A response such as “Remove the grinder and add a scale” creates a new user turn and a new
-assistant plan attachment. The old plan remains visible as superseded.
+The user enters “Set up my pour-over corner” in the dock. Crumb starts shopping it immediately —
+there is no plan-approval turn. A goal that keeps a real multi-part plan (the deterministic kit
+expansions, e.g. lacrosse gear) posts the plan as a **read-only in-thread notice** carrying its
+stated assumption, while the search is already running. Free text typed during the search is
+queued and applied as a refinement the moment the picks land; a response such as “make it goalie
+gear” after settle folds into the goal or reworks the deck conversationally.
 
-There are no plan text fields, plus/minus controls, or separate commit button in the feed.
+There are no plan text fields, plus/minus controls, approval buttons, or separate commit button
+in the feed.
 
 ### Products
 
@@ -232,7 +234,7 @@ fresh bounded session from a deterministic projection of the authoritative threa
 `LanguageModelSession`, Foundation Models transcript, tool continuation, or suspended task. Warm-
 and fresh-session paths must produce equivalent validated directives for the same thread state.
 
-Domain questions such as plan approval, product Add/Skip, retry, and cart review are constructed by
+Domain questions such as product Add/Skip, retry/resume, and cart review are constructed by
 the app. The model may request clarification only through a restricted schema with one question,
 two to four concise options, and a material-information rule. Search tools remain read-only. Write
 commands remain app reducers gated by current interaction identity and explicit user intent.

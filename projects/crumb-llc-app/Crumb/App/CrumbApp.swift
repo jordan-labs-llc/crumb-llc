@@ -31,21 +31,19 @@ struct CrumbApp: App {
             ucp = MockUCPClient()
         }
         let usesDeterministicUITestSeams = env["CRUMB_UITEST_PERSISTENT_MOCK"] == "1"
-        // Direct-mission prototype: skip the on-device plan decomposition + approval turn and let
-        // the agentic orchestrator decide the catalog calls from the raw goal.
-        let directMissions = env["CRUMB_DIRECT_MISSIONS"] == "1"
         #else
         let usesDeterministicUITestSeams = false
-        let directMissions = false
         #endif
         let curator: any CuratorEngine = usesDeterministicUITestSeams
             ? RuleBasedCurator() : AppleFoundationCurator()
         let tasteExtractor: any TasteExtractor = usesDeterministicUITestSeams
             ? ManualTasteExtractor() : AppleFoundationTasteExtractor()
-        // With direct missions on, the planner only builds the deterministic mission shell (title,
-        // single query, single-item framing) — no model runs before the gather.
-        let planner: any MissionPlanner = (usesDeterministicUITestSeams || directMissions)
-            ? RuleBasedMissionPlanner() : AppleFoundationMissionPlanner()
+        // Missions are direct: the planner builds the deterministic mission shell (title, query,
+        // kit expansion) in ~1ms — no upfront model decomposition, no approval turn. The one
+        // model judgment left before the gather is the goal triage (isShoppable + isSingleItem),
+        // one cheap guided call that self-degrades to the heuristics.
+        let planner: any MissionPlanner = usesDeterministicUITestSeams
+            ? RuleBasedMissionPlanner() : DirectMissionPlanner(triage: AppleFoundationGoalTriage())
         let refiner: any RefinementInterpreter = usesDeterministicUITestSeams
             ? RuleBasedRefinementInterpreter() : AppleFoundationRefinementInterpreter()
         let chipSuggester: any RefineChipSuggester = usesDeterministicUITestSeams
@@ -61,9 +59,6 @@ struct CrumbApp: App {
         // always inject — mirroring the live/fail-closed catalog choice above.
         // The taste extractor is the input twin: it parses a free-text self-description, and
         // self-degrades to `nil` (manual capture) when no model is available.
-        // The Apple Foundation Models mission planner decomposes a free-text goal into a plan;
-        // like the curator it self-degrades to the deterministic `RuleBasedMissionPlanner` (and
-        // reports why) when no model tier is usable, so it's safe to always inject.
         // One shared SwiftData container backs every persisted store. Building a separate
         // container per store makes them collide on the same `default.store` file (each creates
         // only its own entity's table), which silently breaks persistence — see `CrumbPersistence`.
@@ -88,7 +83,6 @@ struct CrumbApp: App {
             // reaching past the plan, widening a strong fit), degrading to the deterministic
             // fan-out + gate floor otherwise.
             orchestrator: orchestrator,
-            directMissions: directMissions,
             recentsStore: Self.makeRecentsStore(container: container),
             historyStore: Self.makeHistoryStore(container: container),
             recipientStore: Self.makeRecipientStore(container: container),

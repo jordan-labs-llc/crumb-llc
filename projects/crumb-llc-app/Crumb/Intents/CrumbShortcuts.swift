@@ -6,7 +6,7 @@ struct CrumbShortcuts: AppShortcutsProvider {
         // App Shortcut phrases can only embed `AppEntity`/`AppEnum` parameters, not a free-form
         // `String` — so the goal isn't spoken inline. Siri runs the intent on these phrases and
         // then asks "What do you want to shop for?" (the parameter's `requestValueDialog`),
-        // capturing any open-ended goal and handing it to the same on-device planner.
+        // capturing any open-ended goal and handing it straight to the shopping chain.
         AppShortcut(
             intent: CurateKitIntent(),
             phrases: [

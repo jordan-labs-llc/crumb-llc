@@ -33,7 +33,7 @@ struct RelevanceGateTests {
     )
 
     /// A **narrow** single-item mission — the jasmine-tea journey that drifted into black/green tea.
-    /// One search part, so the strict core-term gate applies.
+    /// The planner judged it single-item, so the strict core-term gate applies.
     private let jasmine = ShoppingTask(
         id: "goal.premium-jasmine-tea",
         title: "Premium jasmine tea",
@@ -42,7 +42,23 @@ struct RelevanceGateTests {
         curatorNote: "",
         accentHex: 0x1C4B43,
         candidateIDs: [],
-        searchQueries: ["premium jasmine tea"]
+        searchQueries: ["premium jasmine tea"],
+        isSingleItem: true
+    )
+
+    /// A one-part **kit** shell — what direct missions build for a broad goal ("dorm room
+    /// refresh"): a single query, but judged NOT single-item, so the gate must stay broad and
+    /// the orchestrator's beyond-plan searches must survive the tool boundary.
+    private let dormRefresh = ShoppingTask(
+        id: "goal.dorm-room-refresh",
+        title: "Dorm room refresh",
+        subtitle: "A mission for you",
+        plan: ["Dorm room refresh"],
+        curatorNote: "",
+        accentHex: 0x1C4B43,
+        candidateIDs: [],
+        searchQueries: ["dorm room refresh"],
+        isSingleItem: false
     )
 
     // MARK: Keyword extraction
@@ -167,11 +183,27 @@ struct RelevanceGateTests {
         #expect(RuleBasedRelevanceGate.coreTerms(for: lacrosse).isEmpty)
     }
 
+    @Test("A one-part kit shell (direct mission, not single-item) has no core term — breadth follows the judgment, not part count")
+    func onePartKitHasNoCore() {
+        #expect(RuleBasedRelevanceGate.coreTerms(for: dormRefresh).isEmpty)
+    }
+
+    @Test("A single-item flag over several queries (reframed seed kit) stays broad — no first-query coring")
+    func singleItemManyQueriesStaysBroad() {
+        let reframed = ShoppingTask(
+            id: "hike", title: "Rainy hike", subtitle: "", plan: ["Rain shell", "Boots"],
+            curatorNote: "", accentHex: 0, candidateIDs: [],
+            searchQueries: ["waterproof rain jacket", "hiking boots"], isSingleItem: true
+        )
+        #expect(RuleBasedRelevanceGate.coreTerms(for: reframed).isEmpty)
+    }
+
     @Test("A bare-category narrow goal cores on the category word itself")
     func bareCategoryCore() {
         let broadTea = ShoppingTask(
             id: "goal.premium-tea", title: "Premium tea", subtitle: "", plan: ["Premium tea"],
-            curatorNote: "", accentHex: 0, candidateIDs: [], searchQueries: ["premium tea"]
+            curatorNote: "", accentHex: 0, candidateIDs: [], searchQueries: ["premium tea"],
+            isSingleItem: true
         )
         // Nothing distinctive survives dropping "premium" but the head noun — so require "tea".
         #expect(RuleBasedRelevanceGate.coreTerms(for: broadTea) == ["tea"])
@@ -221,6 +253,23 @@ struct RelevanceGateTests {
         // An on-core batch passes through intact.
         let jasBatch = (1...3).map { product("j.\($0)", "Jasmine Dragon Pearl \($0)", desc: "jasmine tea") }
         #expect(GatherToolSupport.onTopic(jasBatch, for: jasmine).count == 3)
+        // The drift protection ignores the searched query for a single-item mission: even when
+        // the tool passes its own (drifted) query, the off-core batch still drops.
+        #expect(GatherToolSupport.onTopic(blackBatch, for: jasmine, query: "premium black tea").isEmpty)
+    }
+
+    @Test("Tool-time onTopic keeps a beyond-plan search's results for a kit-breadth mission")
+    func onTopicKeepsBeyondPlanForKit() {
+        // The orchestrator reached past the one-part "dorm room refresh" shell and searched
+        // "desk lamp" — the results share no word with the goal text, but they match the search
+        // the model just ran, so the tool boundary must not drop them.
+        let lamps = [
+            product("l1", "Clip-on Desk Lamp", desc: "warm LED"),
+            product("l2", "Architect Desk Lamp", desc: "adjustable arm"),
+        ]
+        #expect(GatherToolSupport.onTopic(lamps, for: dormRefresh, query: "desk lamp").count == 2)
+        // Without the query context (or for an unrelated batch) the keyword gate still applies.
+        #expect(GatherToolSupport.onTopic(lamps, for: dormRefresh).isEmpty)
     }
 
     @Test("A multi-part (broad) mission's tool filter is unchanged — any-keyword overlap still keeps on-topic items")

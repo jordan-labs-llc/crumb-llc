@@ -1,5 +1,15 @@
 # Direct missions: should the plan be removed?
 
+> **Status (2026-07-23): shipped as the default.** The `CRUMB_DIRECT_MISSIONS` flag is gone —
+> direct missions are the only flow. The pre-default-on checklist below was completed:
+> the mid-gather free-text wedge now buffers as a post-settle refinement
+> (`MissionThread.queuedRefinements`); `isShoppable`/`isSingleItem` are one guided FM call again
+> (`GoalTriage` seam behind `DirectMissionPlanner`, heuristic floor); stop/failure recovery
+> offers a "Resume shopping" confirmation instead of resurrecting plan approval; the relevance
+> gate derives breadth from `isSingleItem` (not part count) and the gather tools pass their own
+> query through for kit-breadth missions; kit-cue goals keep the deterministic plan as an
+> editable-in-thread notice. The evaluation below is kept as the decision record.
+
 **Question.** The on-device Foundation Model is not sophisticated enough to decompose even a
 simple goal ("Premium jasmine tea") into a reasonable plan. Should the upfront plan be removed
 entirely, letting the Foundation Model instead figure out what to call on the catalog API?

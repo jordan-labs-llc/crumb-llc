@@ -106,8 +106,9 @@ final class MissionThreadUITests: XCTestCase {
         }
     }
 
-    /// Reaches the first frozen product question through a typed plan change and dock-only approval.
-    /// Returns that product artifact's stable accessibility identifier.
+    /// Reaches the first frozen product question. Direct missions: sending the goal starts the
+    /// search immediately — no plan approval turn — so the first decision point IS the product
+    /// question. Returns that product artifact's stable accessibility identifier.
     @MainActor
     private func launchToFirstProductQuestion() -> String {
         app.launch()
@@ -124,33 +125,15 @@ final class MissionThreadUITests: XCTestCase {
         XCTAssertTrue(waitTap(element("missionResponseSend"), timeout: 10, "send mission"))
 
         XCTAssertTrue(element("MissionThreadScreen").waitForExistence(timeout: 30))
-        let firstPlan = artifact(prefix: "missionArtifact.plan.")
-        XCTAssertTrue(firstPlan.waitForExistence(timeout: 60), "Frozen plan never appeared")
-        XCTAssertTrue(option("start-shopping").waitForExistence(timeout: 10))
-        XCTAssertTrue(option("change-plan").exists)
-        assertSoleMissionInput()
-        snap("conversation-02-plan")
-
-        XCTAssertTrue(waitTap(option("change-plan"), timeout: 10, "Change the plan"))
-        let responseField = element("missionResponseField")
-        XCTAssertTrue(waitTap(responseField, timeout: 10, "plan-change response field"))
-        responseField.typeText("Remove the grinder and add a scale")
-        XCTAssertTrue(waitTap(element("missionResponseSend"), timeout: 5, "send plan change"))
-
-        let revisedPlan = artifact(prefix: "missionArtifact.plan.", excluding: firstPlan.identifier)
-        XCTAssertTrue(revisedPlan.waitForExistence(timeout: 60), "Revised frozen plan never appeared")
-        XCTAssertTrue(option("start-shopping").waitForExistence(timeout: 10))
-        assertSoleMissionInput()
-        snap("conversation-03-plan-changed")
-
-        XCTAssertTrue(waitTap(option("start-shopping"), timeout: 10, "Start shopping"))
+        // No plan-approval turn ever appears between the goal and the deck.
+        XCTAssertFalse(option("start-shopping").exists, "The removed plan-approval turn resurfaced")
         let product = artifact(prefix: "missionArtifact.product.")
         XCTAssertTrue(product.waitForExistence(timeout: 90), "First frozen product question never appeared")
         for id in ["add", "skip", "show-another", "adjust-search"] {
             XCTAssertTrue(option(id).waitForExistence(timeout: 10), "Missing dock product response: \(id)")
         }
         assertSoleMissionInput()
-        snap("conversation-04-product-question")
+        snap("conversation-02-product-question")
         return product.identifier
     }
 

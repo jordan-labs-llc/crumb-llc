@@ -96,16 +96,22 @@ public struct RuleBasedRelevanceGate: RelevanceGate {
 
     /// The distinctive "core" terms a **narrow** mission is about — the head qualifier(s) a candidate
     /// must share to survive the strict gate (e.g. `{"jasmine"}` for "premium jasmine tea"). Empty
-    /// for broad/multi-part missions, where any-keyword overlap is the right altitude and a strict
-    /// gate would wrongly drop a legitimately varied deck.
+    /// for broad missions, where any-keyword overlap is the right altitude and a strict gate would
+    /// wrongly drop a legitimately varied deck.
     ///
-    /// A mission is narrow when it has a single search part — the "single-item altitude" the planner
-    /// already collapses to. From that one query we take the significant words in order, drop generic
-    /// quality adjectives ("premium", "best") and the trailing head noun ("tea" — the category
-    /// itself, which is exactly what lets an adjacent category match), and keep the remaining
-    /// qualifiers. Pure.
+    /// A mission is narrow when the planner judged it **single-item** — not when it merely has one
+    /// search part. Direct missions build every goal as a one-part shell, so part count can't tell
+    /// "premium jasmine tea" (one product; core on "jasmine") from "dorm room refresh" (a kit the
+    /// agentic orchestrator must reach beyond the plan for; no core, stay broad). From the narrow
+    /// mission's query we take the significant words in order, drop generic quality adjectives
+    /// ("premium", "best") and the trailing head noun ("tea" — the category itself, which is
+    /// exactly what lets an adjacent category match), and keep the remaining qualifiers. Pure.
     public static func coreTerms(for mission: ShoppingTask) -> Set<String> {
+        guard mission.isSingleItem else { return [] }
         let parts = mission.searchQueries.isEmpty ? mission.plan : mission.searchQueries
+        // A single-item mission normally has exactly one query; a single-item flag over several
+        // queries (the DEBUG screenshot hooks' reframed seed kits) has no one "core" — coring on
+        // the first query alone would strict-gate the other parts' results, so stay broad.
         guard parts.count == 1, let query = parts.first else { return [] }
         return distinctiveTerms(in: query)
     }
