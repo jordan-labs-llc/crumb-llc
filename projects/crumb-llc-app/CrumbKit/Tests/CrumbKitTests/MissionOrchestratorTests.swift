@@ -145,6 +145,77 @@ struct MissionOrchestratorTests {
         #expect(Set(gathered?.products.map(\.id) ?? []) == ["s1", "s2"])   // and returned in the terminal pool
     }
 
+    @Test("Deterministic gather gates each batch before it enters the shared collector")
+    func deterministicGatherGatesStream() async {
+        let ucp = StubUCP(results: [
+            "lacrosse stick": [product("s1", "Lacrosse stick"), product("x1", "Rowing shirt")],
+        ])
+        let m = mission(queries: ["lacrosse stick"], plan: ["Lacrosse stick"])
+        let collector = CandidateCollector()
+        let consumer = Task {
+            var ids: [String] = []
+            for await batch in collector.picks { ids.append(contentsOf: batch.map(\.id)) }
+            return ids
+        }
+        let gathered = await DeterministicMissionOrchestrator().gather(
+            for: m, floor: 1, using: ucp, gate: RuleBasedRelevanceGate(), into: collector
+        )
+        await collector.finish()
+        // The off-topic rowing shirt must never stream or pool — the collector snapshot is what the
+        // safety net settles on when the watchdog launches this floor, so a raw add here would put
+        // ungated items in the deck.
+        #expect(await consumer.value == ["s1"])
+        #expect(await collector.products.map(\.id) == ["s1"])
+        #expect(gathered?.products.map(\.id) == ["s1"])
+    }
+
+    @Test("Floor top-up items (kept only to meet the floor) still stream through the collector")
+    func deterministicGatherStreamsTopUp() async {
+        // Nothing matches the mission keywords, so the gate's floor top-up is the whole terminal
+        // pool. Those items are dropped at the batch gate, so the gather must add them at return —
+        // the settle keeps only cards that streamed and would otherwise silently drop them.
+        let ucp = StubUCP(results: [
+            "lacrosse stick": [product("x1", "Rowing shirt"), product("x2", "Canoe paddle")],
+        ])
+        let m = mission(queries: ["lacrosse stick"], plan: ["Lacrosse stick"])
+        let collector = CandidateCollector()
+        let gathered = await DeterministicMissionOrchestrator().gather(
+            for: m, floor: 2, using: ucp, gate: RuleBasedRelevanceGate(), into: collector
+        )
+        #expect(gathered?.products.map(\.id) == ["x1", "x2"])
+        #expect(await collector.products.map(\.id) == ["x1", "x2"])
+    }
+
+    // MARK: Watchdog path (safety net + deterministic floor, shared collector)
+
+    @Test("A watchdog-launched floor cannot leak ungated results into the settled pool")
+    func watchdogFloorIsGated() async {
+        // Reproduces the settle-path gate bypass: a stalled model turn trips the watchdog, which
+        // launches the deterministic floor into the SHARED collector; the net then converges on the
+        // collector snapshot, not the floor's gated return. If the floor added raw batches (the old
+        // behavior), the off-topic rowing shirt reached the settled deck unfiltered.
+        let ucp = StubUCP(results: [
+            "lacrosse stick": [product("s1", "Lacrosse stick"), product("x1", "Rowing shirt")],
+        ])
+        let m = mission(queries: ["lacrosse stick"], plan: ["Lacrosse stick"])
+        let collector = CandidateCollector()
+        let gate = RuleBasedRelevanceGate()
+        let net = GatherSafetyNet(watchdogSeconds: 0.05, deadlineSeconds: 5.0)
+        let result = await net.run(
+            floor: 1,
+            turn: { try? await Task.sleep(for: .milliseconds(300)) },   // empty, ends after watchdog
+            poolSnapshot: { await collector.products },
+            floorGather: {
+                await DeterministicMissionOrchestrator().gather(
+                    for: m, floor: 1, using: ucp, gate: gate, into: collector
+                )
+            }
+        )
+        #expect(result?.products.map(\.id) == ["s1"])                  // gated even on this path
+        #expect(await collector.products.map(\.id) == ["s1"])          // and never streamed raw
+        #expect(result?.usedAgent == false)
+    }
+
     // MARK: GatherToolSupport
 
     @Test("onTopic keeps mission-matching products and drops the off-topic")
