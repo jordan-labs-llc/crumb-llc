@@ -145,6 +145,9 @@ struct CheckoutWorkflowView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("merchantAuthoritativeNote")
             }
+            // Container, not clobber: on a plain VStack the id propagates onto every descendant,
+            // hiding multiMerchantDisclosure / merchantAuthoritativeNote from UI tests (#61).
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("CheckoutWorkflow")
         }
     }
@@ -365,6 +368,9 @@ struct CheckoutWorkflowView: View {
             .accessibilityIdentifier("sandboxSubmitContact")
         }
         .textFieldStyle(.roundedBorder)
+        // Container, not clobber: without `.contain` every text field reports "sandboxContactForm"
+        // instead of its own sandboxFirstName/… id (#61).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("sandboxContactForm")
     }
 
@@ -436,6 +442,7 @@ struct CheckoutWorkflowView: View {
             Text("SANDBOX — no payment method is charged and no real order is created.")
                 .font(CrumbType.caption).foregroundStyle(CrumbColor.ochre)
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("sandboxReview")
     }
 
@@ -454,6 +461,7 @@ struct CheckoutWorkflowView: View {
             Text("This sandbox result is not added to purchase history.")
                 .font(CrumbType.caption).foregroundStyle(CrumbColor.ink3)
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("sandboxConfirmation")
     }
 

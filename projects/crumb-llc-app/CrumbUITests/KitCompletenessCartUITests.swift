@@ -16,6 +16,13 @@ final class KitCompletenessCartUITests: XCTestCase {
 
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "sandboxBadge")
             .firstMatch.waitForExistence(timeout: 20))
+
+        // Every sandbox-provenance merchant shows its own contact form, so a 3-shop cart has three
+        // sandboxFirstName fields — scope the contact phase to the first merchant card (the same
+        // merchant the seeded stages fill) instead of ambiguous app-wide queries.
+        let firstCard = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'merchantCheckout.'")).firstMatch
+        XCTAssertTrue(firstCard.waitForExistence(timeout: 5))
         let values = [
             ("sandboxFirstName", "Sample"), ("sandboxLastName", "Shopper"),
             ("sandboxEmail", "sample@example.invalid"), ("sandboxStreet", "1 Sandbox Way"),
@@ -23,11 +30,11 @@ final class KitCompletenessCartUITests: XCTestCase {
             ("sandboxPostalCode", "94107"),
         ]
         for (identifier, value) in values {
-            let field = app.textFields[identifier]
+            let field = firstCard.textFields[identifier]
             XCTAssertTrue(field.waitForExistence(timeout: 5), "Missing \(identifier)")
             field.tap(); field.typeText(value)
         }
-        app.buttons["sandboxSubmitContact"].tap()
+        firstCard.buttons["sandboxSubmitContact"].tap()
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "sandboxReview")
             .firstMatch.waitForExistence(timeout: 10))
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "sandboxMerchantOfRecord")
@@ -39,9 +46,22 @@ final class KitCompletenessCartUITests: XCTestCase {
         shipping.tap()
         app.buttons["Standard shipping"].tap()
         app.buttons["sandboxUpdateShipping"].tap()
-        XCTAssertTrue(app.buttons["sandboxPlaceOrder"].waitForExistence(timeout: 10))
-        app.switches["sandboxReviewAcknowledgement"].tap()
-        app.buttons["sandboxPlaceOrder"].tap()
+        let placeOrder = app.buttons["sandboxPlaceOrder"]
+        XCTAssertTrue(placeOrder.waitForExistence(timeout: 10))
+
+        // A SwiftUI Toggle's element frame spans label + switch, so a center tap can land on the
+        // label and silently do nothing; tap the embedded switch control (falling back to the
+        // trailing edge), then require the acknowledgement to actually enable Place order —
+        // a tap on the disabled button is a silent no-op.
+        let acknowledgement = app.switches["sandboxReviewAcknowledgement"]
+        let control = acknowledgement.switches.firstMatch
+        (control.exists ? control : acknowledgement).tap()
+        if (acknowledgement.value as? String) != "1" {
+            acknowledgement.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        }
+        XCTAssertTrue(placeOrder.wait(for: \.isEnabled, toEqual: true, timeout: 5),
+                      "Acknowledgement toggle did not enable Place order")
+        placeOrder.tap()
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "sandboxConfirmation")
             .firstMatch.waitForExistence(timeout: 10))
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "sandboxOrderID")
