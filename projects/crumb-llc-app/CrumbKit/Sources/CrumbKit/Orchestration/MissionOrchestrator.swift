@@ -97,29 +97,44 @@ public struct DeterministicMissionOrchestrator: MissionOrchestrator {
     ) async -> GatheredCandidates? {
         // A mission with no queries falls back to its id, exactly like the old inline pipeline.
         let queries = mission.searchQueries.isEmpty ? [mission.id] : mission.searchQueries
-        // Fan the queries out in parallel and add each query's raw batch to the collector *as it
-        // returns*, so a subscriber sees picks stream in rather than waiting for the whole union.
-        // The collector dedupes by id, so overlapping queries (the mock collapses them) never
-        // double-count. `try?` keeps one failed query from cancelling its siblings; a query that
-        // errors contributes nothing.
-        let anySucceeded = await withTaskGroup(of: Bool.self) { group in
-            for query in queries {
+        // Fan the queries out in parallel, gating each batch (`floor: 0` — drop-only, mirroring the
+        // agentic Tools) *before* it enters the collector, so a subscriber streams only on-topic
+        // picks. The collector must never hold an ungated product: it is shared with the agentic
+        // tier, whose safety net settles on the collector snapshot — a raw add here would reach the
+        // deck unfiltered whenever the watchdog launches this floor. The raw batches are kept,
+        // slotted by query index so the union is deterministic, for the floor top-up below.
+        // `try?` keeps one failed query from cancelling its siblings; a query that errors
+        // contributes nothing.
+        let rawBatches: [[Product]?] = await withTaskGroup(of: (Int, [Product]?).self) { group in
+            for (index, query) in queries.enumerated() {
                 group.addTask {
-                    guard let batch = try? await ucp.searchCatalog(query, placements: [.organic]) else { return false }
-                    await collector.add(batch)
-                    return true
+                    guard let batch = try? await ucp.searchCatalog(query, placements: [.organic]) else {
+                        return (index, nil)
+                    }
+                    await collector.add(gate.filter(batch, for: mission, floor: 0))
+                    return (index, batch)
                 }
             }
-            var succeeded = false
-            for await ok in group { succeeded = succeeded || ok }
-            return succeeded
+            var collected = [[Product]?](repeating: nil, count: queries.count)
+            for await (index, batch) in group { collected[index] = batch }
+            return collected
         }
         // A total outage (every query errored) is `nil`, so the caller can tell it from an empty
         // success — matching `searchUnion`'s contract.
-        guard anySucceeded else { return nil }
-        // Drop clearly off-topic items before the curator ranks/voices them; the gate keeps at least
-        // `floor` candidates, so it can never turn a real result set into "no matches".
-        let gated = await gate.filter(collector.products, for: mission, floor: floor)
-        return GatheredCandidates(products: gated, usedAgent: false)
+        let succeeded = rawBatches.compactMap { $0 }
+        guard !succeeded.isEmpty else { return nil }
+        var seen = Set<Product.ID>()
+        let rawUnion = succeeded.flatMap { $0 }.filter { seen.insert($0.id).inserted }
+        // The floor guarantee: the on-topic set, topped back up to `floor` from the raw union when
+        // too few matched — so an over-eager gate can never turn a real result set into "no matches".
+        let gated = await gate.filter(rawUnion, for: mission, floor: floor)
+        // A top-up item was (rightly) dropped by the batch gate above and so never streamed; add it
+        // now, because the settle keeps only cards that streamed and would silently drop it. The
+        // collector dedupes, so re-adding the on-topic items is a no-op.
+        await collector.add(gated)
+        // The collector caps the pool; return only what it actually holds so the terminal pool
+        // never contains a product that couldn't stream.
+        let pooled = Set(await collector.products.map(\.id))
+        return GatheredCandidates(products: gated.filter { pooled.contains($0.id) }, usedAgent: false)
     }
 }
