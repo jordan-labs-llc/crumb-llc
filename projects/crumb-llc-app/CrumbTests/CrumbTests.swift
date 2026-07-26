@@ -437,9 +437,9 @@ struct CrumbTests {
         }
     }
 
-    @Test("Typed product write intent asks for confirmation before mutating")
+    @Test("Typed write intent acts immediately — the frozen question makes 'add it' as unambiguous as the chip")
     @MainActor
-    func typedAddRequiresConfirmation() async throws {
+    func typedAddActsImmediately() async throws {
         let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
         model.enterPlan(with: SeedData.hike)
         await model.loadCandidates(for: SeedData.hike)
@@ -451,14 +451,77 @@ struct CrumbTests {
             subjectRevision: interaction.subjectRevision, answer: .freeText("add it")
         ))
 
-        #expect(model.kit.isEmpty)
-        #expect(model.activeThread?.pendingInteraction?.selectionMode == .confirmation)
-        #expect(model.activeThread?.pendingInteraction?.options.map(\.id) == ["add", "cancel"])
-        guard case .product(let id, _) = model.activeThread?.pendingInteraction?.resolver else {
-            Issue.record("Expected a frozen product confirmation")
-            return
+        // No confirmation detour: the kit mutated once and the conversation moved on.
+        #expect(model.kit.map(\.product.id) == [product.id])
+        #expect(model.activeThread?.pendingInteraction?.selectionMode != .confirmation)
+        #expect(model.activeThread?.timeline.contains { $0.kind == .productAdded && $0.productID == product.id } == true)
+    }
+
+    @Test("Natural answers to the product question resolve like their chips")
+    @MainActor
+    func naturalProductAnswersResolveLikeChips() async throws {
+        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        let first = try #require(model.deck.first)
+
+        // "Looks good." — trailing punctuation and case are forgiven — adds the frozen product.
+        var interaction = try #require(model.activeThread?.pendingInteraction)
+        model.submitMissionAnswer(MissionInteractionSubmission(
+            threadID: try #require(model.activeThreadID), interactionID: interaction.id,
+            interactionGeneration: interaction.interactionGeneration,
+            subjectRevision: interaction.subjectRevision, answer: .freeText("Looks good.")
+        ))
+        #expect(model.kit.map(\.product.id) == [first.id])
+
+        // "No thanks" skips the next one.
+        let second = try #require(model.deck.first)
+        interaction = try #require(model.activeThread?.pendingInteraction)
+        model.submitMissionAnswer(MissionInteractionSubmission(
+            threadID: try #require(model.activeThreadID), interactionID: interaction.id,
+            interactionGeneration: interaction.interactionGeneration,
+            subjectRevision: interaction.subjectRevision, answer: .freeText("No thanks")
+        ))
+        #expect(model.activeThread?.decisions.contains { $0.productID == second.id && $0.kind == .skipped } == true)
+
+        // "Show me another" rotates without recording a skip.
+        let third = try #require(model.deck.first)
+        interaction = try #require(model.activeThread?.pendingInteraction)
+        model.submitMissionAnswer(MissionInteractionSubmission(
+            threadID: try #require(model.activeThreadID), interactionID: interaction.id,
+            interactionGeneration: interaction.interactionGeneration,
+            subjectRevision: interaction.subjectRevision, answer: .freeText("show me another")
+        ))
+        #expect(model.activeThread?.decisions.contains { $0.productID == third.id && $0.kind == .skipped } == false)
+        if model.deck.count > 1 { #expect(model.deck.last?.id == third.id) }
+    }
+
+    @Test("A refinement's follow-ups ride the next product question, then step aside")
+    @MainActor
+    func refinementFollowUpsAppearOnce() async throws {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            refiner: ScriptedRefiner(.init(priceDirection: .cheaper))
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+
+        model.submitMissionText("make it cheaper")
+        for _ in 0..<400 where model.isReworking || model.activeThread?.pendingOperation != nil {
+            try await Task.sleep(for: .milliseconds(5))
         }
-        #expect(id == product.id)
+
+        let refined = try #require(model.activeThread?.pendingInteraction)
+        #expect(refined.kind == .productDecision)
+        // One contextual chip, and never more than the four-option interaction contract allows.
+        #expect(refined.options.map(\.id).contains("save-to-taste"))
+        #expect(refined.options.count <= 4)
+
+        // Answering normally clears the contextual follow-up from the next question.
+        model.submitMissionOption("skip")
+        let next = try #require(model.activeThread?.pendingInteraction)
+        #expect(next.options.map(\.id).contains("save-to-taste") == false)
     }
 
     @Test("Planning the same goal twice creates distinct mission threads")

@@ -243,9 +243,6 @@ struct MissionResponseDock: View {
         VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
             HStack(spacing: CrumbMetrics.Space.s) {
                 newMissionRecipientAccessory
-                Text("Start a conversation")
-                    .font(CrumbType.caption)
-                    .foregroundStyle(CrumbColor.ink3)
                 Spacer(minLength: 0)
             }
 
@@ -258,12 +255,22 @@ struct MissionResponseDock: View {
             MissionTextInputRow(
                 text: draft,
                 focused: $focused,
-                placeholder: model.isPlanning ? "Planning your mission…" : "What are we shopping for?",
+                placeholder: model.isPlanning ? "Starting your mission…" : "Describe it in your own words…",
                 isEnabled: !model.isPlanning,
                 fieldIdentifier: "missionResponseField",
                 sendIdentifier: "missionResponseSend",
                 onSubmit: submitNewMission
             )
+        }
+        .onAppear {
+            // An empty landing is an invitation: the cursor is already in the conversation, so
+            // the first thing a person does is talk. With missions to continue, the list keeps
+            // the floor and the keyboard stays down.
+            guard model.incompleteThreads.isEmpty, !model.isPlanning else { return }
+            #if DEBUG
+            guard ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] == nil else { return }
+            #endif
+            focused = true
         }
     }
 

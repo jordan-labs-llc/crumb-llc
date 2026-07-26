@@ -129,7 +129,7 @@ final class MissionThreadUITests: XCTestCase {
         XCTAssertFalse(option("start-shopping").exists, "The removed plan-approval turn resurfaced")
         let product = artifact(prefix: "missionArtifact.product.")
         XCTAssertTrue(product.waitForExistence(timeout: 90), "First frozen product question never appeared")
-        for id in ["add", "skip", "show-another", "adjust-search"] {
+        for id in ["add", "skip", "show-another"] {
             XCTAssertTrue(option(id).waitForExistence(timeout: 10), "Missing dock product response: \(id)")
         }
         assertSoleMissionInput()
@@ -138,7 +138,7 @@ final class MissionThreadUITests: XCTestCase {
     }
 
     @MainActor
-    func testTypedProductWriteBecomesComposerOnlyConfirmation() {
+    func testTypedProductWriteActsImmediately() {
         _ = launchToFirstProductQuestion()
 
         let field = element("missionResponseField")
@@ -146,10 +146,15 @@ final class MissionThreadUITests: XCTestCase {
         field.typeText("add it")
         XCTAssertTrue(waitTap(element("missionResponseSend"), timeout: 5, "send product request"))
 
-        XCTAssertTrue(dockOption("add").waitForExistence(timeout: 10))
-        XCTAssertTrue(dockOption("cancel").exists)
-        assertSoleMissionInput(expectsEditableField: false)
-        snap("conversation-product-confirmation")
+        // The typed answer commits like the chip — no confirmation detour, and the composer's
+        // editable field never disappears.
+        XCTAssertTrue(textContaining("Added").waitForExistence(timeout: 10),
+                      "Typed 'add it' did not commit the frozen product")
+        XCTAssertFalse(dockOption("cancel").exists, "The removed confirmation turn resurfaced")
+        XCTAssertTrue(dockOption("add").waitForExistence(timeout: 10),
+                      "The conversation did not advance to the next product question")
+        assertSoleMissionInput()
+        snap("conversation-typed-add")
     }
 
     @MainActor
@@ -173,7 +178,7 @@ final class MissionThreadUITests: XCTestCase {
         XCTAssertTrue(element("MissionThreadScreen").waitForExistence(timeout: 20))
         XCTAssertTrue(element(pendingProductID).waitForExistence(timeout: 15),
                       "Relaunch replaced the pending product snapshot")
-        for id in ["add", "skip", "show-another", "adjust-search"] {
+        for id in ["add", "skip", "show-another"] {
             XCTAssertTrue(option(id).waitForExistence(timeout: 10), "Relaunch lost product option \(id)")
         }
         assertSoleMissionInput()
@@ -279,7 +284,7 @@ final class MissionThreadUITests: XCTestCase {
         ))
         XCTAssertTrue(element("missionResponseChoiceSheet").waitForExistence(timeout: 10))
         XCTAssertTrue(element("missionResponseChoiceQuestion").exists)
-        for id in ["add", "skip", "show-another", "adjust-search"] {
+        for id in ["add", "skip", "show-another"] {
             let option = element("missionResponseOption.\(id)")
             XCTAssertTrue(option.exists, "AX composer expansion lost product response: \(id)")
             XCTAssertTrue(option.isHittable, "AX composer response is not actionable: \(id)")

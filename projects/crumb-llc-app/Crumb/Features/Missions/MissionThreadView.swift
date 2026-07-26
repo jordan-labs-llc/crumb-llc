@@ -40,7 +40,10 @@ private struct MissionConversationFeed: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: CrumbMetrics.Space.l) {
-                        ForEach(thread.timeline) { event in
+                        // Bookkeeping markers (gather started, refinement requested) narrate
+                        // nothing the neighboring activity receipt doesn't already say — they
+                        // stay in the domain timeline but out of the conversation.
+                        ForEach(thread.timeline.filter(\.isRenderedTurn)) { event in
                             MissionTurnView(event: event)
                                 .id(event.id)
                         }
@@ -147,6 +150,18 @@ private struct MissionConversationFeed: View {
             proxy.scrollTo(promptEventID, anchor: .bottom)
             await Task.yield()
             proxy.scrollTo(promptEventID, anchor: .bottom)
+        }
+    }
+}
+
+private extension MissionThreadEvent {
+    /// Domain bookkeeping markers whose visible text merely repeats the adjacent activity
+    /// receipt. They remain in the persisted timeline; the conversation just doesn't read
+    /// the same line twice.
+    var isRenderedTurn: Bool {
+        switch kind {
+        case .gatheringStarted, .refinementRequested: false
+        default: true
         }
     }
 }
@@ -305,19 +320,29 @@ private struct MissionArtifactView: View {
         case .kit(let snapshot):
             MissionKitSnapshotView(snapshot: snapshot)
         case .activity(let receipt):
-            MissionActivityArtifact(receipt: receipt)
+            MissionActivityArtifact(receipt: receipt, isSettled: isSuperseded)
         }
     }
 }
 
 private struct MissionActivityArtifact: View {
     let receipt: MissionActivityReceipt
+    var isSettled = false
 
     var body: some View {
         HStack(alignment: .top, spacing: CrumbMetrics.Space.m) {
-            ProgressView()
-                .controlSize(.small)
-                .accessibilityHidden(true)
+            // Live work spins; a resolved working turn reads as finished history, never as a
+            // spinner running forever in scrollback.
+            if isSettled {
+                Image(systemName: "checkmark.circle")
+                    .font(.subheadline)
+                    .foregroundStyle(CrumbColor.ink3)
+                    .accessibilityHidden(true)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityHidden(true)
+            }
             VStack(alignment: .leading, spacing: CrumbMetrics.Space.xs) {
                 Text(receipt.title)
                     .font(CrumbType.headline)

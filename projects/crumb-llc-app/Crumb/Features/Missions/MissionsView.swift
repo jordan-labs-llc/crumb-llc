@@ -32,7 +32,7 @@ struct MissionsView: View {
             Text("What are we shopping for?")
                 .font(CrumbType.display)
                 .foregroundStyle(CrumbColor.ink)
-            Text("Hand me any goal in your own words. I'll break it into a plan and bring you a kit.")
+            Text("Any goal, in your own words. I'll search the shops and bring back picks worth keeping.")
                 .font(CrumbType.curator)
                 .foregroundStyle(CrumbColor.ink2)
                 .fixedSize(horizontal: false, vertical: true)

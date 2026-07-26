@@ -103,9 +103,10 @@ in the feed.
 ### Products
 
 Crumb posts one product turn with its image, price, merchant, explanation, and variant as a read-only
-attachment, then asks a specific question. The dock offers **Add**, **Skip**, **Show another**, and
-**Adjust search**. The pending interaction freezes the product and variant IDs; it never means
-“whatever card is currently on top.”
+attachment, then asks a specific question. The dock offers **Add**, **Skip**, and **Show another**;
+adjusting the search is the free-text path itself, taught by the composer placeholder (“Add it, skip
+it, or ask for a change…”). The pending interaction freezes the product and variant IDs; it never
+means “whatever card is currently on top.”
 
 If the product has multiple materially distinct variants, Crumb first asks a single-choice variant
 question in the dock. The subsequent Add confirmation repeats the exact variant and authoritative
@@ -167,9 +168,13 @@ metadata changes do not spuriously invalidate an answer. A subject mutation alwa
 
 Exactly zero or one unresolved interaction may exist in a thread. Submitting an option sends its
 stable semantic option ID. Submitting text produces a distinct `.freeText(String)` answer; text is
-never mapped back to an option label and never directly executes a write. Typed plan changes and
-refinements may produce proposals. Typed “yes,” “add it,” “save this,” or similar write intent must
-lead to a new explicit confirmation interaction with frozen entity and action identity.
+never matched against display labels or assistant prose. A typed answer may act as one of the
+question’s own semantic options only when the **whole message** exactly matches a closed
+vocabulary (“add it,” “skip,” “looks good”) — the submission already carries the frozen thread,
+interaction, generation, and subject identity, and it runs the identical reducer branch (including
+snapshot-facts revalidation) as the tapped chip, so it is precisely as unambiguous. Ordinals and
+references (“the first one,” “it”) never resolve. Any unmatched text is a proposal (plan change or
+refinement), never a write.
 
 Submitting an answer is one
 reducer transaction:
@@ -256,7 +261,7 @@ appears in the transcript.
 | Planner declined | Plain-language reason | Replacement goal text; Cancel | Restore free-text replacement state |
 | Gathering, no results | Search receipt and explanation | Retry; Change request; Cancel | Retry only by explicit answer |
 | Gathering, partial | Frozen partial result plus status | Use these; Keep searching; Stop | Preserve results and question |
-| Product ready | Frozen product/variant question | Add; Skip; Show another; Adjust search | Restore exact product resolver |
+| Product ready | Frozen product/variant question | Add; Skip; Show another; free-text change | Restore exact product resolver |
 | Direct product | Frozen comparison option | Shortlist; Skip; Adjust search | Preserve shortlist wording and identity |
 | Gift/recipient | Recipient-context question or notice | App-approved choices; Other text | Restore recipient snapshot |
 | Refinement complete | Acknowledgement and next product | Contextual suggestions; Reset; Save to taste | Preserve active directives |
@@ -317,8 +322,9 @@ and interruption behavior, and validate all accessibility and visual configurati
 - No plan, product-decision, retry, or cart-review control exists outside the response dock.
 - Every actionable assistant question has exactly one persisted pending interaction.
 - Option, Other, general text, cancel, retry, and interruption paths all originate in the dock.
-- Typed “yes,” “add it,” and “the first one” never mutate the kit without a uniquely resolved,
-  explicit confirmation.
+- A typed answer mutates the kit only via an exact whole-message vocabulary match against the
+  current frozen product question — running the same identity-validated reducer branch as its chip.
+  “The first one” and other ordinals never resolve; unmatched text never writes.
 - Answer submission appends a user turn before applying one idempotent command.
 - Relaunch restores an unanswered interaction without replaying planning, search, Add, or checkout.
 - Stale thread, revision, interaction, product, and variant answers are rejected.
