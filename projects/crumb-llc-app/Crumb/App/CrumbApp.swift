@@ -202,13 +202,76 @@ struct CrumbApp: App {
     /// on-disk container so terminate/relaunch exercises restoration without a live broker.
     private static func makeThreadStore(container: ModelContainer?) -> any MissionThreadStore {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] != nil {
-            return InMemoryMissionThreadStore()
+        if let mode = ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] {
+            // The Missions landing page otherwise has no seeded route, so its populated states can
+            // only be reached by running real missions. These fixtures let the bottom-anchored
+            // layout be checked headlessly at one mission and at the continuation cap — the range
+            // over which anchoring is most likely to degrade into a plain list.
+            switch mode {
+            case "missions-one": return InMemoryMissionThreadStore(seededThreads(count: 1))
+            case "missions-many": return InMemoryMissionThreadStore(seededThreads(count: 8))
+            case "missions-cap": return InMemoryMissionThreadStore(seededThreads(count: InMemoryMissionThreadStore.cap))
+            default: return InMemoryMissionThreadStore()
+            }
         }
         #endif
         guard let container else { return InMemoryMissionThreadStore() }
         return SwiftDataMissionThreadStore(container: container)
     }
+
+    #if DEBUG
+    /// Deterministic unfinished threads for the Missions-landing screenshot routes. Distinct
+    /// `updatedAt` values keep the store's recency sort meaningful, and the phases are spread so
+    /// the Continue rows exercise more than one status string.
+    private static func seededThreads(count: Int) -> [MissionThread] {
+        let goals = [
+            "Find premium jasmine tea",
+            "Set up my pour-over corner",
+            "Pack me for a rainy weekend hike",
+            "Replace my worn-out running shoes",
+            "Outfit a small home office",
+            "Something for Maya's birthday",
+            "Restock the coffee filters",
+            "Warm layers for a cold-weather trip",
+            "A better desk lamp",
+            "Weeknight cast-iron cookware",
+            "Rain shell that packs down small",
+            "Start a small herb garden",
+        ]
+        let phases: [MissionThreadPhase] = [.deckReady, .gathering, .planReady, .failed]
+        let now = Date()
+        return (0..<min(count, goals.count)).map { index in
+            let stamp = now.addingTimeInterval(TimeInterval(-600 * (index + 1)))
+            var thread = MissionThread(
+                goal: goals[index],
+                taste: SeedData.defaultTasteProfile,
+                now: stamp
+            )
+            thread.phase = phases[index % phases.count]
+            // Settled threads get real contents so the Continue rows exercise all three of the
+            // contents-derived summaries — kept items, unreviewed picks, and a gather that found
+            // nothing — instead of every one of them rendering the empty case.
+            if thread.phase == .deckReady {
+                let products = Array(SeedData.hikeProducts.prefix(3))
+                switch index % 3 {
+                case 0:
+                    thread.candidates = products
+                    thread.baseCandidates = products
+                    thread.kit = products.prefix(2).map { KitItem(product: $0) }
+                    thread.remainingDeckIDs = products.dropFirst(2).map(\.id)
+                case 1:
+                    thread.candidates = products
+                    thread.baseCandidates = products
+                    thread.remainingDeckIDs = products.map(\.id)
+                default:
+                    break // the empty settled deck — the case that used to claim "Picks ready"
+                }
+            }
+            thread.updatedAt = stamp
+            return thread
+        }
+    }
+    #endif
 
     var body: some Scene {
         WindowGroup {
