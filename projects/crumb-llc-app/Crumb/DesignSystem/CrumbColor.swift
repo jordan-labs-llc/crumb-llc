@@ -15,6 +15,16 @@ extension Color {
 /// Deliberately **not** the default "cream + serif + terracotta" look: warm paper on a
 /// greige board, deep pine green as the primary, and ochre reserved only for delight
 /// moments (kit fills, affirmations, stars).
+///
+/// Every token is a **fixed** sRGB value with no dark variant, so the app is light-only by
+/// design — `RootView` pins `.preferredColorScheme(.light)` to match. That pin is what keeps
+/// these tokens agreeing with the system materials layered over them (`.ultraThinMaterial` in
+/// the response dock, cart bar, and onboarding bar), which would otherwise adapt to a dark
+/// appearance on their own and leave light content sitting on a grey band.
+///
+/// Supporting dark mode means changing both halves together: give these tokens (and the
+/// ink-tinted shadows in `CrumbMetrics`) dark variants, then drop the pin. Adding a lone
+/// adaptive color here while the pin stands has no effect.
 enum CrumbColor {
     /// App background — warm paper.
     static let paper = Color(hex: 0xF3EEE4)

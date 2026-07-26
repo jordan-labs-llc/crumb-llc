@@ -41,6 +41,16 @@ struct RootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: model.route)
+        // Crumb is a light-only app, and this is the line that makes that true rather than
+        // accidental. Every `CrumbColor` token is a fixed sRGB value chosen for warm paper on a
+        // greige board, so the palette does not adapt — but the system materials layered over it
+        // (the response dock, the cart and onboarding bars) *do*. Under a dark appearance that
+        // split rendered a grey band beneath light content and dropped the dock placeholder
+        // (`ink3`) to near-illegible contrast. Pinning the scheme keeps the tokens and the
+        // materials describing the same surface. Adding real dark support means giving
+        // `CrumbColor` (and `CrumbMetrics`' ink-tinted shadows) dark variants first; until then
+        // this stays.
+        .preferredColorScheme(.light)
         // Load every descendant `AsyncImage` (deck cards, kit-tray + cart thumbnails) through one
         // cache-backed URLSession so re-showing an already-seen product photo — swiping the deck back
         // and forth — is served from the URLCache instead of re-downloaded (#43 item 1).
