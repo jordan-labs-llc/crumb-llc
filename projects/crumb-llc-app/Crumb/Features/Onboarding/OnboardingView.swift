@@ -198,7 +198,12 @@ struct OnboardingView: View {
             .accessibilityIdentifier("onboardingNext")
         }
         .padding(.horizontal, CrumbMetrics.Space.xl)
+        .padding(.top, CrumbMetrics.Space.m)
         .padding(.bottom, CrumbMetrics.Space.m)
+        // Same backdrop as the cart total bar and the refinement bar. Without it the nav was a bare
+        // pill floating on the feed, so card content read *through* and around it while scrolling —
+        // the collision stayed visible even once the inset above gave the content room to clear.
+        .background(.ultraThinMaterial)
     }
 
     private func advance() {
