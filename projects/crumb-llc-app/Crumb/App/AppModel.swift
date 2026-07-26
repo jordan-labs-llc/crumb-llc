@@ -218,6 +218,12 @@ final class AppModel {
         return "Make this part of your taste"
     }
 
+    /// The compact dock-chip variant of ``saveToTasteLabel`` — same action, chip-sized copy.
+    var saveToTasteChipLabel: String {
+        if let name = activeRecipient?.name { return "Save to \(name)'s taste" }
+        return "Save to taste"
+    }
+
     /// `true` while a profile edit is re-ranking and re-voicing the on-screen deck. Drives the
     /// Curate screen's "re-reading your taste" shimmer so the personalization is *felt*.
     private(set) var isRecurating = false
@@ -658,7 +664,7 @@ final class AppModel {
 
     var threadComposerPlaceholder: String {
         guard let thread = activeThread else { return "Start a mission…" }
-        if isPlanning { return "Planning your mission…" }
+        if isPlanning { return "Starting your mission…" }
         if isScanning { return "Searching the shops…" }
         if isReworking { return "Reworking your picks…" }
         switch thread.phase {
@@ -703,10 +709,32 @@ final class AppModel {
             question: interaction.question,
             options: interaction.options,
             allowsFreeText: interaction.allowsFreeText,
-            placeholder: interaction.allowsFreeText ? "Message Crumb…" : "Choose a response",
+            placeholder: dockPlaceholder(for: interaction),
             isEnabled: true,
             showsSaveRecovery: false
         )
+    }
+
+    /// The composer placeholder is the free-text affordance's teacher: each question names what
+    /// typing can do right now, instead of a generic "Message Crumb…".
+    private func dockPlaceholder(for interaction: MissionPendingInteraction) -> String {
+        guard interaction.allowsFreeText else { return "Choose a response" }
+        switch interaction.kind {
+        case .productDecision:
+            return isSingleProductMission
+                ? "Shortlist it, skip it, or ask for a change…"
+                : "Add it, skip it, or ask for a change…"
+        case .cartReview: return "Or say what to change…"
+        case .refinement: return "Tell me what to adjust…"
+        case .retry: return "Or tell me what to change…"
+        case .clarification:
+            if case .clarification(let context) = interaction.resolver,
+               context == "working:gathering" {
+                return "Toss in tweaks while I search…"
+            }
+            return "Message Crumb…"
+        default: return "Message Crumb…"
+        }
     }
 
     /// Convenience entry points for the response dock. They capture the current frozen identity;
@@ -841,7 +869,7 @@ final class AppModel {
             thread.phase = .gathering
         case .replaceGoal(let goal):
             retry = MissionRetryDescriptor(kind: .planning, input: goal, taskRevision: nil, returnPhase: .planning)
-            title = "Planning your mission…"
+            title = "Starting your mission…"
             thread.phase = .planning
         case .changePlan(let change):
             retry = MissionRetryDescriptor(kind: .planning, input: change, taskRevision: thread.revision, returnPhase: .planReady)
@@ -915,7 +943,11 @@ final class AppModel {
                 installNextProductOrKitQuestion(in: &thread)
                 return
             }
-            switch option {
+            // A typed answer that exactly matches the question's own vocabulary IS the answer —
+            // it carries the same frozen product identity as the chip, so it acts immediately
+            // instead of detouring through a confirmation turn.
+            let choice = option ?? text.flatMap(Self.conversationalProductChoice(in:))
+            switch choice {
             case "add":
                 guard let variantID,
                       let variant = product.variants.first(where: { $0.id == variantID }),
@@ -953,11 +985,15 @@ final class AppModel {
                 thread.remainingDeckIDs.append(productID)
                 thread.appendEvent(kind: .notice, text: "Showing another option.", createdAt: clock(), productID: productID)
                 installNextProductOrKitQuestion(in: &thread)
+            // Legacy: persisted threads may still carry an "Adjust search" option.
             case "adjust-search": installRefinementQuestion(in: &thread)
+            case "reset":
+                resetRefinements(in: &thread)
+                installNextProductOrKitQuestion(in: &thread)
+            case "save-to-taste":
+                effect = .saveTaste
             default:
-                if let text, let requested = conversationalProductWrite(in: text) {
-                    installProductConfirmation(in: &thread, product: product, action: requested)
-                } else if let text { effect = .refine(text) }
+                if let text { effect = .refine(text) }
                 else { installNextProductOrKitQuestion(in: &thread) }
             }
 
@@ -1080,10 +1116,22 @@ final class AppModel {
         title: String,
         context: String
     ) {
+        // Answering a question can queue this same working state synchronously (`queue(_:)`)
+        // before the worker runs. One live working turn per chain: if the identical question is
+        // already current, keep it instead of stacking a second matching pill in the feed.
+        if let pending = thread.pendingInteraction,
+           case .clarification(let existing) = pending.resolver,
+           existing == "working:\(context)",
+           pending.question == title {
+            return
+        }
         thread.supersedePendingInteraction()
+        // The activity receipt is the sole in-feed narration for this working turn; repeating the
+        // title as message text stacked the same string twice in a row (three times counting the
+        // gathering marker event).
         thread.appendEvent(
             kind: .assistantMessage,
-            text: title,
+            text: "",
             createdAt: clock(),
             operationID: operationID,
             blocks: [.activity(MissionActivityReceipt(operationID: operationID, title: title))]
@@ -1210,7 +1258,11 @@ final class AppModel {
         }
     }
 
-    private func installProductQuestion(in thread: inout MissionThread, product: Product) {
+    private func installProductQuestion(
+        in thread: inout MissionThread,
+        product: Product,
+        includeRefinementFollowUps: Bool = false
+    ) {
         thread.supersedePendingInteraction()
         let variant = product.defaultVariant
         thread.appendEvent(
@@ -1220,16 +1272,26 @@ final class AppModel {
             blocks: [.product(MissionProductSnapshot(product: product, variant: variant))]
         )
         guard let promptID = thread.timeline.last?.id else { return }
+        var options = [
+            MissionInteractionOption(id: "add", label: isSingleProductMission ? "Shortlist" : "Add"),
+            MissionInteractionOption(id: "skip", label: "Skip"),
+            MissionInteractionOption(id: "show-another", label: "Show another"),
+        ]
+        // Right after a refinement lands, one contextual follow-up rides the next question — the
+        // moment it's alive. Save-to-taste when the directive can be kept, else Reset as the undo.
+        // One chip only: the interaction contract caps a question at four options.
+        if includeRefinementFollowUps {
+            if thread.refinementDirectives.contains(where: { $0.isActionable }) {
+                options.append(MissionInteractionOption(id: "save-to-taste", label: saveToTasteChipLabel))
+            } else if !thread.refinementTurns.isEmpty {
+                options.append(MissionInteractionOption(id: "reset", label: "Reset changes"))
+            }
+        }
         requireInteraction {
             try thread.installInteraction(
             promptEventID: promptID, subjectRevision: thread.revision,
             kind: .productDecision, question: "What should I do with \(product.name)?",
-            options: [
-                MissionInteractionOption(id: "add", label: isSingleProductMission ? "Shortlist" : "Add"),
-                MissionInteractionOption(id: "skip", label: "Skip"),
-                MissionInteractionOption(id: "show-another", label: "Show another"),
-                MissionInteractionOption(id: "adjust-search", label: "Adjust search"),
-            ],
+            options: options,
             allowsFreeText: true,
             resolver: .product(productID: product.id, variantID: variant.id),
             createdAt: clock()
@@ -1237,13 +1299,36 @@ final class AppModel {
         }
     }
 
-    private enum ConversationalProductWrite: Equatable { case add, skip }
+    /// Maps a whole typed message onto one of the frozen product question's semantic options.
+    /// Only exact matches against this closed vocabulary act — the submission already carries the
+    /// frozen interaction identity, so "add it" is as unambiguous as tapping Add, while any longer
+    /// or unlisted sentence stays a refinement proposal and never a write. Ordinals ("the first
+    /// one") deliberately never resolve.
+    private static let conversationalProductChoices: [String: String] = {
+        var map: [String: String] = [:]
+        for phrase in [
+            "add", "add it", "add this", "add that", "keep", "keep it", "keep this",
+            "shortlist", "shortlist it", "take it", "i'll take it", "ill take it", "buy it",
+            "yes", "yes please", "yep", "yeah", "sure", "perfect", "love it",
+            "looks good", "looks great", "i like it", "like it", "good", "great",
+        ] { map[phrase] = "add" }
+        for phrase in [
+            "skip", "skip it", "pass", "pass on it", "no", "nope", "no thanks", "no thank you",
+            "not this one", "not for me", "don't like it", "dont like it",
+        ] { map[phrase] = "skip" }
+        for phrase in [
+            "show another", "show me another", "another", "another one", "next",
+            "what else", "something else", "show me something else", "more options",
+        ] { map[phrase] = "show-another" }
+        return map
+    }()
 
-    private func conversationalProductWrite(in text: String) -> ConversationalProductWrite? {
-        let normalized = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        if ["add", "add it", "add this", "keep it", "shortlist it"].contains(normalized) { return .add }
-        if ["skip", "skip it", "pass", "pass on it"].contains(normalized) { return .skip }
-        return nil
+    private static func conversationalProductChoice(in text: String) -> String? {
+        let normalized = text.lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".!…"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return conversationalProductChoices[normalized]
     }
 
     private func productSnapshot(
@@ -1254,35 +1339,6 @@ final class AppModel {
             if case .product(let snapshot) = block { return snapshot }
             return nil
         }.first
-    }
-
-    private func installProductConfirmation(
-        in thread: inout MissionThread,
-        product: Product,
-        action: ConversationalProductWrite
-    ) {
-        thread.supersedePendingInteraction()
-        let variant = product.defaultVariant
-        let optionID = action == .add ? "add" : "skip"
-        let verb = action == .add ? (isSingleProductMission ? "shortlist" : "add") : "skip"
-        thread.appendEvent(
-            kind: .assistantMessage,
-            text: "Just to confirm: \(verb) \(product.name)?",
-            createdAt: clock(), productID: product.id,
-            blocks: [.product(MissionProductSnapshot(product: product, variant: variant))]
-        )
-        guard let promptID = thread.timeline.last?.id else { return }
-        requireInteraction {
-            try thread.installInteraction(
-                promptEventID: promptID, subjectRevision: thread.revision,
-                kind: .productDecision, question: "\(verb.capitalized) \(product.name)?",
-                options: [
-                    MissionInteractionOption(id: optionID, label: verb.capitalized),
-                    MissionInteractionOption(id: "cancel", label: "Cancel"),
-                ], selectionMode: .confirmation, allowsFreeText: false,
-                resolver: .product(productID: product.id, variantID: variant.id), createdAt: clock()
-            )
-        }
     }
 
     private func installKitQuestion(in thread: inout MissionThread) {
@@ -1343,11 +1399,17 @@ final class AppModel {
         }
     }
 
-    private func installNextProductOrKitQuestion(in thread: inout MissionThread) {
+    private func installNextProductOrKitQuestion(
+        in thread: inout MissionThread,
+        includeRefinementFollowUps: Bool = false
+    ) {
         let byID = Dictionary(uniqueKeysWithValues: thread.candidates.map { ($0.id, $0) })
         if let product = thread.remainingDeckIDs.compactMap({ byID[$0] }).first {
             thread.phase = .deckReady
-            installProductQuestion(in: &thread, product: product)
+            installProductQuestion(
+                in: &thread, product: product,
+                includeRefinementFollowUps: includeRefinementFollowUps
+            )
         } else {
             // A useful final kit remains resumable and conversational until the person explicitly
             // chooses End; opening Cart is navigation, not terminal mission completion.
@@ -1590,7 +1652,7 @@ final class AppModel {
                 $0.appendEvent(kind: .userMessage, text: trimmed, createdAt: clock(), operationID: operationID)
             }
             $0.appendEvent(kind: .planningStarted, text: "Planning this mission…", createdAt: clock(), operationID: operationID)
-            installWorkingQuestion(in: &$0, operationID: operationID, title: "Planning your mission…", context: "planning")
+            installWorkingQuestion(in: &$0, operationID: operationID, title: "Starting your mission…", context: "planning")
         }
 
         let profile = activeThread?.tasteSnapshot ?? tasteProfile
@@ -2282,7 +2344,7 @@ final class AppModel {
             $0.pendingOperation = nil
             $0.retry = nil
             $0.appendEvent(kind: .refinementApplied, text: "I updated the picks to match.", createdAt: clock(), operationID: operationID)
-            installNextProductOrKitQuestion(in: &$0)
+            installNextProductOrKitQuestion(in: &$0, includeRefinementFollowUps: true)
         }
         curatorTier = curated.tier
         canSaveRefinementToTaste = refinementDirectives.contains { $0.isActionable }

@@ -738,14 +738,28 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
     /// have committed to the in-memory aggregate. A repeated old submission is then stale.
     public mutating func resolveInteraction(_ submission: MissionInteractionSubmission) throws {
         _ = try validate(submission)
+        settleActivityPrompt(of: pendingInteraction)
         pendingInteraction = nil
         interactionGeneration += 1
     }
 
     public mutating func supersedePendingInteraction() {
         guard pendingInteraction != nil else { return }
+        settleActivityPrompt(of: pendingInteraction)
         pendingInteraction = nil
         interactionGeneration += 1
+    }
+
+    /// A working question's prompt turn carries a live activity receipt. Once that question ends,
+    /// mark the turn superseded so the transcript renders the receipt as finished work instead of
+    /// leaving a spinner running forever in scrollback. Prompt turns without an activity block
+    /// (product, plan, kit questions) stay untouched — answered history keeps its full weight.
+    private mutating func settleActivityPrompt(of interaction: MissionPendingInteraction?) {
+        guard let interaction,
+              let index = timeline.firstIndex(where: { $0.id == interaction.promptEventID }),
+              timeline[index].blocks.contains(where: { if case .activity = $0 { return true } else { return false } })
+        else { return }
+        timeline[index].isSuperseded = true
     }
 
     /// Converts durable in-flight work into one stable, retryable state without reissuing it.
