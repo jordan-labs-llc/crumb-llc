@@ -14,6 +14,13 @@ final class JasmineTeaJourneyTests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["CRUMB_UITEST"] = "1"   // no CRUMB_SCREENSHOT -> live broker
+        // Pin Dynamic Type instead of inheriting whatever the device is set to. This journey reads
+        // the conversation itself — inline dock options and the status lines in the feed — and at an
+        // accessibility size the dock folds its options behind `missionResponseChoiceDisclosure`
+        // while the feed keeps barely one turn realized, so the same app state stops being
+        // queryable. The accessibility layout has its own coverage:
+        // `MissionThreadUITests.testProductQuestionAtAccessibilityXXXL`.
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
     }
 
     // MARK: - capture helpers
@@ -165,6 +172,15 @@ final class JasmineTeaJourneyTests: XCTestCase {
             .firstMatch
     }
 
+    /// The dock's working label (`missionResponseWorking`) carrying `question` — the only
+    /// trustworthy signal for *which* working turn free text will answer right now.
+    private func dockWorking(_ question: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@ AND label CONTAINS[c] %@",
+                                  "missionResponseWorking", question))
+            .firstMatch
+    }
+
     /// Launches to the Missions composer (skipping onboarding when it appears) and sends `goal`.
     @MainActor
     private func launchAndSend(goal: String) {
@@ -188,7 +204,15 @@ final class JasmineTeaJourneyTests: XCTestCase {
         XCTAssertTrue(el("MissionThreadScreen").waitForExistence(timeout: 60))
         snap("mid-01-thread")
 
-        // The dock stays conversational during the search — type the refinement right away.
+        // The thread mounts on "Starting your mission…" — the *planning* turn, where free text
+        // deliberately replaces the goal (there is no mission to refine yet). Only the gather's
+        // question buffers, so wait for the dock to say it is searching before typing; how long
+        // that takes is the live on-device planner's business, not this test's.
+        XCTAssertTrue(dockWorking("Searching the shops").waitForExistence(timeout: 120),
+                      "the gather never took over the dock — planning stalled or the mission declined")
+        snap("mid-01b-searching")
+
+        // The dock stays conversational during the search — type the refinement now.
         let field = el("missionResponseField")
         XCTAssertTrue(waitTap(field, 15, "mid-gather response field"))
         field.typeText("under $50")
