@@ -218,6 +218,7 @@ struct CrumbApp: App {
             // composition — and no other fixture produces it, because `seededThreads` always makes the
             // newest thread a settled deck with kept items.
             case "missions-stalled": return InMemoryMissionThreadStore(seededStalledThreads())
+            case "missions-inbox": return InMemoryMissionThreadStore(seededInboxThreads())
             default: return InMemoryMissionThreadStore()
             }
         }
@@ -254,6 +255,61 @@ struct CrumbApp: App {
         working.updatedAt = now.addingTimeInterval(-3 * 24 * 3600)
 
         return [stalled, working]
+    }
+
+    /// The same composition as `missions-stalled`, but the stalled thread carries a real installed
+    /// interaction — so its hero can be answered without opening the mission.
+    ///
+    /// This fixture is part of the feature, not decoration: no other fixture installs an interaction,
+    /// so without it the answerable hero is unreachable headlessly and could only be checked by hand.
+    /// The question and options are the ones `AppModel.installRetryQuestion` builds, so the fixture
+    /// cannot drift into offering answers the real app never asks for.
+    private static func seededInboxThreads() -> [MissionThread] {
+        var threads = seededStalledThreads()
+        guard var stalled = threads.first else { return threads }
+        let asked = stalled.updatedAt
+        // A retry-shaped thread in the real app always has a task and a plan — `runRetry` calls
+        // `startCurating()` only when `selectedTask != nil`. Without one, answering "Retry" here would
+        // resolve the question and then do nothing, and the fixture would be validating a state the app
+        // cannot actually produce.
+        stalled.task = SeedData.hike
+        stalled.plan = SeedData.hike.plan.map { MissionPlanPart(label: $0, query: $0) }
+        stalled.appendEvent(
+            kind: .assistantMessage,
+            text: "That turn didn’t finish. What next?",
+            createdAt: asked
+        )
+        guard let promptID = stalled.timeline.last?.id else { return threads }
+        let retry = MissionRetryDescriptor(
+            kind: .gathering,
+            input: "trail running shoes",
+            taskRevision: stalled.revision,
+            returnPhase: .failed
+        )
+        do {
+            try stalled.installInteraction(
+                promptEventID: promptID,
+                subjectRevision: stalled.revision,
+                kind: .retry,
+                question: "That turn didn’t finish. What next?",
+                options: [
+                    MissionInteractionOption(id: "retry", label: "Retry"),
+                    MissionInteractionOption(id: "cancel", label: "Cancel"),
+                ],
+                allowsFreeText: false,
+                resolver: .retry(retry),
+                createdAt: asked
+            )
+        } catch {
+            // A fixture that silently loses its interaction would make the feature look broken rather
+            // than the seed. Leave the un-answerable thread in place; the hero then renders its
+            // navigation fallback, which is a valid state and an obvious signal something is off.
+            log.error("inbox fixture could not install its interaction: \(error, privacy: .public)")
+            return threads
+        }
+        stalled.updatedAt = asked
+        threads[0] = stalled
+        return threads
     }
 
     /// Deterministic unfinished threads for the Missions-landing screenshot routes. Distinct
