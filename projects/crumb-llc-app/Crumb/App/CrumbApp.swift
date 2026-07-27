@@ -219,6 +219,7 @@ struct CrumbApp: App {
             // newest thread a settled deck with kept items.
             case "missions-stalled": return InMemoryMissionThreadStore(seededStalledThreads())
             case "missions-inbox": return InMemoryMissionThreadStore(seededInboxThreads())
+            case "missions-decision": return InMemoryMissionThreadStore(seededDecisionThreads())
             default: return InMemoryMissionThreadStore()
             }
         }
@@ -310,6 +311,68 @@ struct CrumbApp: App {
         stalled.updatedAt = asked
         threads[0] = stalled
         return threads
+    }
+
+    /// A Home whose hero is a **product decision** — the commonest answerable question by far, and the
+    /// one the old card handled worst: it quoted the resolver's `"What should I do with \(name)?"` and
+    /// showed nothing of the product, so a person was asked to shortlist an object they could not see.
+    ///
+    /// The title deliberately carries a real merchandising clause, so the fixture also covers
+    /// `TitleHygiene.displayName` doing its job on the surface that needs it.
+    private static func seededDecisionThreads() -> [MissionThread] {
+        let now = Date()
+        var thread = MissionThread(
+            goal: "A birthday gift for my sister who likes ceramics",
+            taste: SeedData.defaultTasteProfile,
+            now: now.addingTimeInterval(-8 * 60)
+        )
+        thread.phase = .deckReady
+
+        let variant = Variant(id: "tray-default", title: "Default", price: 18)
+        let tray = Product(
+            id: "ceramic-heart-tray",
+            name: "Ceramic Heart Trinket Tray | I Love That You Are My Sister",
+            shop: SeedData.Shops.millOak,
+            price: 18,
+            rating: 4.7,
+            reviews: 31,
+            rationale: "Hand-glazed, and the only piece here that isn’t another mug.",
+            symbol: "heart",
+            gradient: SeedData.Gradient.pine,
+            variants: [variant]
+        )
+        thread.candidates = [tray]
+        thread.remainingDeckIDs = [tray.id]
+        thread.appendEvent(
+            kind: .assistantMessage,
+            text: "How does this one look?",
+            createdAt: now.addingTimeInterval(-8 * 60),
+            productID: tray.id,
+            blocks: [.product(MissionProductSnapshot(product: tray, variant: variant))]
+        )
+        guard let promptID = thread.timeline.last?.id else { return [thread] }
+        do {
+            // Exactly the options `AppModel.installProductQuestion` builds for a kit mission, so the
+            // fixture cannot drift into offering answers the real app never asks for.
+            try thread.installInteraction(
+                promptEventID: promptID,
+                subjectRevision: thread.revision,
+                kind: .productDecision,
+                question: "What should I do with \(tray.name)?",
+                options: [
+                    MissionInteractionOption(id: "add", label: "Add"),
+                    MissionInteractionOption(id: "skip", label: "Skip"),
+                    MissionInteractionOption(id: "show-another", label: "Show another"),
+                ],
+                allowsFreeText: true,
+                resolver: .product(productID: tray.id, variantID: variant.id),
+                createdAt: now.addingTimeInterval(-8 * 60)
+            )
+        } catch {
+            log.error("decision fixture could not install its interaction: \(error, privacy: .public)")
+        }
+        thread.updatedAt = now.addingTimeInterval(-8 * 60)
+        return [thread]
     }
 
     /// Deterministic unfinished threads for the Missions-landing screenshot routes. Distinct

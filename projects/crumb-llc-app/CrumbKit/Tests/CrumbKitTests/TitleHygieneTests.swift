@@ -95,3 +95,84 @@ struct TitleHygieneTests {
         #expect(product.displayTitle == "Imperial Choice Premium Green Tea 100g")
     }
 }
+
+/// `TitleHygiene.displayName(for:merchant:)` — the second stage, which answers "where does the name
+/// end and the merchandising begin". Every fixture here except the synthetic ones is a real title
+/// observed coming back from the live UCP catalog.
+@Suite("Title hygiene — display name")
+struct TitleDisplayNameTests {
+
+    @Test("A trailing marketing clause after a pipe is dropped")
+    func dropsPipeClause() {
+        #expect(
+            TitleHygiene.displayName(for: "Ceramic Heart Trinket Tray | I Love That You Are My Sister")
+                == "Ceramic Heart Trinket Tray"
+        )
+        #expect(TitleHygiene.displayName(for: "Ceramic Mug | Sisters Eccl. 4:9") == "Ceramic Mug")
+    }
+
+    @Test("Trademark marks and a trailing colour clause go; hyphenated words stay")
+    func dropsNoiseAndColour() {
+        #expect(
+            TitleHygiene.displayName(for: "1-Cup Pour-Over™ Coffee Brew Cone - Black")
+                == "1-Cup Pour-Over Coffee Brew Cone"
+        )
+    }
+
+    @Test("A leading segment that is only the shop's name is skipped")
+    func skipsMerchantSegment() {
+        #expect(
+            TitleHygiene.displayName(for: "Sisters & Co | Ceramic Heart Trinket Tray", merchant: "Sisters & Co")
+                == "Ceramic Heart Trinket Tray"
+        )
+        // With no merchant there is nothing to disambiguate with, so the first segment stands.
+        #expect(TitleHygiene.displayName(for: "Sisters & Co | Ceramic Heart Trinket Tray") == "Sisters & Co")
+    }
+
+    @Test("One trailing bracketed group is dropped")
+    func dropsTrailingBracketed() {
+        #expect(TitleHygiene.displayName(for: "Chemex Bonded Filters (100-Pack)") == "Chemex Bonded Filters")
+        #expect(TitleHygiene.displayName(for: "Stoneware Mug [Sand]") == "Stoneware Mug")
+    }
+
+    @Test("Mixed case is left exactly as the merchant wrote it")
+    func preservesBrandCasing() {
+        // The whole reason this never sentence-cases: these must survive intact.
+        #expect(TitleHygiene.displayName(for: "Hario V60 Ceramic Dripper 02") == "Hario V60 Ceramic Dripper 02")
+        #expect(TitleHygiene.displayName(for: "iPhone Stand") == "iPhone Stand")
+    }
+
+    @Test("An all-caps title is recased, keeping short initialisms")
+    func recasesShouting() {
+        #expect(TitleHygiene.displayName(for: "CERAMIC HEART TRINKET TRAY") == "Ceramic Heart Trinket Tray")
+        #expect(TitleHygiene.displayName(for: "USB CERAMIC WARMER") == "USB Ceramic Warmer")
+    }
+
+    @Test("Nothing is cut when the head is not a name")
+    func keepsUncuttableTitles() {
+        // Two characters is not a name — showing "On" would be worse than the clause it removed, so
+        // the honest full title stands.
+        #expect(
+            TitleHygiene.displayName(for: "On | Cloudmonster Running Shoe")
+                == "On | Cloudmonster Running Shoe"
+        )
+        #expect(TitleHygiene.displayName(for: "") == "")
+        #expect(TitleHygiene.displayName(for: "   ") == "")
+    }
+
+    @Test("Script hygiene still runs first")
+    func composesWithScriptHygiene() {
+        #expect(
+            TitleHygiene.displayName(for: "Imperial Choice Premium Green Tea 御茗 高級綠茶 100g")
+                == "Imperial Choice Premium Green Tea 100g"
+        )
+        // The clause split happens after the CJK run is gone, so the separator it stranded is a
+        // trim, not a cut.
+        #expect(TitleHygiene.displayName(for: "Green Tea · 綠茶") == "Green Tea")
+    }
+
+    @Test("A clean title passes straight through")
+    func passesThroughCleanTitles() {
+        #expect(TitleHygiene.displayName(for: "Jasmine Silver Needle") == "Jasmine Silver Needle")
+    }
+}
