@@ -1240,6 +1240,110 @@ struct CrumbTests {
 
     // MARK: - History
 
+    /// Answers product questions until the kit question — the one carrying "End mission" — is the
+    /// pending interaction. Bounded so a reducer regression fails the test instead of hanging it.
+    @MainActor
+    private static func advanceToKitQuestion(_ model: AppModel) throws -> MissionPendingInteraction {
+        var turns = 0
+        while model.activeThread?.pendingInteraction?.kind == .productDecision, turns < 50 {
+            model.submitMissionOption("skip")
+            turns += 1
+        }
+        let interaction = try #require(model.activeThread?.pendingInteraction)
+        #expect(interaction.kind == .cartReview)
+        return interaction
+    }
+
+    /// The regression this whole change exists for. `recordKitToHistory()` had exactly one caller —
+    /// `openCart()` — so a kit that was assembled and then ended without ever tapping "Review cart"
+    /// was written nowhere a screen reads: its thread phase is terminal, so Home drops it, and
+    /// History is fed by `historyStore`, not `threadStore`. Nothing asserted this, which is why the
+    /// path could exist at all.
+    @Test("Ending a mission with a kept kit records it to History — without ever opening the cart")
+    @MainActor
+    func endingMissionWithKitWritesHistory() async throws {
+        let store = InMemoryHistoryStore()
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            historyStore: store
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        let kept = try #require(model.deck.first)
+        model.accept(kept)
+
+        let kitQuestion = try Self.advanceToKitQuestion(model)
+        #expect(kitQuestion.options.map(\.id).contains("end"))
+        #expect(model.kit.map(\.product.id) == [kept.id])
+        #expect(store.loadEntries().isEmpty)              // the cart was never opened
+
+        model.submitMissionOption("end")
+
+        // The write is fire-and-forget behind the async recap, exactly as the cart path is.
+        for _ in 0..<200 where store.loadEntries().isEmpty {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        let entry = try #require(store.loadEntries().first)
+        #expect(entry.items.map(\.productID) == [kept.id])
+        #expect(entry.title == SeedData.hike.title)
+        #expect(!entry.recapTag.isEmpty)
+        #expect(model.historyEntries.count == 1)
+        // The mission really did end: terminal phase, gone from Home, and now reachable in History.
+        #expect(model.activeThread?.phase == .completed)
+        #expect(model.incompleteThreads.contains { $0.id == model.activeThreadID } == false)
+    }
+
+    @Test("Ending a mission that kept nothing still records nothing")
+    @MainActor
+    func endingEmptyMissionWritesNothing() async throws {
+        let store = InMemoryHistoryStore()
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            historyStore: store
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+
+        _ = try Self.advanceToKitQuestion(model)          // skipped everything
+        model.submitMissionOption("end")
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(model.kit.isEmpty)
+        #expect(store.loadEntries().isEmpty)
+        #expect(model.historyEntries.isEmpty)
+    }
+
+    @Test("Opening the cart and then ending the mission upserts one entry, not two")
+    @MainActor
+    func cartThenEndKeepsOneEntry() async throws {
+        let store = InMemoryHistoryStore()
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile),
+            historyStore: store
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        model.accept(try #require(model.deck.first))
+        _ = try Self.advanceToKitQuestion(model)
+
+        model.submitMissionOption("review-cart")           // the original save trigger
+        for _ in 0..<200 where store.loadEntries().isEmpty {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let firstID = try #require(store.loadEntries().first).id
+
+        _ = try Self.advanceToKitQuestion(model)
+        model.submitMissionOption("end")                   // and now the new one
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(store.loadEntries().count == 1)
+        #expect(store.loadEntries().first?.id == firstID)
+    }
+
     @Test("Reaching the cart with a kit writes a snapshotted history entry (recap on the floor)")
     @MainActor
     func reachingCartWritesHistory() async throws {
