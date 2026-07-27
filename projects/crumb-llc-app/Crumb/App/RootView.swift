@@ -137,8 +137,9 @@ struct RootView: View {
     }
 }
 
-/// Slim top bar: back, brand, and one menu for secondary destinations. Keeping History, People,
-/// taste, and Siri behind one labeled affordance avoids a row of icon-only pseudo-tabs.
+/// Slim top bar: back, brand, History, and one menu for what's left. History earns its own control
+/// because finished missions are a primary noun here and the only route to re-shopping one; People,
+/// taste, and Siri stay behind one labeled affordance rather than becoming icon-only pseudo-tabs.
 struct AppHeader: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -174,14 +175,29 @@ struct AppHeader: View {
 
             Spacer()
 
-            Menu {
-                Button {
-                    model.openHistory()
-                } label: {
-                    Label("Mission history", systemImage: "clock.arrow.circlepath")
-                }
-                .accessibilityIdentifier("historyButton")
+            // History comes out from behind the ellipsis: finished missions are a primary noun in this
+            // product and the only route to re-shopping one. People and taste stay in the menu.
+            //
+            // There is deliberately no bag here. Crumb has no global cart — a kit lives on its own
+            // mission and `openCart()` operates on the *active* thread — so a Home-level bag count
+            // would have to sum unrelated missions and then couldn't say which one it opens. The dead
+            // end it was meant to fix is closed by the hero card's "Review the kit" instead.
+            Button {
+                model.openHistory()
+            } label: {
+                Label("History", systemImage: "clock.arrow.circlepath")
+                    .font(CrumbType.captionStrong)
+                    .foregroundStyle(CrumbColor.ink2)
+                    .labelStyle(.titleAndIcon)
+                    .padding(.horizontal, CrumbMetrics.Space.s)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Mission history")
+            .accessibilityIdentifier("historyButton")
 
+            Menu {
                 Button {
                     model.openPeople()
                 } label: {
@@ -209,7 +225,7 @@ struct AppHeader: View {
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("More options")
-            .accessibilityHint("Shows mission history, people, taste profile, and Siri")
+            .accessibilityHint("Shows people, taste profile, and Siri")
             .accessibilityIdentifier("moreMenu")
         }
         // Navigation chrome must remain recognizable at the largest accessibility sizes. Mission
