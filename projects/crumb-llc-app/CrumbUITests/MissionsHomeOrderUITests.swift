@@ -224,6 +224,88 @@ final class MissionsHomeOrderUITests: XCTestCase {
                              "With a full viewport the ask must come after the missions, not before")
     }
 
+    /// Home's hero renders its own frozen question and answers it without opening the mission first.
+    ///
+    /// Home used to have exactly one verb — go to the mission — so it announced that a decision was
+    /// needed and then sent you elsewhere to make it. These assertions are about the answer actually
+    /// committing, not about the buttons rendering: a screenshot proves the latter and nothing else.
+    @MainActor
+    func testHeroQuestionIsAnsweredWithoutOpeningTheMission() {
+        let app = launchSeededHome("missions-inbox")
+
+        let hero = element(app, "homeHero")
+        XCTAssertTrue(hero.exists)
+        // The question is quoted verbatim, because these options resolve that exact frozen question.
+        XCTAssertTrue(
+            app.staticTexts["“That turn didn’t finish. What next?”"].exists,
+            "The hero must quote the question its options answer"
+        )
+
+        let retry = app.buttons["homeHeroOption.retry"]
+        let cancel = app.buttons["homeHeroOption.cancel"]
+        XCTAssertTrue(retry.exists, "The hero must offer the interaction's own options")
+        XCTAssertTrue(cancel.exists)
+        // Options replace the navigation CTA rather than sitting alongside it — two competing primary
+        // actions on one card is how a person ends up tapping the wrong one.
+        XCTAssertFalse(
+            element(app, "homeHeroCallToAction").exists,
+            "An answerable hero must not also show its navigation CTA"
+        )
+
+        cancel.tap()
+
+        // The answer committed: the question's epoch ended, so its options are gone. This is the
+        // assertion that distinguishes a working control from a decorative one.
+        XCTAssertTrue(
+            retry.waitForNonExistence(timeout: 10),
+            "Answering must resolve the interaction, retiring its options"
+        )
+    }
+
+    /// Answering an option that *starts work* keeps you on Home while that work runs.
+    ///
+    /// `runRetry` → `startCurating()` only launches a background task; the route into the mission is set
+    /// later, inside `beginCuration`, once the gather resolves. So the immediate outcome of tapping
+    /// "Retry" is that the question retires and Home stays put — which is the whole claim of answering in
+    /// place, and worth pinning because it depends on `startCurating` not navigating eagerly.
+    ///
+    /// This deliberately does NOT assert the eventual route. That waits on the on-device model, whose
+    /// settle time is long and variable, and a test that races it would be flaky rather than useful.
+    @MainActor
+    func testAnsweringAnOptionThatStartsWorkKeepsYouOnHome() {
+        let app = launchSeededHome("missions-inbox")
+
+        let retry = app.buttons["homeHeroOption.retry"]
+        XCTAssertTrue(retry.exists)
+        retry.tap()
+
+        XCTAssertTrue(
+            retry.waitForNonExistence(timeout: 10),
+            "Answering must resolve the interaction, retiring its options"
+        )
+        XCTAssertTrue(
+            element(app, "MissionsScreen").exists,
+            "Starting work from Home must not navigate away from Home to do it"
+        )
+        XCTAssertTrue(element(app, "homeHero").exists, "The hero must survive answering its own question")
+    }
+
+    /// A hero with no options — or none at all — must not pretend to be answerable.
+    @MainActor
+    func testHeroWithoutOptionsFallsBackToOpeningTheMission() {
+        let app = launchSeededHome("missions-stalled")
+
+        XCTAssertTrue(element(app, "homeHero").exists)
+        XCTAssertTrue(
+            element(app, "homeHeroCallToAction").exists,
+            "Without an answerable question the hero must offer the mission instead"
+        )
+        XCTAssertEqual(
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'homeHeroOption.'")).count, 0,
+            "A hero with no installed interaction must not render option buttons"
+        )
+    }
+
     @MainActor
     func testStalledMissionsAreDistinguishableFromReadyOnes() {
         let app = launchSeededHome("missions-many")

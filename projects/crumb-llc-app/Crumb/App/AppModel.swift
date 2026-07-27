@@ -788,6 +788,47 @@ final class AppModel {
         )
     }
 
+    /// Answers a Home row's frozen question without opening the mission first.
+    ///
+    /// Home used to have exactly one verb — *go to the mission* — so it told you a decision was needed
+    /// and then sent you elsewhere to make it. That is a notification list rather than an inbox. The
+    /// question and its options are already frozen on the thread, and `MissionThread.validate(_:)` is a
+    /// pure check that never asks whether the thread is active, so the only thing standing in the way
+    /// was that `submitMissionAnswer` reads `activeThread`.
+    ///
+    /// Activation deliberately does NOT go through `resumeThread`: that supersedes the pending
+    /// interaction and installs a fresh retry question, which would discard the very question being
+    /// answered. `installActiveThread` sets the thread without touching its interaction.
+    ///
+    /// Navigation is left to the existing effects. Approving a plan still routes into the mission
+    /// because curation does that; a retry keeps you on Home and the row flips to "Crumb is working".
+    @discardableResult
+    func answerFromHome(_ thread: MissionThread, optionID: String) -> MissionSubmissionResult {
+        guard let interaction = thread.pendingInteraction,
+              thread.blockingRecovery == nil,
+              interaction.options.contains(where: { $0.id == optionID }) else { return .rejected }
+
+        // In-flight tasks belong to whichever thread was active. Leaving them running while a
+        // different thread becomes active would let their continuations mutate the wrong aggregate
+        // through `mutateActiveThread`. `resumeThread` cancels for the same reason, so opening a
+        // mission from Home already has this effect — answering from Home is not new exposure.
+        cancelOperations()
+        // The thread came from the store or from memory, so it is already durable; re-persisting an
+        // unchanged aggregate here would just add a write before the answer's own transaction.
+        installActiveThread(thread, persist: false)
+        guard activeThread?.id == thread.id else { return .rejected }
+
+        return submitMissionAnswer(
+            MissionInteractionSubmission(
+                threadID: thread.id,
+                interactionID: interaction.id,
+                interactionGeneration: interaction.interactionGeneration,
+                subjectRevision: interaction.subjectRevision,
+                answer: .option(id: optionID)
+            )
+        )
+    }
+
     @discardableResult
     func submitMissionAnswer(_ submission: MissionInteractionSubmission) -> MissionSubmissionResult {
         guard var thread = activeThread else { return .rejected }

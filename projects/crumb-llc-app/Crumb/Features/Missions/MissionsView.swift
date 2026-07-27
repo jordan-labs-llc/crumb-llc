@@ -130,6 +130,55 @@ private struct HomeHeroCard: View {
         }
     }
 
+    /// The hero's own frozen question, when Home can actually finish answering it.
+    ///
+    /// Options are the requirement: a free-text-only question needs a field Home does not have, and a
+    /// thread under blocking recovery must not be answered at all. In both cases the hero falls back to
+    /// opening the mission rather than showing a control that dead-ends.
+    private var answerableInteraction: MissionPendingInteraction? {
+        guard let interaction = thread.pendingInteraction,
+              thread.blockingRecovery == nil,
+              !interaction.options.isEmpty else { return nil }
+        return interaction
+    }
+
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: CrumbMetrics.Space.xs) {
+            Text(title)
+                .font(CrumbType.title2)
+                .foregroundStyle(CrumbColor.ink)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(detail)
+                .font(CrumbType.caption)
+                .foregroundStyle(CrumbColor.ink2)
+                .lineLimit(3)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !thread.kit.isEmpty {
+                HStack(spacing: CrumbMetrics.Space.xs) {
+                    ForEach(thread.kit.prefix(4), id: \.id) { item in
+                        ProductThumbnail(
+                            product: item.product,
+                            size: 44,
+                            cornerRadius: 10,
+                            glyphSize: 16,
+                            strokeColor: CrumbColor.line,
+                            strokeWidth: 1
+                        )
+                    }
+                }
+                .padding(.top, 2)
+                .accessibilityHidden(true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
             HStack(spacing: CrumbMetrics.Space.xs) {
@@ -145,52 +194,71 @@ private struct HomeHeroCard: View {
             }
             .accessibilityElement(children: .combine)
 
+            // The summary is its own tap target so the answer controls below can be real buttons.
+            // Nesting them inside one card-sized Button would make only the outer one reachable.
             Button {
                 model.resumeThread(thread)
             } label: {
-                VStack(alignment: .leading, spacing: CrumbMetrics.Space.xs) {
-                    Text(title)
-                        .font(CrumbType.title2)
-                        .foregroundStyle(CrumbColor.ink)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                summary
+            }
+            .buttonStyle(.plain)
+            // "Continue" deliberately, matching every row below: it is the word the resume affordance
+            // has always announced itself with, and both automation and VoiceOver users look for it.
+            // When the hero is answerable this button is the only thing carrying it, because the card
+            // container stops being a single button.
+            .accessibilityLabel("Continue \(title), \(detail), \(when)")
+            .accessibilityIdentifier("homeHeroOpen")
 
-                    Text(detail)
-                        .font(CrumbType.caption)
-                        .foregroundStyle(CrumbColor.ink2)
-                        .lineLimit(3)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+            if let interaction = answerableInteraction {
+                // Quote the question rather than paraphrasing it: these options resolve *that* exact
+                // frozen question, and answering something subtly different from what Crumb asked is
+                // how a person loses trust in a one-tap control.
+                Text("“\(interaction.question)”")
+                    .font(CrumbType.curatorCaption)
+                    .foregroundStyle(CrumbColor.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
 
-                    if !thread.kit.isEmpty {
-                        HStack(spacing: CrumbMetrics.Space.xs) {
-                            ForEach(thread.kit.prefix(4), id: \.id) { item in
-                                ProductThumbnail(
-                                    product: item.product,
-                                    size: 44,
-                                    cornerRadius: 10,
-                                    glyphSize: 16,
-                                    strokeColor: CrumbColor.line,
-                                    strokeWidth: 1
-                                )
-                            }
+                // The interaction contract caps questions at four options; `prefix` makes that a
+                // layout guarantee here rather than a promise made elsewhere.
+                VStack(spacing: CrumbMetrics.Space.xs) {
+                    ForEach(Array(interaction.options.prefix(4).enumerated()), id: \.element.id) { index, option in
+                        Button {
+                            model.answerFromHome(thread, optionID: option.id)
+                        } label: {
+                            Text(option.label)
+                                .font(CrumbType.pill)
+                                .foregroundStyle(index == 0 ? CrumbColor.paper : CrumbColor.pine)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .background {
+                                    if index == 0 {
+                                        Capsule().fill(CrumbColor.pine)
+                                    } else {
+                                        Capsule().strokeBorder(CrumbColor.pine, lineWidth: 1)
+                                    }
+                                }
                         }
-                        .padding(.top, 2)
-                        .accessibilityHidden(true)
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("homeHeroOption.\(option.id)")
                     }
-
+                }
+                .padding(.top, CrumbMetrics.Space.xs)
+            } else {
+                // No options — or a question that only takes free text — so Home cannot finish the
+                // job. Offer the mission instead of controls that would dead-end.
+                Button {
+                    model.resumeThread(thread)
+                } label: {
                     Text(callToAction)
                         .font(CrumbType.pill)
                         .foregroundStyle(CrumbColor.paper)
                         .frame(maxWidth: .infinity, minHeight: 44)
                         .background(CrumbColor.pine, in: Capsule())
-                        .padding(.top, CrumbMetrics.Space.xs)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .padding(.top, CrumbMetrics.Space.xs)
+                .accessibilityIdentifier("homeHeroCallToAction")
             }
-            .buttonStyle(.plain)
         }
         .padding(CrumbMetrics.Space.m)
         .background(CrumbColor.raised, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
@@ -198,12 +266,21 @@ private struct HomeHeroCard: View {
             RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous)
                 .strokeBorder(state == .stalled ? CrumbColor.ochre.opacity(0.45) : CrumbColor.line, lineWidth: 1)
         )
-        // One element for VoiceOver: the whole card is one destination, and the row's own label
-        // already carries the state, the reason and the age.
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(sectionLabel). Continue \(title), \(detail), \(when)")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction { model.resumeThread(thread) }
+        // The container's accessibility shape has to follow what the card actually offers. When the
+        // hero is answerable it holds several real controls, so `.ignore` would flatten it to one
+        // element and make the options unreachable by VoiceOver — the exact people most helped by
+        // answering without navigating. Only the single-destination case collapses.
+        .accessibilityElement(children: answerableInteraction == nil ? .ignore : .contain)
+        .accessibilityLabel(
+            answerableInteraction == nil
+                ? "\(sectionLabel). Continue \(title), \(detail), \(when)"
+                : "\(sectionLabel). \(title), \(detail), \(when)"
+        )
+        .accessibilityAddTraits(answerableInteraction == nil ? [.isButton] : [])
+        .accessibilityAction {
+            guard answerableInteraction == nil else { return }
+            model.resumeThread(thread)
+        }
         .accessibilityIdentifier("homeHero")
     }
 }
