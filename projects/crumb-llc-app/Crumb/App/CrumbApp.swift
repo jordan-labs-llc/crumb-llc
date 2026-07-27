@@ -152,6 +152,9 @@ struct CrumbApp: App {
     /// built. Under the composer screenshot env it's seeded so the "Recent" chips render.
     private static func makeRecentsStore(container: ModelContainer?) -> any RecentMissionsStore {
         #if DEBUG
+        // "composer" seeds recents, because the dock now offers your own recent goals. Every other
+        // screenshot mode — including "composer-examples", which exists precisely to cover the
+        // no-recents fallback — falls through to an empty store.
         if ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] == "composer" {
             return InMemoryRecentMissionsStore(["Make my desk feel calm", "Pack me for a rainy weekend hike"])
         }
@@ -211,6 +214,10 @@ struct CrumbApp: App {
             case "missions-one": return InMemoryMissionThreadStore(seededThreads(count: 1))
             case "missions-many": return InMemoryMissionThreadStore(seededThreads(count: 8))
             case "missions-cap": return InMemoryMissionThreadStore(seededThreads(count: InMemoryMissionThreadStore.cap))
+            // The hero renders whatever the most recent mission *has*, so the stalled hero is its own
+            // composition — and no other fixture produces it, because `seededThreads` always makes the
+            // newest thread a settled deck with kept items.
+            case "missions-stalled": return InMemoryMissionThreadStore(seededStalledThreads())
             default: return InMemoryMissionThreadStore()
             }
         }
@@ -220,6 +227,35 @@ struct CrumbApp: App {
     }
 
     #if DEBUG
+    /// A Home whose most recent mission is a stall carrying its own failure sentence, plus one thread
+    /// still in flight. This is the composition where the hero has no deliverable to show and must
+    /// state why it stopped instead.
+    private static func seededStalledThreads() -> [MissionThread] {
+        let now = Date()
+        var stalled = MissionThread(
+            goal: "Replace my worn-out running shoes",
+            taste: SeedData.defaultTasteProfile,
+            now: now.addingTimeInterval(-2 * 24 * 3600)
+        )
+        stalled.phase = .failed
+        stalled.appendEvent(
+            kind: .failure,
+            text: "I searched six shops and found nothing under $90. The closest fit I trust is $124.",
+            createdAt: now.addingTimeInterval(-2 * 24 * 3600)
+        )
+        stalled.updatedAt = now.addingTimeInterval(-2 * 24 * 3600)
+
+        var working = MissionThread(
+            goal: "Set up my pour-over corner",
+            taste: SeedData.defaultTasteProfile,
+            now: now.addingTimeInterval(-3 * 24 * 3600)
+        )
+        working.phase = .gathering
+        working.updatedAt = now.addingTimeInterval(-3 * 24 * 3600)
+
+        return [stalled, working]
+    }
+
     /// Deterministic unfinished threads for the Missions-landing screenshot routes. Distinct
     /// `updatedAt` values keep the store's recency sort meaningful, and the phases are spread so
     /// the Continue rows exercise more than one status string.

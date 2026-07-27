@@ -28,7 +28,14 @@ final class MissionEntryAccessibilityUITests: XCTestCase {
     @MainActor
     func testMissionEntryUsesOneBottomComposerAndStagesExamples() {
         let app = XCUIApplication()
-        app.launchEnvironment["CRUMB_SCREENSHOT"] = "composer"   // seeded profile → lands on Missions
+        // "composer-examples" lands on an empty Missions page with NO recent goals, which is the only
+        // state where the starter examples show: the dock now prefers your own recents, so under plain
+        // "composer" these ids are `recent-*` instead. See the recents coverage below.
+        app.launchEnvironment["CRUMB_SCREENSHOT"] = "composer-examples"
+        // The simulator defaults to an accessibility content size, at which the starter chips
+        // deliberately collapse into a "Try an example" disclosure menu and these per-suggestion ids
+        // do not exist. Pin a normal size so this test covers the chip path it is describing.
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
         app.launch()
 
         let dock = app.descendants(matching: .any).matching(identifier: "missionResponseDock").firstMatch
@@ -53,17 +60,50 @@ final class MissionEntryAccessibilityUITests: XCTestCase {
                       "Staging an example must not submit it")
     }
 
+    /// Your own recent goals replace the teaching examples once you have any — the recents store has
+    /// been written after every mission since it was added, and until Home v2 no view read it.
     @MainActor
-    func testSecondaryDestinationsLiveInOneHeaderMenu() {
+    func testRecentGoalsReplaceTheStarterExamples() {
+        let app = XCUIApplication()
+        app.launchEnvironment["CRUMB_SCREENSHOT"] = "composer"   // seeds two recent goals
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
+        app.launch()
+
+        let firstRecent = app.buttons["newMissionSuggestion.recent-0"]
+        XCTAssertTrue(firstRecent.waitForExistence(timeout: 20),
+                      "The dock must offer your own recent goals when there are any")
+        XCTAssertEqual(firstRecent.label, "Make my desk feel calm")
+
+        // The hardcoded examples must not persist alongside them — that was the defect: a person on
+        // their fortieth mission was still being offered "Premium jasmine tea".
+        XCTAssertFalse(app.buttons["newMissionSuggestion.jasmine-tea"].exists,
+                       "The starter examples must retire once there are recents")
+
+        firstRecent.tap()
+        let field = app.descendants(matching: .any).matching(identifier: "missionResponseField").firstMatch
+        XCTAssertEqual(field.value as? String, "Make my desk feel calm",
+                       "Tapping a recent must stage it without submitting")
+    }
+
+    @MainActor
+    func testHistoryIsTopLevelAndTheRestLiveInOneHeaderMenu() {
         let app = XCUIApplication()
         app.launchEnvironment["CRUMB_SCREENSHOT"] = "composer"
         app.launch()
 
+        // History came out from behind the ellipsis: finished missions are a primary noun here and the
+        // only route to re-shopping one. It must be reachable without opening the menu.
+        let history = app.buttons["historyButton"]
+        XCTAssertTrue(history.waitForExistence(timeout: 20),
+                      "History must be a top-level header control")
+
         let more = app.descendants(matching: .any).matching(identifier: "moreMenu").firstMatch
-        XCTAssertTrue(more.waitForExistence(timeout: 20))
+        XCTAssertTrue(more.exists)
+        XCTAssertLessThan(history.frame.minX, more.frame.minX,
+                          "History must sit beside the menu, not inside it")
         more.tap()
 
-        for identifier in ["historyButton", "peopleButton", "tasteProfileButton", "siriButton"] {
+        for identifier in ["peopleButton", "tasteProfileButton", "siriButton"] {
             XCTAssertTrue(
                 app.descendants(matching: .any).matching(identifier: identifier).firstMatch.waitForExistence(timeout: 5),
                 "More menu lost \(identifier)"

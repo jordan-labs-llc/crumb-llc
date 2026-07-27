@@ -25,11 +25,26 @@ struct MissionResponseDock: View {
         self.mode = mode
     }
 
-    private static let newMissionSuggestions: [MissionStarterSuggestion] = [
+    /// Shown only to someone with no recent goals of their own. These used to be unconditional, so a
+    /// person on their fortieth mission was still being offered "Premium jasmine tea" as an example.
+    private static let starterExamples: [MissionStarterSuggestion] = [
         MissionStarterSuggestion(id: "jasmine-tea", label: "Premium jasmine tea", prompt: "Find premium jasmine tea"),
         MissionStarterSuggestion(id: "pour-over", label: "Pour-over corner", prompt: "Set up my pour-over corner"),
         MissionStarterSuggestion(id: "rainy-hike", label: "Rainy hike", prompt: "Pack me for a rainy weekend hike"),
     ]
+
+    /// Your own recent goals when there are any, the teaching examples otherwise.
+    ///
+    /// `AppModel.recentGoals` has been loaded at launch and written after every mission since the
+    /// recents store was added, and until now no view read it — a whole persisted store with no
+    /// surface, while the space it belongs in held three hardcoded strings.
+    private var newMissionSuggestions: [MissionStarterSuggestion] {
+        let recents = model.recentGoals.prefix(3)
+        guard !recents.isEmpty else { return Self.starterExamples }
+        return recents.enumerated().map { index, goal in
+            MissionStarterSuggestion(id: "recent-\(index)", label: goal, prompt: goal)
+        }
+    }
 
     private var state: MissionDockState? {
         guard case .activeMission = mode else { return nil }
@@ -239,23 +254,40 @@ struct MissionResponseDock: View {
 
     // MARK: New mission
 
+    /// True once Home has any mission to show. The dock then collapses to a single line: with work on
+    /// screen the greeting, the recipient control and the starter chips are all competing with content
+    /// that earned the space, and the field alone still says what it wants.
+    private var isCollapsed: Bool {
+        guard case .newMission = mode else { return false }
+        return !model.incompleteThreads.isEmpty
+    }
+
+    /// Collapsed, the field is the only thing left, so it has to carry the invitation the greeting was
+    /// carrying above it.
+    private var newMissionPlaceholder: String {
+        if model.isPlanning { return "Starting your mission…" }
+        return isCollapsed ? "Start something new…" : "Describe it in your own words…"
+    }
+
     private var newMissionContents: some View {
         VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
-            HStack(spacing: CrumbMetrics.Space.s) {
-                newMissionRecipientAccessory
-                Spacer(minLength: 0)
+            if !isCollapsed {
+                HStack(spacing: CrumbMetrics.Space.s) {
+                    newMissionRecipientAccessory
+                    Spacer(minLength: 0)
+                }
+
+                newMissionSuggestionChoices
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("newMissionSuggestions")
+
+                Divider().foregroundStyle(CrumbColor.line)
             }
-
-            newMissionSuggestionChoices
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("newMissionSuggestions")
-
-            Divider().foregroundStyle(CrumbColor.line)
 
             MissionTextInputRow(
                 text: draft,
                 focused: $focused,
-                placeholder: model.isPlanning ? "Starting your mission…" : "Describe it in your own words…",
+                placeholder: newMissionPlaceholder,
                 isEnabled: !model.isPlanning,
                 fieldIdentifier: "missionResponseField",
                 sendIdentifier: "missionResponseSend",
@@ -278,7 +310,7 @@ struct MissionResponseDock: View {
     private var newMissionSuggestionChoices: some View {
         if dynamicTypeSize.isAccessibilitySize {
             Menu {
-                ForEach(Self.newMissionSuggestions) { suggestion in
+                ForEach(newMissionSuggestions) { suggestion in
                     Button(suggestion.label) { stage(suggestion) }
                 }
             } label: {
@@ -308,7 +340,7 @@ struct MissionResponseDock: View {
 
     @ViewBuilder
     private var suggestionButtons: some View {
-        ForEach(Self.newMissionSuggestions) { suggestion in
+        ForEach(newMissionSuggestions) { suggestion in
             Button { stage(suggestion) } label: {
                 Text(suggestion.label)
                     .font(CrumbType.captionStrong)
@@ -356,10 +388,22 @@ struct MissionResponseDock: View {
                 Label("Add someone", systemImage: "person.badge.plus")
             }
         } label: {
-            Label(model.composerRecipient?.name ?? "For you", systemImage: "gift")
-                .font(CrumbType.captionStrong)
-                .foregroundStyle(CrumbColor.ink2)
-                .frame(minHeight: 44)
+            // This used to read "For you" with a gift glyph, in caption weight, directly above the
+            // chip row — so the one control that changes who a mission is for looked like a section
+            // heading *for* the chips. Naming the action and showing a disclosure chevron is what
+            // makes it read as something you can tap.
+            HStack(spacing: 3) {
+                Text("Shopping for")
+                    .foregroundStyle(CrumbColor.ink3)
+                Text(model.composerRecipient?.name ?? "You")
+                    .foregroundStyle(CrumbColor.ink)
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(CrumbColor.ink3)
+            }
+            .font(CrumbType.captionStrong)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
         }
         .accessibilityLabel("Shopping for \(model.composerRecipient?.name ?? "yourself")")
         .accessibilityIdentifier("composerRecipientAccessory")
