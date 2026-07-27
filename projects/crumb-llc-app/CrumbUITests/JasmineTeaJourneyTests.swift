@@ -14,6 +14,13 @@ final class JasmineTeaJourneyTests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["CRUMB_UITEST"] = "1"   // no CRUMB_SCREENSHOT -> live broker
+        // Launch into an empty app. Nothing resets the simulator between tests, all three tests
+        // here shop the same goal, and they run alphabetically — so the purchase journey's mission
+        // is still in the thread store when the mid-gather test sends the same goal. The app then
+        // resumes that settled mission rather than gathering, and the test waits out its full 120s
+        // for a "Searching the shops…" dock that never comes. It survives across *runs* too, which
+        // is why the failure repeats once it starts. Store isolation only — seams stay live.
+        app.launchEnvironment["CRUMB_UITEST_RESET_STORE"] = "1"
         // Pin Dynamic Type instead of inheriting whatever the device is set to. This journey reads
         // the conversation itself — inline dock options and the status lines in the feed — and at an
         // accessibility size the dock folds its options behind `missionResponseChoiceDisclosure`

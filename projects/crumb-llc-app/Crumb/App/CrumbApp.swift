@@ -103,12 +103,20 @@ struct CrumbApp: App {
     /// no on-disk container is needed.
     private static func makeSharedContainer() -> ModelContainer? {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["CRUMB_SCREENSHOT"] != nil { return nil }
-        if ProcessInfo.processInfo.environment["CRUMB_UITEST_PERSISTENT_MOCK"] == "1" {
+        let env = ProcessInfo.processInfo.environment
+        if env["CRUMB_SCREENSHOT"] != nil { return nil }
+        // Two independent reasons to keep off the real store, and a test may want either one.
+        // `PERSISTENT_MOCK` is the deterministic suites, which also swap every seam for a rule-based
+        // double. `RESET_STORE` is just "launch into an empty app", which the *live* journeys need
+        // without the mocking: they assert on a real gather, and a mission left behind by an earlier
+        // test — or by an earlier run of the same suite — makes the app resume a settled mission
+        // instead. Either flag moves the container off `default.store`, so a reset can never reach
+        // the real one.
+        if env["CRUMB_UITEST_PERSISTENT_MOCK"] == "1" || env["CRUMB_UITEST_RESET_STORE"] == "1" {
             do {
                 let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                     .appendingPathComponent("MissionThreadUITests", isDirectory: true)
-                if ProcessInfo.processInfo.environment["CRUMB_UITEST_RESET_STORE"] == "1" {
+                if env["CRUMB_UITEST_RESET_STORE"] == "1" {
                     try? FileManager.default.removeItem(at: root)
                 }
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
