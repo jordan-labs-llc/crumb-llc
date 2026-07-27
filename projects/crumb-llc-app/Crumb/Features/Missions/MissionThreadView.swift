@@ -35,6 +35,12 @@ private struct MissionConversationFeed: View {
 
     private let endID = "missionFeedEnd"
 
+    /// How far past the viewport the end marker may sit while the feed still counts as "at the
+    /// latest". It has to cover everything laid out below the last turn — the stack's own bottom
+    /// padding — or resting exactly at the bottom leaves the marker a hair over the line and floats a
+    /// "Jump to latest" button over a card that is already fully visible.
+    private let endVisibilitySlack = CrumbMetrics.Space.l + CrumbMetrics.Space.s
+
     var body: some View {
         GeometryReader { viewport in
             ScrollViewReader { proxy in
@@ -45,6 +51,12 @@ private struct MissionConversationFeed: View {
                         // stay in the domain timeline but out of the conversation.
                         ForEach(thread.timeline.filter(\.isRenderedTurn)) { event in
                             MissionTurnView(event: event)
+                                // `position(...)` bottom-anchors the live prompt, which lands its
+                                // last line flush on the dock seam — the question was reading as
+                                // clipped mid-letterform under the divider. The gap has to belong to
+                                // this row: the stack's own bottom padding sits outside the anchored
+                                // frame, so it can't hold the seam open.
+                                .padding(.bottom, isLivePrompt(event) ? CrumbMetrics.Space.l : 0)
                                 .id(event.id)
                         }
 
@@ -67,7 +79,7 @@ private struct MissionConversationFeed: View {
                 .scrollDismissesKeyboard(.interactively)
                 .accessibilityIdentifier("missionConversationFeed")
                 .onPreferenceChange(MissionFeedEndPreferenceKey.self) { endY in
-                    isLatestVisible = endY <= viewport.size.height + CrumbMetrics.Space.l
+                    isLatestVisible = endY <= viewport.size.height + endVisibilitySlack
                 }
                 .onScrollPhaseChange { _, newPhase in
                     // Programmatic positioning enters `.animating`; only direct tracking/interacting
@@ -134,6 +146,11 @@ private struct MissionConversationFeed: View {
                 }
             }
         }
+    }
+
+    /// The turn carrying the question currently awaiting an answer — the one `position(...)` anchors.
+    private func isLivePrompt(_ event: MissionThreadEvent) -> Bool {
+        event.id == thread.pendingInteraction?.promptEventID
     }
 
     private func position(
