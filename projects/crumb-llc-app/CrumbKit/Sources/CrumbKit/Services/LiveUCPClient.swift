@@ -438,10 +438,10 @@ private extension BrokerProduct {
         return palettes[index]
     }
 
+    /// The shop-shaped display name for a seller domain. The catalog carries no seller name (see
+    /// ``ShopNameHygiene``), so the domain is all there is — the policy lives next to
+    /// ``TitleHygiene`` rather than here, since the cart, cards, and history all render its output.
     func prettyShopName(_ domain: String?) -> String? {
-        guard let domain else { return nil }
-        return domain
-            .replacingOccurrences(of: ".myshopify.com", with: "")
-            .replacingOccurrences(of: "www.", with: "")
+        ShopNameHygiene.display(for: domain)
     }
 }
