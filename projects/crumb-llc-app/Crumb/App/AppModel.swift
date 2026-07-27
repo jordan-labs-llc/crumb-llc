@@ -857,16 +857,26 @@ final class AppModel {
         }
 
         let displayAnswer: String
+        // A tapped chip and a typed sentence become the same `.userMessage`, so the id of the chosen
+        // option rides along to tell them apart later. Only prose is irreplaceable.
+        let chosenOptionID: String?
         switch submission.answer {
-        case .option(let id): displayAnswer = interaction.options.first(where: { $0.id == id })?.label ?? id
-        case .freeText(let text): displayAnswer = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .option(let id):
+            displayAnswer = interaction.options.first(where: { $0.id == id })?.label ?? id
+            chosenOptionID = id
+        case .freeText(let text):
+            displayAnswer = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            chosenOptionID = nil
         }
 
         do { try thread.resolveInteraction(submission) }
         catch { return .rejected }
         thread.revision += 1
         thread.updatedAt = clock()
-        thread.appendEvent(kind: .userMessage, text: displayAnswer, createdAt: clock(), operationID: submission.idempotencyID)
+        thread.appendEvent(
+            kind: .userMessage, text: displayAnswer, createdAt: clock(),
+            operationID: submission.idempotencyID, chosenOptionID: chosenOptionID
+        )
 
         var effect: MissionReducerEffect?
         interactionConstructionFailure = nil

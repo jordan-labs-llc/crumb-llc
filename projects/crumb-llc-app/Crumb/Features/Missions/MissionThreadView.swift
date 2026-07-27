@@ -2,14 +2,21 @@ import SwiftUI
 import CrumbKit
 import CrumbArt
 
-/// One chronological mission conversation. The feed is immutable scrollback; the response dock is
-/// the only place a person can answer Crumb or mutate mission state.
+/// One mission, led by its deliverable.
+///
+/// The kit is pinned at the top, the live decision sits at the bottom of the conversation, and the
+/// dock remains the only place a person can answer Crumb or mutate mission state. The feed itself is
+/// still immutable scrollback — it just no longer owns the screen, and no longer narrates every
+/// internal step it took to get here.
 struct MissionThreadView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         if let thread = model.activeThread {
             MissionConversationFeed(thread: thread)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    MissionKitHeader(thread: thread)
+                }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     MissionResponseDock()
                 }
@@ -32,6 +39,11 @@ private struct MissionConversationFeed: View {
     @State private var isLatestVisible = true
     @State private var hasUserScrolled = false
     @State private var positionedInteractionID: String?
+    /// Which settled picks the person has re-opened, held here rather than in the row.
+    ///
+    /// `LazyVStack` discards off-screen rows, so per-row `@State` would silently re-collapse a pick the
+    /// moment it scrolled out of view — exactly when someone is scrolling up to compare two of them.
+    @State private var expandedPicks: Set<String> = []
 
     private let endID = "missionFeedEnd"
 
@@ -46,11 +58,17 @@ private struct MissionConversationFeed: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: CrumbMetrics.Space.l) {
-                        // Bookkeeping markers (gather started, refinement requested) narrate
-                        // nothing the neighboring activity receipt doesn't already say — they
-                        // stay in the domain timeline but out of the conversation.
-                        ForEach(thread.timeline.filter(\.isRenderedTurn)) { event in
-                            MissionTurnView(event: event)
+                        // Bookkeeping never reaches the conversation: it stays in the domain
+                        // timeline (and in History) but the screen no longer reads a line for every
+                        // internal step. See `isRenderedTurn`.
+                        ForEach(renderedTimeline) { event in
+                            MissionTurnView(
+                                event: event,
+                                isSettledPick: !isLivePrompt(event),
+                                decision: decision(for: event),
+                                isExpanded: expandedPicks.contains(event.id),
+                                onToggleExpansion: { toggleExpansion(of: event) }
+                            )
                                 // `position(...)` bottom-anchors the live prompt, which lands its
                                 // last line flush on the dock seam — the question was reading as
                                 // clipped mid-letterform under the divider. The gap has to belong to
@@ -148,9 +166,36 @@ private struct MissionConversationFeed: View {
         }
     }
 
+    /// The turns the conversation actually reads.
+    private var renderedTimeline: [MissionThreadEvent] {
+        thread.timeline.filter { event in
+            guard event.isRenderedTurn else { return false }
+            // A working pill is a live status, not a record. Once it is no longer the question on the
+            // table, its settled checkmark is process residue — and the pinned header's own pulse has
+            // taken over the job of saying Crumb is busy.
+            if event.isWorkingPill { return isLivePrompt(event) }
+            return true
+        }
+    }
+
     /// The turn carrying the question currently awaiting an answer — the one `position(...)` anchors.
     private func isLivePrompt(_ event: MissionThreadEvent) -> Bool {
         event.id == thread.pendingInteraction?.promptEventID
+    }
+
+    private func toggleExpansion(of event: MissionThreadEvent) {
+        if expandedPicks.contains(event.id) {
+            expandedPicks.remove(event.id)
+        } else {
+            expandedPicks.insert(event.id)
+        }
+    }
+
+    /// What was decided about this turn's product, if it carries one. Drives the collapsed row's
+    /// glyph, so a settled pick reads as kept or passed rather than merely old.
+    private func decision(for event: MissionThreadEvent) -> MissionProductDecision.Kind? {
+        guard let productID = event.productID else { return nil }
+        return thread.decisions.last { $0.productID == productID }?.kind
     }
 
     private func position(
@@ -172,14 +217,67 @@ private struct MissionConversationFeed: View {
 }
 
 private extension MissionThreadEvent {
-    /// Domain bookkeeping markers whose visible text merely repeats the adjacent activity
-    /// receipt. They remain in the persisted timeline; the conversation just doesn't read
-    /// the same line twice.
+    /// Whether this event is part of the conversation, or merely part of the record.
+    ///
+    /// A five-part kit used to accumulate around fifteen permanent receipt lines — "Found 2 options so
+    /// far.", "Found 5 options so far.", "5 picks ready to explore.", "Added Tabletop Burr Grinder." —
+    /// one per internal step, none of them expiring. That is the run-log console Crumb decided not to
+    /// inherit; it arrived anyway, one receipt at a time.
+    ///
+    /// So the screen now reports outcomes, not process. Everything a person could not have worked out
+    /// for themselves still renders: what Crumb said, what they said, the picks, and — crucially —
+    /// every failure, interruption and notice. What goes is the narration of work whose result is
+    /// already on screen. On a clean run this leaves nothing behind at all, which is the honest
+    /// version of a progress log for an agent that can simply show you the progress: the pinned
+    /// ``MissionKitHeader`` carries the count, the subtotal and the "Crumb is working…" pulse.
+    ///
+    /// Nothing is deleted — the full timeline stays persisted and reaches History untouched.
+    /// The test that separates the two: *did anyone ask?* Unsolicited narration of work whose result
+    /// is already on screen goes. A reply to something the person did — especially something they
+    /// typed in their own words — stays, even when it is technically a receipt. A conversation that
+    /// silently swallows the answer to "make it cheaper" reads as one that ignored you.
     var isRenderedTurn: Bool {
         switch kind {
-        case .gatheringStarted, .refinementRequested: false
-        default: true
+        case .gatheringStarted, .refinementRequested,
+             .productsFound, .gatheringCompleted,
+             .productAdded, .productSkipped, .productRemoved,
+             .variantChanged, .cartOpened:
+            return false
+        // Both are Crumb answering a request, not narrating itself. `refinementApplied` reports the
+        // *scope* of a rework ("I updated the remaining picks"), which a single new card does not
+        // convey, and `refinementsReset` announces a state change — the deck returning to baseline —
+        // that has no other visible trace at all.
+        case .refinementApplied, .refinementsReset:
+            return true
+        // Tapping "Add" wrote a bubble reading "Add" — Crumb's own chip label, quoted back at the
+        // person who just pressed it — and the pick directly above it now says "Kept" in its own
+        // right. Five picks meant five such echoes, each costing a full row. A choice is legible from
+        // its consequence; typed prose is the one thing in a thread nothing else preserves, so that
+        // always renders.
+        case .userMessage:
+            return chosenOptionID == nil
+        case .assistantMessage, .planningStarted, .planReady,
+             .failure, .interrupted, .notice:
+            return true
         }
+    }
+
+    /// A working turn: no prose of its own, just an activity pill. Live it is the question on the
+    /// table ("Toss in tweaks while I search…"); settled it is a checkmark narrating finished work,
+    /// which is the header's job now.
+    var isWorkingPill: Bool {
+        guard text.isEmpty, blocks.count == 1, case .activity = blocks[0] else { return false }
+        return true
+    }
+
+    /// The single frozen product this turn proposes, if that is what it is. Comparison and kit
+    /// artifacts are deliberately excluded: they are summaries already, and there are never many.
+    var proposedProduct: MissionProductSnapshot? {
+        guard blocks.count(where: { if case .product = $0 { true } else { false } }) == 1 else { return nil }
+        for block in blocks {
+            if case .product(let snapshot) = block { return snapshot }
+        }
+        return nil
     }
 }
 
@@ -190,10 +288,31 @@ private struct MissionFeedEndPreferenceKey: PreferenceKey {
 
 private struct MissionTurnView: View {
     let event: MissionThreadEvent
+    /// True for every turn except the one currently being asked about.
+    var isSettledPick = false
+    /// What was decided about this turn's product, when it carries one.
+    var decision: MissionProductDecision.Kind?
+    /// Owned by the feed, so scrolling a re-opened pick out of view doesn't fold it back up.
+    var isExpanded = false
+    var onToggleExpansion: () -> Void = {}
+
+    /// A pick you have already answered collapses to the two facts that still matter — what, and how
+    /// much. Its full card cost around 450pt of art and five lines of rationale, and a five-part kit
+    /// left three-plus screens of settled history between a person and the live question.
+    ///
+    /// It collapses rather than disappears, and re-expands in place, because the rationale is the
+    /// record of *why* Crumb chose this — which is exactly what someone about to authorize a
+    /// multi-merchant charge may want to re-read. Per-item and opt-in, so Crumb's voice survives
+    /// without being charged to everyone's scroll.
+    private var collapsesPick: Bool {
+        isSettledPick && !isExpanded && event.proposedProduct != nil
+    }
 
     var body: some View {
         Group {
-            if event.kind == .userMessage {
+            if collapsesPick, let snapshot = event.proposedProduct {
+                MissionSettledPickRow(snapshot: snapshot, decision: decision, onExpand: onToggleExpansion)
+            } else if event.kind == .userMessage {
                 userTurn
             } else if isAssistantTurn {
                 assistantTurn
@@ -235,12 +354,31 @@ private struct MissionTurnView: View {
                 if placesQuestionAfterArtifacts {
                     artifactBlocks
                     assistantText
+                    collapseControl
                 } else {
                     assistantText
                     artifactBlocks
+                    collapseControl
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// The way back out of a re-expanded pick. Only a settled one can be folded up again — the live
+    /// proposal is the thing being asked about and always stays open.
+    @ViewBuilder
+    private var collapseControl: some View {
+        if isSettledPick, isExpanded, event.proposedProduct != nil {
+            Button(action: onToggleExpansion) {
+                Label("Show less", systemImage: "chevron.up")
+                    .font(CrumbType.captionStrong)
+                    .foregroundStyle(CrumbColor.ink2)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("missionCollapsePick.\(event.id)")
         }
     }
 
@@ -316,6 +454,90 @@ private struct MissionTurnView: View {
     }
 }
 
+/// A pick you have already answered, folded down to what, how much, and which way you went.
+///
+/// Deliberately not a card: it is a line in a ledger, and it should not compete with the one live
+/// proposal on screen. Tapping it restores the full frozen card including Crumb's rationale.
+private struct MissionSettledPickRow: View {
+    let snapshot: MissionProductSnapshot
+    let decision: MissionProductDecision.Kind?
+    let onExpand: () -> Void
+
+    private var glyph: String {
+        switch decision {
+        case .added: return "checkmark"
+        case .skipped: return "arrow.uturn.forward"
+        case .removed: return "minus"
+        case .variantChanged: return "slider.horizontal.3"
+        case nil: return "circle.dotted"
+        }
+    }
+
+    /// Only a kept item earns the pine tint. A pass reads as neutral — it is not a failure, and
+    /// tinting it would make a browsed-and-declined product look like a problem.
+    private var isKept: Bool { decision == .added || decision == .variantChanged }
+
+    private var decisionWord: String {
+        switch decision {
+        case .added: return "Kept"
+        case .skipped: return "Passed"
+        case .removed: return "Removed"
+        case .variantChanged: return "Kept, changed"
+        case nil: return "Seen"
+        }
+    }
+
+    var body: some View {
+        Button(action: onExpand) {
+            HStack(spacing: CrumbMetrics.Space.m) {
+                ZStack {
+                    Circle().fill(isKept ? CrumbColor.pineSoft : CrumbColor.line)
+                    Image(systemName: glyph)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(isKept ? CrumbColor.pine : CrumbColor.ink3)
+                }
+                .frame(width: 22, height: 22)
+                .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(snapshot.title)
+                        .font(CrumbType.callout)
+                        .foregroundStyle(isKept ? CrumbColor.ink : CrumbColor.ink2)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text(snapshot.merchant)
+                        .font(CrumbType.caption)
+                        .foregroundStyle(CrumbColor.ink3)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: CrumbMetrics.Space.s)
+
+                Text(snapshot.presentedPrice, format: .currency(code: "USD"))
+                    .font(CrumbType.caption)
+                    .foregroundStyle(isKept ? CrumbColor.ink : CrumbColor.ink3)
+                    .monospacedDigit()
+                    .fixedSize()
+
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(CrumbColor.ink3)
+                    .accessibilityHidden(true)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            "\(decisionWord): \(snapshot.title), \(snapshot.presentedPrice.formatted(.currency(code: "USD"))), from \(snapshot.merchant)"
+        )
+        .accessibilityHint("Shows the full pick and why Crumb chose it")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("missionSettledPick.\(snapshot.productID)")
+    }
+}
+
 private struct MissionArtifactView: View {
     let block: MissionMessageBlock
     let isSuperseded: Bool
@@ -334,8 +556,13 @@ private struct MissionArtifactView: View {
             MissionProductSnapshotView(snapshot: snapshot)
         case .comparison(let snapshot):
             MissionComparisonSnapshotView(snapshot: snapshot)
-        case .kit(let snapshot):
-            MissionKitSnapshotView(snapshot: snapshot)
+        // The kit artifact is not drawn any more. It used to be a full itemised card mid-feed, which
+        // is now the third copy of the same list: the pinned header states the count and the
+        // subtotal, every pick is already a row in the scrollback with its own verdict and price, and
+        // "Review cart" opens the real itemised cart one tap away. The block stays in the timeline —
+        // `MissionThread` validates the kit interaction against it — it simply isn't read aloud twice.
+        case .kit:
+            EmptyView()
         case .activity(let receipt):
             MissionActivityArtifact(receipt: receipt, isSettled: isSuperseded)
         }
@@ -377,63 +604,5 @@ private struct MissionActivityArtifact: View {
         .background(CrumbColor.pineSoft, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("missionArtifact.activity.\(receipt.id)")
-    }
-}
-
-private struct MissionKitSnapshotView: View {
-    let snapshot: MissionKitSnapshot
-
-    private var subtotal: Decimal {
-        snapshot.items.reduce(0) { $0 + $1.presentedPrice }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: CrumbMetrics.Space.m) {
-            HStack {
-                Label(snapshot.items.isEmpty ? "No picks yet" : "What you kept", systemImage: "bag")
-                    .font(CrumbType.captionStrong)
-                    .foregroundStyle(CrumbColor.pine)
-                Spacer(minLength: CrumbMetrics.Space.s)
-                if !snapshot.items.isEmpty {
-                    Text(subtotal, format: .currency(code: "USD"))
-                        .font(CrumbType.headline)
-                        .monospacedDigit()
-                }
-            }
-
-            if snapshot.items.isEmpty {
-                Text("There isn’t anything in this kit yet.")
-                    .font(CrumbType.callout)
-                    .foregroundStyle(CrumbColor.ink2)
-            } else {
-                ForEach(snapshot.items) { item in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(item.title)
-                                .font(CrumbType.body)
-                                .foregroundStyle(CrumbColor.ink)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: CrumbMetrics.Space.s)
-                            Text(item.presentedPrice, format: .currency(code: "USD"))
-                                .font(CrumbType.captionStrong)
-                                .monospacedDigit()
-                        }
-                        Text("\(item.variantTitle) · \(item.merchant)")
-                            .font(CrumbType.caption)
-                            .foregroundStyle(CrumbColor.ink2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if item.id != snapshot.items.last?.id { Divider() }
-                }
-            }
-        }
-        .padding(CrumbMetrics.Space.l)
-        .background(CrumbColor.raised, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous)
-                .strokeBorder(CrumbColor.line, lineWidth: 1)
-        )
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("missionArtifact.kit.\(snapshot.id)")
     }
 }

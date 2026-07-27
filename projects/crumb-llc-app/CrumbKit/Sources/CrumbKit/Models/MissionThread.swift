@@ -65,6 +65,14 @@ public struct MissionThreadEvent: Identifiable, Hashable, Sendable, Codable {
     /// Frozen, read-only content rendered beneath this turn. Commerce mutations always resolve
     /// against authoritative thread state, never by replaying or parsing these display snapshots.
     public let blocks: [MissionMessageBlock]
+    /// For a user turn: the id of the option they *tapped*, or `nil` if they typed.
+    ///
+    /// The distinction is not decoration. A tapped chip's text is Crumb's own label echoed back, and
+    /// its consequence is always visible in what followed — so a UI can decline to read the label a
+    /// second time. Typed prose is the person's own words, which nothing else in the timeline
+    /// preserves, and must always be shown. Recording the id (not just "was a choice") also keeps the
+    /// answer legible in the record after a label is reworded.
+    public let chosenOptionID: String?
 
     public init(
         id: String = UUID().uuidString,
@@ -75,7 +83,8 @@ public struct MissionThreadEvent: Identifiable, Hashable, Sendable, Codable {
         productID: Product.ID? = nil,
         operationID: String? = nil,
         isSuperseded: Bool = false,
-        blocks: [MissionMessageBlock] = []
+        blocks: [MissionMessageBlock] = [],
+        chosenOptionID: String? = nil
     ) {
         self.id = id
         self.sequence = sequence
@@ -86,10 +95,12 @@ public struct MissionThreadEvent: Identifiable, Hashable, Sendable, Codable {
         self.operationID = operationID
         self.isSuperseded = isSuperseded
         self.blocks = blocks
+        self.chosenOptionID = chosenOptionID
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, sequence, kind, text, createdAt, productID, operationID, isSuperseded, blocks
+        case chosenOptionID
     }
 
     public init(from decoder: Decoder) throws {
@@ -103,6 +114,10 @@ public struct MissionThreadEvent: Identifiable, Hashable, Sendable, Codable {
         operationID = try values.decodeIfPresent(String.self, forKey: .operationID)
         isSuperseded = try values.decodeIfPresent(Bool.self, forKey: .isSuperseded) ?? false
         blocks = try values.decodeIfPresent([MissionMessageBlock].self, forKey: .blocks) ?? []
+        // Absent on every thread persisted before choices were distinguished from typed prose. Those
+        // turns decode as "typed", which is the safe direction: a rendered echo is redundant, a
+        // dropped sentence would be lost words.
+        chosenOptionID = try values.decodeIfPresent(String.self, forKey: .chosenOptionID)
     }
 }
 
@@ -637,7 +652,8 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
         createdAt: Date,
         productID: Product.ID? = nil,
         operationID: String? = nil,
-        blocks: [MissionMessageBlock] = []
+        blocks: [MissionMessageBlock] = [],
+        chosenOptionID: String? = nil
     ) {
         timeline.append(MissionThreadEvent(
             sequence: nextTimelineSequence,
@@ -646,7 +662,8 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
             createdAt: createdAt,
             productID: productID,
             operationID: operationID,
-            blocks: blocks
+            blocks: blocks,
+            chosenOptionID: chosenOptionID
         ))
     }
 
