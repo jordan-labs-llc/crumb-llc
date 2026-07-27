@@ -696,15 +696,8 @@ final class AppModel {
                                     options: [], allowsFreeText: false, placeholder: threadComposerPlaceholder,
                                     isEnabled: false, showsSaveRecovery: false)
         }
-        let mode: MissionDockState.Mode
-        switch interaction.kind {
-        case .recovery, .retry: mode = .recovery
-        case .clarification where interaction.options.contains(where: { $0.id == "stop" }): mode = .working
-        case .clarification where interaction.options.isEmpty: mode = .freeText
-        default: mode = interaction.selectionMode == .confirmation ? .confirmation : .singleChoice
-        }
         return MissionDockState(
-            mode: mode,
+            mode: Self.dockMode(for: interaction, hasQueuedRetry: thread.retry != nil),
             interaction: interaction,
             question: interaction.question,
             options: interaction.options,
@@ -713,6 +706,31 @@ final class AppModel {
             isEnabled: true,
             showsSaveRecovery: false
         )
+    }
+
+    /// Which register the dock voices a question in.
+    ///
+    /// `hasQueuedRetry` is the honest signal for "something actually failed", because
+    /// ``MissionInteractionKind/retry`` covers two unrelated situations. `installRetryQuestion`
+    /// resumes a turn that really did fail, and every one of its call sites sets `thread.retry`;
+    /// `installResumeShoppingQuestion` merely asks a freshly planned mission whether to start, and
+    /// never sets it. Deriving the mode from the kind alone therefore dressed "Should I start
+    /// shopping?" in the ochre `exclamationmark.icloud` treatment reserved for a failed save — a
+    /// false alarm on the happiest turn in the mission.
+    ///
+    /// Pure, static and `nonisolated` so both sides of that split can be pinned without standing up
+    /// a failed gather or hopping to the main actor.
+    nonisolated static func dockMode(
+        for interaction: MissionPendingInteraction,
+        hasQueuedRetry: Bool
+    ) -> MissionDockState.Mode {
+        switch interaction.kind {
+        case .recovery: return .recovery
+        case .retry: return hasQueuedRetry ? .recovery : .confirmation
+        case .clarification where interaction.options.contains(where: { $0.id == "stop" }): return .working
+        case .clarification where interaction.options.isEmpty: return .freeText
+        default: return interaction.selectionMode == .confirmation ? .confirmation : .singleChoice
+        }
     }
 
     /// The composer placeholder is the free-text affordance's teacher: each question names what
