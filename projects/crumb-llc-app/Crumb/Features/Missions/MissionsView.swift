@@ -30,9 +30,18 @@ struct MissionsView: View {
                 if let hero = model.incompleteThreads.first {
                     HomeHeroCard(thread: hero)
                     HomeMissionSections(threads: Array(model.incompleteThreads.dropFirst()))
+                    // One or two missions leave most of the screen empty: the column is top-anchored,
+                    // the dock has collapsed to a line, and nothing auto-focuses (the dock only claims
+                    // the keyboard on an EMPTY Home), so the space just sits there. A spacer that can
+                    // only expand when the list is short pushes a short-form ask to the floor, and
+                    // collapses to nothing once the missions fill the viewport — so there is no count
+                    // threshold and no second layout to keep in step with this one.
+                    Spacer(minLength: 0)
+                    followUpAsk
                 } else {
                     // The empty landing keeps the greeting as the last element so it stays glued to
-                    // the dock. With no rows to scroll there is nothing for a bottom anchor to hide.
+                    // the dock, which auto-focuses here — the question ends up directly above the
+                    // keyboard rather than stranded above a gap.
                     greeting
                 }
             }
@@ -41,6 +50,10 @@ struct MissionsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, CrumbMetrics.Space.xl)
             .padding(.vertical, CrumbMetrics.Space.l)
+            // Give the column at least a viewport of height so the spacer above has something to
+            // expand into. Without this the VStack is only as tall as its rows and the spacer is
+            // always zero, which is the bug this fixes.
+            .containerRelativeFrame(.vertical, alignment: .top) { height, _ in height }
         }
         // Anchoring flips with the composition: the empty ask rests on the dock (and rides up with the
         // keyboard rather than re-centering), while a populated Home reads from the top so the hero is
@@ -53,6 +66,20 @@ struct MissionsView: View {
     }
 
     private var hasMissions: Bool { !model.incompleteThreads.isEmpty }
+
+    /// The standing invitation in short form, for a Home that already has work on it.
+    ///
+    /// Deliberately not the `greeting`: no display type, no teaching line, and none of the dock
+    /// furniture the collapse retires. It restores the invitation to a screen that has room for it
+    /// without re-opening the argument the collapse settled.
+    private var followUpAsk: some View {
+        Text("What else are we shopping for?")
+            .font(CrumbType.title2)
+            .foregroundStyle(CrumbColor.ink2)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, CrumbMetrics.Space.s)
+            .accessibilityIdentifier("homeFollowUpAsk")
+    }
 
     private var greeting: some View {
         VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {

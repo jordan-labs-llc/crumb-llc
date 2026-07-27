@@ -166,6 +166,10 @@ final class MissionsHomeOrderUITests: XCTestCase {
         // Populated: all of that retires. The field alone carries the invitation, because the
         // greeting and chips would be competing with content that earned the space.
         let busy = launchSeededHome("missions-many")
+        // Note this passes for a subtler reason than it used to: a populated Home *does* carry a
+        // short-form ask, but it reads "What else are we shopping for?" — different words, no display
+        // type, no teaching line, and none of the dock furniture the collapse retires. The full
+        // greeting is still gone. See `testSparseHomeEndsWithAnInvitationRatherThanDeadSpace`.
         XCTAssertFalse(
             busy.staticTexts["What are we shopping for?"].exists,
             "The greeting must retire once there is work on screen"
@@ -183,6 +187,41 @@ final class MissionsHomeOrderUITests: XCTestCase {
                 || busy.textViews["Start something new…"].exists,
             "The collapsed dock must carry the invitation in its placeholder"
         )
+    }
+
+    /// One or two missions leave most of the screen empty — top-anchored column, collapsed dock, and no
+    /// auto-focus (the dock only claims the keyboard on an empty Home). A short-form ask is pushed to
+    /// the floor by a spacer that can only expand when the list is short, so the leftover space is
+    /// bounded by content instead of trailing off.
+    @MainActor
+    func testSparseHomeEndsWithAnInvitationRatherThanDeadSpace() {
+        let sparse = launchSeededHome("missions-one")
+
+        let ask = element(sparse, "homeFollowUpAsk")
+        let hero = element(sparse, "homeHero")
+        let dock = element(sparse, "missionResponseDock")
+        XCTAssertTrue(ask.exists, "A sparse Home must end with an invitation")
+        XCTAssertGreaterThan(ask.frame.minY, hero.frame.maxY,
+                             "The ask belongs below the hero, not competing with it")
+        XCTAssertLessThan(ask.frame.maxY, dock.frame.minY,
+                          "The ask must sit above the dock, not behind it")
+
+        // It has to actually reach the floor — that is the whole point. Allow a generous margin for
+        // the content padding between the two.
+        let gapToDock = dock.frame.minY - ask.frame.maxY
+        XCTAssertLessThan(gapToDock, 120,
+                          "The ask is stranded \(Int(gapToDock))pt above the dock instead of resting on it")
+        sparse.terminate()
+
+        // With the viewport full the spacer collapses to nothing, so the ask follows the last row
+        // instead of being injected mid-list. It stays in the hierarchy, below the fold.
+        let busy = launchSeededHome("missions-many")
+        let busyAsk = element(busy, "homeFollowUpAsk")
+        XCTAssertTrue(busyAsk.exists, "The ask must still be reachable when the list is long")
+        let lastRow = continueRows(busy).last
+        XCTAssertNotNil(lastRow)
+        XCTAssertGreaterThan(busyAsk.frame.minY, lastRow!.frame.minY,
+                             "With a full viewport the ask must come after the missions, not before")
     }
 
     @MainActor
