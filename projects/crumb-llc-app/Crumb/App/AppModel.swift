@@ -2660,6 +2660,21 @@ final class AppModel {
         // screenshot deep-entries), so the chips are ready before Curate appears regardless of route.
         refreshRefineChips(for: task)
 
+        #if DEBUG
+        // Hold the search window open for a UI test that needs to act *during* a gather.
+        //
+        // The mid-gather buffer is only reachable while this operation is in flight, and how long
+        // that is depends on the live broker, the on-device model and whatever else the machine is
+        // doing — on a warm simulator it can be shorter than the time it takes a UI test to observe
+        // it. Racing that window made the test fail intermittently for reasons that had nothing to
+        // do with the behaviour under test. This makes the window a known quantity; the phase, the
+        // dock state, the streaming and the buffering are all still the real ones.
+        if let hold = ProcessInfo.processInfo.environment["CRUMB_UITEST_GATHER_HOLD_MS"]
+            .flatMap(UInt64.init), hold > 0 {
+            try? await Task.sleep(nanoseconds: hold * 1_000_000)
+        }
+        #endif
+
         // Stream raw, then settle. The gather streams each newly-discovered batch through the
         // collector; we append raw picks to the deck the moment they land and flip to Curate on the
         // FIRST pick — so the user watches the deck fill instead of staring at "Scanning shops" until

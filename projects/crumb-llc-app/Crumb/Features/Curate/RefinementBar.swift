@@ -470,6 +470,15 @@ struct MissionResponseDock: View {
             .font(CrumbType.captionStrong)
             .foregroundStyle(color)
             .fixedSize(horizontal: false, vertical: true)
+            // One status line, one element. A `Label` publishes its icon and its title as two
+            // separate accessibility elements, and an identifier applied to the pair by a caller
+            // lands on BOTH — so `missionResponseWorking` matched an Image labelled "Sparkle" as
+            // well as the text. Anything querying that identifier then got whichever the engine
+            // resolved first, which is how a plainly visible "Searching the shops…" could time
+            // out a 120s wait. Collapsing to a single element fixes the query and the VoiceOver
+            // reading at once: the symbol is decoration, not its own stop.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(text)
     }
 
     private func hasDetail(_ option: MissionInteractionOption) -> Bool {

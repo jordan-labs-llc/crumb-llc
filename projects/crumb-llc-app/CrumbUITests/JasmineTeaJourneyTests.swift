@@ -21,6 +21,11 @@ final class JasmineTeaJourneyTests: XCTestCase {
         // for a "Searching the shops…" dock that never comes. It survives across *runs* too, which
         // is why the failure repeats once it starts. Store isolation only — seams stay live.
         app.launchEnvironment["CRUMB_UITEST_RESET_STORE"] = "1"
+        // Hold every gather open for 8s. `testMidGatherRefinementBuffersAndApplies` has to type
+        // while the search is still running, and a warm simulator can finish one faster than a UI
+        // test can see it — which is the whole reason that test used to fail intermittently. The
+        // broker, the curator and the buffering are untouched; only the window is made knowable.
+        app.launchEnvironment["CRUMB_UITEST_GATHER_HOLD_MS"] = "8000"
         // Pin Dynamic Type instead of inheriting whatever the device is set to. This journey reads
         // the conversation itself — inline dock options and the status lines in the feed — and at an
         // accessibility size the dock folds its options behind `missionResponseChoiceDisclosure`
@@ -179,13 +184,41 @@ final class JasmineTeaJourneyTests: XCTestCase {
             .firstMatch
     }
 
-    /// The dock's working label (`missionResponseWorking`) carrying `question` — the only
-    /// trustworthy signal for *which* working turn free text will answer right now.
-    private func dockWorking(_ question: String) -> XCUIElement {
-        app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier == %@ AND label CONTAINS[c] %@",
-                                  "missionResponseWorking", question))
-            .firstMatch
+    /// Every element carrying the dock's working identifier. `RefinementBar` collapses that status
+    /// line into a single accessibility element, so this is expected to hold exactly one — which
+    /// the mid-gather test asserts, because when it held two (a `Label`'s icon and its title both
+    /// inheriting the identifier) every query below silently resolved to the icon.
+    private var dockWorkingElements: XCUIElementQuery {
+        app.descendants(matching: .any).matching(identifier: "missionResponseWorking")
+    }
+
+    /// How many elements carried the working identifier the last time one was on screen. Recorded
+    /// *inside* the poll below, because the working state is transient: re-querying it after the
+    /// wait returns races the gather finishing and reads 0.
+    private var observedDockWorkingCount = 0
+
+    /// Waits for the dock's working label to carry `question` — the only trustworthy signal for
+    /// *which* working turn free text will answer right now.
+    ///
+    /// Matches on the identifier and reads `label` off the element, rather than folding the text
+    /// into the query. A compound `identifier == … AND label CONTAINS …` predicate does not
+    /// reliably resolve here — measured on iOS 27: with "Searching the shops…" on screen, a
+    /// `label CONTAINS` query over the same hierarchy returned 0 matches — so the original wait
+    /// could expire after a full 120s while the state it wanted was plainly visible.
+    private func waitForDockWorking(_ question: String, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            let matches = dockWorkingElements.count
+            if matches > 0 { observedDockWorkingCount = matches }
+            let working = dockWorkingElements.firstMatch
+            if working.exists, working.label.localizedCaseInsensitiveContains(question) {
+                NSLog("CRUMB-JOURNEY dock working=\(working.label) matches=\(observedDockWorkingCount)")
+                return true
+            }
+            usleep(200_000)
+        } while Date() < deadline
+        NSLog("CRUMB-JOURNEY dock working never carried '\(question)'")
+        return false
     }
 
     /// Launches to the Missions composer (skipping onboarding when it appears) and sends `goal`.
@@ -215,8 +248,15 @@ final class JasmineTeaJourneyTests: XCTestCase {
         // deliberately replaces the goal (there is no mission to refine yet). Only the gather's
         // question buffers, so wait for the dock to say it is searching before typing; how long
         // that takes is the live on-device planner's business, not this test's.
-        XCTAssertTrue(dockWorking("Searching the shops").waitForExistence(timeout: 120),
+        XCTAssertTrue(waitForDockWorking("Searching the shops", timeout: 120),
                       "the gather never took over the dock — planning stalled or the mission declined")
+        // The defect this test spent its life tripping over: the working status must be exactly ONE
+        // accessibility element. At two — a `Label`'s icon and its title both carrying the
+        // identifier — every query for it is a coin flip, and VoiceOver reads a decorative symbol
+        // as its own stop. This reads the count observed *during* the wait, not a fresh query: the
+        // state is gone by now on a fast gather.
+        XCTAssertEqual(observedDockWorkingCount, 1,
+                       "missionResponseWorking must be one a11y element, saw \(observedDockWorkingCount)")
         snap("mid-01b-searching")
 
         // The dock stays conversational during the search — type the refinement now.

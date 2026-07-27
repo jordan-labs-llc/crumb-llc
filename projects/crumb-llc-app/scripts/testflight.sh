@@ -226,6 +226,16 @@ run_ui_test() {
     local status
     if wait "$pid"; then status=0; else status=$?; fi
     cat "$log_file"
+    # A green suite that ran the wrong number of tests is not a green suite. New test files in this
+    # project only compile once they are registered in project.pbxproj, and an unregistered one
+    # simply never runs — the suite passes having quietly skipped it. The count is the guard, so an
+    # unexpected total fails here rather than being reported as success.
+    if [[ "$status" -eq 0 ]] && ! grep -q "$expected_summary" "$log_file"; then
+      echo "error: expected $expected_count test(s) in this suite; see the summary above." >&2
+      echo "       Either a test did not run (unregistered in project.pbxproj?) or the count in" >&2
+      echo "       scripts/testflight.sh is stale." >&2
+      status=1
+    fi
     rm -f "$log_file"
     cleanup_ui_runner "$udid"
     return "$status"
@@ -270,11 +280,11 @@ preflight() {
   local ui_spec
   for ui_spec in \
     '1:CrumbUITests/CrumbUITests' \
-    '1:CrumbUITests/JasmineTeaJourneyTests' \
+    '3:CrumbUITests/JasmineTeaJourneyTests' \
     '2:CrumbUITests/KitCompletenessCartUITests' \
     '1:CrumbUITests/LacrosseGearJourneyTests' \
-    '1:CrumbUITests/MissionThreadUITests' \
-    '2:CrumbUITests/MissionEntryAccessibilityUITests'; do
+    '4:CrumbUITests/MissionThreadUITests' \
+    '4:CrumbUITests/MissionEntryAccessibilityUITests'; do
     local expected_count="${ui_spec%%:*}"
     local ui_suite="${ui_spec#*:}"
     run_ui_test "$expected_count" "$udid" \
