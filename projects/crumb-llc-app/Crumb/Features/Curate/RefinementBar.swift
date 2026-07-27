@@ -18,6 +18,7 @@ struct MissionResponseDock: View {
     @State private var drafts: [ComposerIdentity: String] = [:]
     @State private var submittedIdentity: ComposerIdentity?
     @State private var expandedChoices: MissionChoicePresentation?
+    @State private var pendingDestructive: PendingDestructiveChoice?
     @State private var addingPerson = false
     @FocusState private var focused: Bool
 
@@ -105,11 +106,33 @@ struct MissionResponseDock: View {
         .background(.ultraThinMaterial)
         .overlay(alignment: .top) { Divider().foregroundStyle(CrumbColor.line) }
         .onChange(of: identity) { oldIdentity, _ in
-            // A draft and an open chooser belong to one exact frozen question. Never let either
-            // visually migrate to a replacement interaction or another thread.
+            // A draft, an open chooser and an unanswered confirmation all belong to one exact
+            // frozen question. Never let any of them visually migrate to a replacement interaction
+            // or another thread — a stale "End this mission?" would end the *new* one.
             drafts[oldIdentity] = nil
             submittedIdentity = nil
             expandedChoices = nil
+            pendingDestructive = nil
+        }
+        .confirmationDialog(
+            "End this mission?",
+            isPresented: Binding(
+                get: { pendingDestructive != nil },
+                set: { if !$0 { pendingDestructive = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingDestructive
+        ) { choice in
+            // Deliberately not `choice.option.label`: the retry question's destructive option is
+            // labelled "Cancel", which under "End this mission?" reads as "cancel the dialog".
+            Button("End mission", role: .destructive) {
+                commit(option: choice.option, context: choice.context)
+                pendingDestructive = nil
+            }
+            .accessibilityIdentifier("missionEndConfirm")
+            Button("Keep shopping", role: .cancel) { pendingDestructive = nil }
+        } message: { _ in
+            Text(endMissionWarning)
         }
         .sheet(item: $expandedChoices) { presentation in
             MissionChoiceSheet(
@@ -204,6 +227,17 @@ struct MissionResponseDock: View {
         )
     }
 
+    /// What ending costs, said plainly. The app already treats destroying a mission as
+    /// confirmation-worthy on the deliberate path (long-press a Home row → Delete); this is the
+    /// accidental one. Now that ending also writes History, the honest message is mostly
+    /// reassurance — which is exactly why it should be shown rather than assumed.
+    private var endMissionWarning: String {
+        let kept = model.kit.count
+        guard kept > 0 else { return "This mission stops here. You haven't kept anything yet." }
+        let picks = kept == 1 ? "pick" : "picks"
+        return "Your \(kept) \(picks) are saved to History. This mission stops here — Crumb won't keep shopping for it."
+    }
+
     private func submit(
         option: MissionInteractionOption,
         context: MissionSubmissionContext?,
@@ -221,6 +255,20 @@ struct MissionResponseDock: View {
             return
         }
 
+        // Ending a mission is the one dock answer that can't be walked back by answering again.
+        guard !option.isDestructive else {
+            pendingDestructive = PendingDestructiveChoice(
+                option: option, context: context, identity: presentedIdentity
+            )
+            return
+        }
+        commit(option: option, context: context)
+    }
+
+    /// The write itself. Split out of ``submit(option:context:presentedIdentity:)`` so a confirmed
+    /// destructive choice re-enters here without re-running the tap-time gating — the frozen
+    /// identity check below is what actually keeps a stale answer out.
+    private func commit(option: MissionInteractionOption, context: MissionSubmissionContext?) {
         guard let context else { return }
         let submittedContextIdentity = context.composerIdentity
         guard identity == submittedContextIdentity else { return }
@@ -439,12 +487,32 @@ private struct MissionResponseOptions: View {
     let onSelect: (MissionInteractionOption, MissionSubmissionContext?, ComposerIdentity) -> Void
     let onExpand: (MissionChoicePresentation) -> Void
 
+    /// The things you can do *inside* a mission. These are the peers.
+    private var choices: [MissionInteractionOption] {
+        options.filter { !$0.isDestructive }
+    }
+
+    /// Ending is not one of them.
+    private var enders: [MissionInteractionOption] {
+        options.filter(\.isDestructive)
+    }
+
     var body: some View {
-        Group {
-            if usesDisclosure {
-                disclosureChoices
-            } else {
-                compactChoices
+        VStack(alignment: .leading, spacing: CrumbMetrics.Space.xs) {
+            if !choices.isEmpty {
+                if usesDisclosure {
+                    disclosureChoices
+                } else {
+                    compactChoices
+                }
+            }
+
+            // "End mission" used to be the third capsule in [Review cart] [Find more] [End
+            // mission] — same tint, same size, one thumb-width from "Find more", and the only one
+            // of the three you couldn't undo. It gets its own line, no fill and quieter type so
+            // the row above reads as the choices and this reads as the exit.
+            ForEach(enders) { option in
+                enderButton(option)
             }
         }
         .accessibilityElement(children: .contain)
@@ -468,7 +536,7 @@ private struct MissionResponseOptions: View {
 
     @ViewBuilder
     private var compactOptionButtons: some View {
-        ForEach(options) { option in
+        ForEach(choices) { option in
             compactButton(option)
         }
     }
@@ -477,7 +545,7 @@ private struct MissionResponseOptions: View {
         Button {
             onExpand(MissionChoicePresentation(
                 question: question,
-                options: options,
+                options: choices,
                 context: context,
                 identity: identity
             ))
@@ -517,6 +585,24 @@ private struct MissionResponseOptions: View {
         .accessibilityIdentifier("missionResponseOption.\(option.id)")
     }
 
+    /// Deliberately not a capsule: no fill, no border, secondary ink, plain caption weight. It
+    /// keeps the 44pt target and the same identifier the chip had, so VoiceOver and the UI tests
+    /// still reach it — it just stops competing with the answers.
+    private func enderButton(_ option: MissionInteractionOption) -> some View {
+        Button { onSelect(option, context, identity) } label: {
+            Text(option.label)
+                .font(CrumbType.caption)
+                .foregroundStyle(CrumbColor.ink2)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .frame(minHeight: 44, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .accessibilityHint("Ends this mission. Asks you to confirm first.")
+        .accessibilityIdentifier("missionResponseOption.\(option.id)")
+    }
 }
 
 /// The expanded choice surface belongs to the composer, but gets a bounded, scrollable sheet so
@@ -623,6 +709,16 @@ private struct MissionTextInputRow: View {
     private var canSubmit: Bool {
         isEnabled && !text.trimmed.isEmpty
     }
+}
+
+/// A destructive option the person tapped but has not confirmed. It carries the frozen submission
+/// context with it, so confirming answers *that* question — never whatever the dock has moved on to.
+private struct PendingDestructiveChoice: Identifiable {
+    let option: MissionInteractionOption
+    let context: MissionSubmissionContext?
+    let identity: ComposerIdentity
+
+    var id: String { option.id }
 }
 
 private struct MissionSubmissionContext: Hashable {

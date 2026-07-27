@@ -272,11 +272,27 @@ public struct MissionInteractionOption: Identifiable, Hashable, Sendable, Codabl
     public let id: String
     public let label: String
     public let detail: String?
+    /// This option ends the mission. Carried on the durable option rather than derived from its id
+    /// in a view, because the presentation rule is a property of the *command*: surfaces demote
+    /// these out of the row of peer chips and confirm before submitting. It costs no option slot,
+    /// so the four-option interaction cap is untouched.
+    public let isDestructive: Bool
 
-    public init(id: String, label: String, detail: String? = nil) {
+    public init(id: String, label: String, detail: String? = nil, isDestructive: Bool = false) {
         self.id = id
         self.label = label
         self.detail = detail
+        self.isDestructive = isDestructive
+    }
+
+    /// Options persisted before this flag existed decode as non-destructive instead of throwing.
+    /// A decode failure here would quarantine the entire thread over a presentation hint.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        label = try container.decode(String.self, forKey: .label)
+        detail = try container.decodeIfPresent(String.self, forKey: .detail)
+        isDestructive = try container.decodeIfPresent(Bool.self, forKey: .isDestructive) ?? false
     }
 }
 

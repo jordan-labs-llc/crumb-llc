@@ -262,6 +262,14 @@ final class MissionThreadUITests: XCTestCase {
             XCTAssertTrue(option(id).waitForExistence(timeout: 5),
                           "Cart round-trip did not restore durable kit response: \(id)")
         }
+        // "End mission" used to be the third capsule in this row — same tint, same size, one
+        // thumb-width from "Find more", and the only one you couldn't undo. The two answers still
+        // share a row; the exit sits below it.
+        XCTAssertEqual(option("review-cart").frame.minY, option("find-more").frame.minY,
+                       accuracy: 1,
+                       "The two things you can do inside the mission are peers and share a row")
+        XCTAssertGreaterThan(option("end").frame.minY, option("find-more").frame.maxY - 1,
+                             "Ending the mission must not sit in the row of answers")
         assertSoleMissionInput()
         snap("conversation-09-cart-return")
 

@@ -294,7 +294,7 @@ struct CrumbApp: App {
                 question: "That turn didn’t finish. What next?",
                 options: [
                     MissionInteractionOption(id: "retry", label: "Retry"),
-                    MissionInteractionOption(id: "cancel", label: "Cancel"),
+                    MissionInteractionOption(id: "cancel", label: "Cancel", isDestructive: true),
                 ],
                 allowsFreeText: false,
                 resolver: .retry(retry),

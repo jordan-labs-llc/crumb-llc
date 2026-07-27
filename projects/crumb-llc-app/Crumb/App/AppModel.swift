@@ -902,7 +902,9 @@ final class AppModel {
         case retry(MissionRetryDescriptor)
         case saveTaste
         case openCart
-        case goToMissions
+        /// A terminal answer: the mission is over and we leave for Home. Distinct from plain
+        /// navigation because ending is also a **save trigger** — see ``runMissionEffect(_:)``.
+        case endMission
     }
 
     private func runMissionEffect(_ effect: MissionReducerEffect?) {
@@ -921,7 +923,15 @@ final class AppModel {
         case .retry(let retry): runRetry(retry)
         case .saveTaste: Task { @MainActor [weak self] in await self?.performQueuedTasteSave() }
         case .openCart: openCart()
-        case .goToMissions: goToMissions()
+        case .endMission:
+            // Ending is the *other* save trigger. Reaching the cart used to be the only one, so a
+            // kit assembled and then ended — never opened — left Home (its phase is terminal, so
+            // `upsertThreadInMemory` drops it) without ever reaching History, and no screen reads
+            // `threadStore` for finished missions. The kit became unreachable from every surface.
+            // `recordCurrentKit` no-ops when nothing was kept, so ending an empty mission still
+            // records nothing, and it upserts, so a cart→back→end round-trip stays one entry.
+            recordKitToHistory()
+            goToMissions()
         }
     }
 
@@ -955,7 +965,7 @@ final class AppModel {
         case .saveTaste:
             retry = MissionRetryDescriptor(kind: .chips, input: "save-to-taste", taskRevision: thread.revision, returnPhase: .deckReady)
             title = "Saving this to taste…"
-        case .openCart, .goToMissions:
+        case .openCart, .endMission:
             retry = nil
             title = ""
         }
@@ -1002,7 +1012,7 @@ final class AppModel {
             else if option == "start-over" {
                 thread.phase = .abandoned
                 thread.appendEvent(kind: .notice, text: "Ended this mission.", createdAt: clock())
-                effect = .goToMissions
+                effect = .endMission
             } else if let text { effect = .changePlan(text) }
             else { installPlanChangeQuestion(in: &thread) }
 
@@ -1079,7 +1089,7 @@ final class AppModel {
             case "end":
                 thread.phase = .completed
                 thread.appendEvent(kind: .notice, text: "Ended this mission.", createdAt: clock())
-                effect = .goToMissions
+                effect = .endMission
             default:
                 if let text { effect = .refine(text) }
                 else { installNextProductOrKitQuestion(in: &thread) }
@@ -1091,7 +1101,7 @@ final class AppModel {
                 thread.retry = nil
                 thread.phase = .abandoned
                 thread.appendEvent(kind: .notice, text: "Ended this mission.", createdAt: clock())
-                effect = .goToMissions
+                effect = .endMission
             }
             else if let text {
                 switch retry.kind {
@@ -1115,7 +1125,7 @@ final class AppModel {
                 thread.retry = nil
                 thread.phase = .abandoned
                 thread.appendEvent(kind: .notice, text: "Ended this mission.", createdAt: clock())
-                effect = .goToMissions
+                effect = .endMission
             } else if option == "stop" {
                 cancelOperations()
                 thread.pendingOperation = nil
@@ -1269,7 +1279,7 @@ final class AppModel {
             question: question,
             options: [
                 MissionInteractionOption(id: "retry", label: actionLabel),
-                MissionInteractionOption(id: "cancel", label: "End mission"),
+                MissionInteractionOption(id: "cancel", label: "End mission", isDestructive: true),
             ],
             allowsFreeText: true,
             resolver: .retry(retry),
@@ -1423,7 +1433,7 @@ final class AppModel {
         guard let promptID = thread.timeline.last?.id else { return }
         var options = [MissionInteractionOption(id: "find-more", label: "Find more")]
         if !thread.kit.isEmpty { options.insert(MissionInteractionOption(id: "review-cart", label: "Review cart"), at: 0) }
-        options.append(MissionInteractionOption(id: "end", label: "End mission"))
+        options.append(MissionInteractionOption(id: "end", label: "End mission", isDestructive: true))
         requireInteraction {
             try thread.installInteraction(
             promptEventID: promptID, subjectRevision: thread.revision,
@@ -1462,7 +1472,10 @@ final class AppModel {
             kind: .retry, question: "That turn didn’t finish. What next?",
             options: [
                 MissionInteractionOption(id: "retry", label: "Retry"),
-                MissionInteractionOption(id: "cancel", label: "Cancel"),
+                // Reads as "cancel this turn", but the reducer abandons the whole mission — the
+                // same branch "End mission" takes. Marking it destructive is what makes the
+                // confirmation name the consequence the label doesn't.
+                MissionInteractionOption(id: "cancel", label: "Cancel", isDestructive: true),
             ], allowsFreeText: true, resolver: .retry(retry), createdAt: clock()
             )
         }
@@ -2064,8 +2077,9 @@ final class AppModel {
             $0.appendEvent(kind: .cartOpened, text: "Opened the \(destination).", createdAt: clock())
         }
         route = .cart
-        // Reaching the cart with a kit is the save trigger: record (or update) this session's
-        // history entry. Fire-and-forget so navigation stays instant; the recap is written async.
+        // Reaching the cart with a kit is one of two save triggers (ending the mission is the
+        // other): record (or update) this session's history entry. Fire-and-forget so navigation
+        // stays instant; the recap is written async.
         recordKitToHistory()
     }
 

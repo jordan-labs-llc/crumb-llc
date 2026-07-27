@@ -109,6 +109,8 @@ private struct HomeHeroCard: View {
     @Environment(AppModel.self) private var model
     let thread: MissionThread
 
+    @State private var pendingEnd: MissionInteractionOption?
+
     private var state: MissionHomeState { MissionHomeStatus.state(for: thread) }
     private var title: String { thread.task?.title ?? thread.goal }
     private var detail: String { MissionHomeStatus.detail(for: thread) }
@@ -140,6 +142,23 @@ private struct HomeHeroCard: View {
               thread.blockingRecovery == nil,
               !interaction.options.isEmpty else { return nil }
         return interaction
+    }
+
+    /// The capped option list, split the way it is rendered: the things you can do, then the exit.
+    private func answerChoices(_ interaction: MissionPendingInteraction) -> [MissionInteractionOption] {
+        interaction.options.prefix(4).filter { !$0.isDestructive }
+    }
+
+    private func answerEnders(_ interaction: MissionPendingInteraction) -> [MissionInteractionOption] {
+        interaction.options.prefix(4).filter(\.isDestructive)
+    }
+
+    /// Matches the dock's wording — the same action deserves the same sentence wherever it's taken.
+    private var endMissionWarning: String {
+        let kept = thread.kit.count
+        guard kept > 0 else { return "This mission stops here. You haven't kept anything yet." }
+        let picks = kept == 1 ? "pick" : "picks"
+        return "Your \(kept) \(picks) are saved to History. This mission stops here — Crumb won't keep shopping for it."
     }
 
     private var summary: some View {
@@ -222,7 +241,7 @@ private struct HomeHeroCard: View {
                 // The interaction contract caps questions at four options; `prefix` makes that a
                 // layout guarantee here rather than a promise made elsewhere.
                 VStack(spacing: CrumbMetrics.Space.xs) {
-                    ForEach(Array(interaction.options.prefix(4).enumerated()), id: \.element.id) { index, option in
+                    ForEach(Array(answerChoices(interaction).enumerated()), id: \.element.id) { index, option in
                         Button {
                             model.answerFromHome(thread, optionID: option.id)
                         } label: {
@@ -239,6 +258,22 @@ private struct HomeHeroCard: View {
                                 }
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("homeHeroOption.\(option.id)")
+                    }
+
+                    // Home can end a mission in one tap without ever opening it, so it needs the
+                    // same demotion and the same confirmation the dock gives this option — a
+                    // full-width pine capsule for "End mission" would be the worst version of it.
+                    ForEach(answerEnders(interaction)) { option in
+                        Button { pendingEnd = option } label: {
+                            Text(option.label)
+                                .font(CrumbType.caption)
+                                .foregroundStyle(CrumbColor.ink2)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Ends this mission. Asks you to confirm first.")
                         .accessibilityIdentifier("homeHeroOption.\(option.id)")
                     }
                 }
@@ -282,6 +317,29 @@ private struct HomeHeroCard: View {
             model.resumeThread(thread)
         }
         .accessibilityIdentifier("homeHero")
+        .confirmationDialog(
+            "End this mission?",
+            isPresented: Binding(
+                get: { pendingEnd != nil },
+                set: { if !$0 { pendingEnd = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingEnd
+        ) { option in
+            // Deliberately not `option.label`. The retry question's destructive option is labelled
+            // "Cancel", which under "End this mission?" reads as "cancel the dialog" — the exact
+            // ambiguity the confirmation exists to remove. The action names the consequence.
+            Button("End mission", role: .destructive) {
+                model.answerFromHome(thread, optionID: option.id)
+                pendingEnd = nil
+            }
+            .accessibilityIdentifier("missionEndConfirm")
+            // No identifier: SwiftUI rebuilds the cancel action as a system element and drops it,
+            // so the UI test matches this button on its label instead.
+            Button("Keep shopping", role: .cancel) { pendingEnd = nil }
+        } message: { _ in
+            Text(endMissionWarning)
+        }
     }
 }
 
