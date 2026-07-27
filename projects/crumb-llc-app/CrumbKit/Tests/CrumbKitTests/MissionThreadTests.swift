@@ -593,6 +593,26 @@ struct MissionThreadTests {
         #expect(store.load().threads.isEmpty)
     }
 
+    @Test("An option persisted before isDestructive existed decodes as non-destructive")
+    func legacyOptionDecodesAsNonDestructive() throws {
+        // Exactly the shape already sitting in every installed copy's thread store. Throwing here
+        // would quarantine a whole mission over a presentation hint.
+        let legacy = Data(#"{"id":"end","label":"End mission"}"#.utf8)
+        let decoded = try JSONDecoder().decode(MissionInteractionOption.self, from: legacy)
+
+        #expect(decoded.id == "end")
+        #expect(decoded.label == "End mission")
+        #expect(decoded.isDestructive == false)
+    }
+
+    @Test("isDestructive survives a persistence round-trip")
+    func destructiveFlagRoundTrips() throws {
+        let option = MissionInteractionOption(id: "end", label: "End mission", isDestructive: true)
+        let data = try JSONEncoder().encode(option)
+
+        #expect(try JSONDecoder().decode(MissionInteractionOption.self, from: data) == option)
+    }
+
     @Test("Continuation store is bounded newest-first")
     @MainActor
     func boundedContinuationList() throws {

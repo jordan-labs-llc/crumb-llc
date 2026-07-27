@@ -1295,6 +1295,31 @@ struct CrumbTests {
         #expect(model.incompleteThreads.contains { $0.id == model.activeThreadID } == false)
     }
 
+    /// The confirmation and the demotion both key off this one flag, and it costs no option slot —
+    /// so the four-option interaction cap (whose violation silently rolls back the entire
+    /// `mutateActiveThread` transaction) is untouched.
+    @Test("Every option that ends the mission is marked destructive, and none of them costs a slot")
+    @MainActor
+    func terminalOptionsAreMarkedDestructive() async throws {
+        let model = AppModel(
+            ucp: MockUCPClient(), curator: RuleBasedCurator(),
+            tasteStore: InMemoryTasteStore(SeedData.defaultTasteProfile)
+        )
+        model.enterPlan(with: SeedData.hike)
+        await model.loadCandidates(for: SeedData.hike)
+        model.accept(try #require(model.deck.first))
+        let kitQuestion = try Self.advanceToKitQuestion(model)
+
+        #expect(kitQuestion.options.count <= 4)
+        let end = try #require(kitQuestion.options.first { $0.id == "end" })
+        #expect(end.isDestructive)
+        // …and nothing you do *inside* the mission is dressed as an exit.
+        #expect(kitQuestion.options.filter(\.isDestructive).map(\.id) == ["end"])
+        for id in ["review-cart", "find-more"] {
+            #expect(kitQuestion.options.first { $0.id == id }?.isDestructive == false)
+        }
+    }
+
     @Test("Ending a mission that kept nothing still records nothing")
     @MainActor
     func endingEmptyMissionWritesNothing() async throws {

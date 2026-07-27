@@ -1279,7 +1279,7 @@ final class AppModel {
             question: question,
             options: [
                 MissionInteractionOption(id: "retry", label: actionLabel),
-                MissionInteractionOption(id: "cancel", label: "End mission"),
+                MissionInteractionOption(id: "cancel", label: "End mission", isDestructive: true),
             ],
             allowsFreeText: true,
             resolver: .retry(retry),
@@ -1433,7 +1433,7 @@ final class AppModel {
         guard let promptID = thread.timeline.last?.id else { return }
         var options = [MissionInteractionOption(id: "find-more", label: "Find more")]
         if !thread.kit.isEmpty { options.insert(MissionInteractionOption(id: "review-cart", label: "Review cart"), at: 0) }
-        options.append(MissionInteractionOption(id: "end", label: "End mission"))
+        options.append(MissionInteractionOption(id: "end", label: "End mission", isDestructive: true))
         requireInteraction {
             try thread.installInteraction(
             promptEventID: promptID, subjectRevision: thread.revision,
@@ -1472,7 +1472,10 @@ final class AppModel {
             kind: .retry, question: "That turn didn’t finish. What next?",
             options: [
                 MissionInteractionOption(id: "retry", label: "Retry"),
-                MissionInteractionOption(id: "cancel", label: "Cancel"),
+                // Reads as "cancel this turn", but the reducer abandons the whole mission — the
+                // same branch "End mission" takes. Marking it destructive is what makes the
+                // confirmation name the consequence the label doesn't.
+                MissionInteractionOption(id: "cancel", label: "Cancel", isDestructive: true),
             ], allowsFreeText: true, resolver: .retry(retry), createdAt: clock()
             )
         }

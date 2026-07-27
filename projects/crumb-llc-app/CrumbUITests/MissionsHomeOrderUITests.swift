@@ -36,6 +36,18 @@ final class MissionsHomeOrderUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 
+    /// A button inside a presented `confirmationDialog`. The system renders more than one element
+    /// per action (the sheet's own button plus a backing representation), so a bare subscript
+    /// throws "multiple matching elements" — take the one a person could actually tap.
+    @MainActor
+    private func dialogButton(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
+        let matches = app.buttons.matching(identifier: identifier)
+        for index in 0..<matches.count where matches.element(boundBy: index).isHittable {
+            return matches.element(boundBy: index)
+        }
+        return matches.firstMatch
+    }
+
     /// Every non-hero mission row, in visual top-to-bottom order.
     @MainActor
     private func continueRows(_ app: XCUIApplication) -> [XCUIElement] {
@@ -252,14 +264,86 @@ final class MissionsHomeOrderUITests: XCTestCase {
             "An answerable hero must not also show its navigation CTA"
         )
 
+        // Cancel ends the whole mission, so it is no longer a one-tap answer. It was rewritten from
+        // "tap and it commits" when the confirmation landed: a destructive option that committed on
+        // the first tap is the behaviour being fixed, not a contract worth preserving.
         cancel.tap()
+        XCTAssertTrue(
+            app.buttons.matching(identifier: "missionEndConfirm").firstMatch
+                .waitForExistence(timeout: 10),
+            "A destructive option must confirm before it commits"
+        )
+        XCTAssertTrue(
+            retry.exists,
+            "The question must survive an unconfirmed end — nothing has been answered yet"
+        )
+        dialogButton(app, "missionEndConfirm").tap()
 
         // The answer committed: the question's epoch ended, so its options are gone. This is the
         // assertion that distinguishes a working control from a decorative one.
         XCTAssertTrue(
             retry.waitForNonExistence(timeout: 10),
-            "Answering must resolve the interaction, retiring its options"
+            "Confirming must resolve the interaction, retiring its options"
         )
+    }
+
+    /// The other half of the confirmation: backing out must leave the mission exactly as it was.
+    /// A confirmation that ends the mission anyway is worse than none, because it teaches people
+    /// the dialog is noise.
+    @MainActor
+    func testDismissingTheEndConfirmationLeavesTheMissionAlone() {
+        let app = launchSeededHome("missions-inbox")
+
+        let retry = app.buttons["homeHeroOption.retry"]
+        let cancel = app.buttons["homeHeroOption.cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10))
+
+        cancel.tap()
+        let confirm = app.buttons.matching(identifier: "missionEndConfirm").firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10), "The end confirmation never appeared")
+
+        // Back out the way the platform offers it. Anchored to the hero card, the system presents
+        // this dialog as a popover, which omits the `.cancel` action entirely — tapping outside is
+        // the dismissal. So the "Keep shopping" button is queried where it does render (a sheet)
+        // and a tap well above the popover is used here.
+        let keepShopping = app.buttons.matching(NSPredicate(format: "label == %@", "Keep shopping"))
+        if keepShopping.firstMatch.exists {
+            keepShopping.firstMatch.tap()
+        } else {
+            element(app, "PopoverDismissRegion")
+                .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15))
+                .tap()
+        }
+
+        XCTAssertTrue(
+            confirm.waitForNonExistence(timeout: 10),
+            "Backing out must dismiss the confirmation"
+        )
+        XCTAssertTrue(retry.exists, "Backing out must leave the frozen question answerable")
+        XCTAssertTrue(cancel.exists, "Backing out must leave the mission on Home")
+    }
+
+    /// Demoting the option must not hide it. The quiet treatment is only defensible if the control
+    /// is still there, still last, and still reachable — including for VoiceOver, which is why it
+    /// keeps the identifier and the 44pt target the capsule had.
+    ///
+    /// The geometry half of the demotion is asserted in `MissionThreadUITests`, where the peer
+    /// chips share a horizontal row and leaving that row is observable. Home stacked them
+    /// vertically already, so an ordering assertion here would pass against the old layout too.
+    @MainActor
+    func testDemotedEndingStaysReachable() {
+        let app = launchSeededHome("missions-inbox")
+
+        let retry = app.buttons["homeHeroOption.retry"]
+        let cancel = app.buttons["homeHeroOption.cancel"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 10))
+        XCTAssertTrue(cancel.exists, "Demoting the option must not remove it")
+        XCTAssertTrue(cancel.isHittable, "Demoting the option must not make it unreachable")
+        XCTAssertGreaterThan(
+            cancel.frame.minY, retry.frame.minY,
+            "The exit belongs after the answers"
+        )
+        XCTAssertGreaterThanOrEqual(cancel.frame.height, 44, "The tap target must survive the demotion")
     }
 
     /// Answering an option that *starts work* keeps you on Home while that work runs.
