@@ -46,6 +46,26 @@ final class MissionThreadUITests: XCTestCase {
             .firstMatch
     }
 
+    /// The pinned kit header once it actually holds something. Its label carries the count and the
+    /// subtotal, so "kept" appearing there is the deliverable being stated — not merely the header
+    /// existing, which it always does.
+    @MainActor
+    private var keptHeader: XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@ AND label CONTAINS[c] %@",
+                                  argumentArray: ["missionKitHeader", "kept"]))
+            .firstMatch
+    }
+
+    /// A settled pick the person declined. Its row states the verdict, so the assertion reads it.
+    @MainActor
+    private var passedPick: XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@",
+                                  argumentArray: ["missionSettledPick.", "Passed"]))
+            .firstMatch
+    }
+
     @MainActor
     private func textContaining(_ text: String) -> XCUIElement {
         app.descendants(matching: .any)
@@ -147,9 +167,12 @@ final class MissionThreadUITests: XCTestCase {
         XCTAssertTrue(waitTap(element("missionResponseSend"), timeout: 5, "send product request"))
 
         // The typed answer commits like the chip — no confirmation detour, and the composer's
-        // editable field never disappears.
-        XCTAssertTrue(textContaining("Added").waitForExistence(timeout: 10),
+        // editable field never disappears. Commitment now shows as the pick settling into a row and
+        // the header owning the deliverable, rather than as an "Added <product>." receipt.
+        XCTAssertTrue(keptHeader.waitForExistence(timeout: 10),
                       "Typed 'add it' did not commit the frozen product")
+        XCTAssertTrue(artifact(prefix: "missionSettledPick.").waitForExistence(timeout: 10),
+                      "The committed pick did not settle into a row")
         XCTAssertFalse(dockOption("cancel").exists, "The removed confirmation turn resurfaced")
         XCTAssertTrue(dockOption("add").waitForExistence(timeout: 10),
                       "The conversation did not advance to the next product question")
@@ -189,7 +212,10 @@ final class MissionThreadUITests: XCTestCase {
         let secondProduct = artifact(prefix: "missionArtifact.product.", excluding: pendingProductID)
         XCTAssertTrue(secondProduct.waitForExistence(timeout: 20), "Show another did not present another product")
         XCTAssertTrue(waitTap(option("skip"), timeout: 10, "Skip"))
-        XCTAssertTrue(textContaining("Skipped").waitForExistence(timeout: 10))
+        // A pass settles into its own row too — labelled "Passed", and deliberately untinted, because
+        // declining a product is not a problem.
+        XCTAssertTrue(passedPick.waitForExistence(timeout: 10),
+                      "Skip did not settle the pick into a passed row")
 
         // Free text also stays in the dock and produces a normal user turn before reworking.
         let responseField = element("missionResponseField")
@@ -203,7 +229,10 @@ final class MissionThreadUITests: XCTestCase {
         snap("conversation-06-refined")
 
         XCTAssertTrue(waitTap(option("add"), timeout: 10, "Add"))
-        XCTAssertTrue(textContaining("Added").waitForExistence(timeout: 10))
+        // An accepted pick no longer announces itself with an "Added <product>." receipt and an "Add"
+        // echo bubble. It folds into a settled row that states the decision in its own right.
+        XCTAssertTrue(artifact(prefix: "missionSettledPick.").waitForExistence(timeout: 10),
+                      "Accepting a pick did not leave a settled pick row")
 
         // Exhaust the remaining product questions through the dock until the kit-review question.
         for _ in 0..<20 {
@@ -212,7 +241,9 @@ final class MissionThreadUITests: XCTestCase {
         }
         XCTAssertTrue(option("review-cart").waitForExistence(timeout: 10),
                       "Deck exhaustion did not produce a cart-review question")
-        XCTAssertTrue(artifact(prefix: "missionArtifact.kit.").waitForExistence(timeout: 10))
+        // The kit is the pinned header now, not an itemised card in the feed.
+        XCTAssertTrue(keptHeader.waitForExistence(timeout: 10),
+                      "Kit-review question arrived without the kit stated in the header")
         assertSoleMissionInput()
         snap("conversation-07-kit-question")
 
@@ -224,17 +255,9 @@ final class MissionThreadUITests: XCTestCase {
         XCTAssertTrue(waitTap(element("backButton"), timeout: 10, "Back from Cart"))
         XCTAssertTrue(element("MissionThreadScreen").waitForExistence(timeout: 20),
                       "Back from Cart did not restore the conversation")
-        let jump = element("missionJumpToLatest")
-        if jump.waitForExistence(timeout: 3) {
-            XCTAssertTrue(waitTap(jump, timeout: 3, "Jump to latest after Cart"))
-        } else {
-            let feed = element("missionConversationFeed")
-            for _ in 0..<8 where !artifact(prefix: "missionArtifact.kit.").exists {
-                feed.swipeUp()
-            }
-        }
-        XCTAssertTrue(artifact(prefix: "missionArtifact.kit.").waitForExistence(timeout: 5),
-                      "Cart round-trip lost the frozen kit turn")
+        // No scroll hunt any more: the kit is pinned, so a round-trip either restored it or it is gone.
+        XCTAssertTrue(keptHeader.waitForExistence(timeout: 5),
+                      "Cart round-trip lost the kit from the header")
         for id in ["review-cart", "find-more", "end"] {
             XCTAssertTrue(option(id).waitForExistence(timeout: 5),
                           "Cart round-trip did not restore durable kit response: \(id)")
