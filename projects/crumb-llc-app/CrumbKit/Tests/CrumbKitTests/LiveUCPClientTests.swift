@@ -58,7 +58,8 @@ struct LiveUCPClientTests {
         let product = try #require(products.first)
         #expect(product.name == "Organic Crewneck")
         #expect(product.price == Decimal(89))             // 8900 minor units → 89
-        #expect(product.shop.name == "northbound")        // domain prettified
+        #expect(product.shop.name == "Northbound")        // domain → shop name
+        #expect(product.shop.id == "northbound.myshopify.com")   // raw domain kept as the id
         #expect(product.imageURL?.absoluteString == "https://cdn.shopify.com/p/abc.jpg")
         #expect(product.defaultVariant.checkoutURL?.absoluteString
             == "https://northbound.myshopify.com/cart/c/xyz")
@@ -84,7 +85,7 @@ struct LiveUCPClientTests {
         let product = try #require(products.first)
         #expect(product.name == "Cielo Rain Jacket")
         #expect(product.rationale == "Eco-friendly rain jacket.")
-        #expect(product.shop.name == "cotopaxi.com")   // `www.` stripped, TLD kept
+        #expect(product.shop.name == "Cotopaxi")       // `www.` and the TLD both stripped
         #expect(product.defaultVariant.checkoutURL?.absoluteString
             == "https://www.cotopaxi.com/products/cielo?variant=1")
     }
