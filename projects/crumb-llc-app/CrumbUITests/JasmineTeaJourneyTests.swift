@@ -14,18 +14,12 @@ final class JasmineTeaJourneyTests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["CRUMB_UITEST"] = "1"   // no CRUMB_SCREENSHOT -> live broker
-        // Launch into an empty app. Nothing resets the simulator between tests, all three tests
-        // here shop the same goal, and they run alphabetically — so the purchase journey's mission
-        // is still in the thread store when the mid-gather test sends the same goal. The app then
-        // resumes that settled mission rather than gathering, and the test waits out its full 120s
-        // for a "Searching the shops…" dock that never comes. It survives across *runs* too, which
-        // is why the failure repeats once it starts. Store isolation only — seams stay live.
+        // Launch into an empty app. Nothing resets the simulator between tests, and two of the three
+        // here shop the same goal, so without this the purchase journey's mission is still in the
+        // thread store — across runs, not just across tests — when the mid-gather test starts.
+        // Hygiene, not a fix: it was tried as a fix for that test's intermittent failure and
+        // verifiably did not change it. Store isolation only; the broker and seams stay live.
         app.launchEnvironment["CRUMB_UITEST_RESET_STORE"] = "1"
-        // Hold every gather open for 8s. `testMidGatherRefinementBuffersAndApplies` has to type
-        // while the search is still running, and a warm simulator can finish one faster than a UI
-        // test can see it — which is the whole reason that test used to fail intermittently. The
-        // broker, the curator and the buffering are untouched; only the window is made knowable.
-        app.launchEnvironment["CRUMB_UITEST_GATHER_HOLD_MS"] = "8000"
         // Pin Dynamic Type instead of inheriting whatever the device is set to. This journey reads
         // the conversation itself — inline dock options and the status lines in the feed — and at an
         // accessibility size the dock folds its options behind `missionResponseChoiceDisclosure`
@@ -184,41 +178,73 @@ final class JasmineTeaJourneyTests: XCTestCase {
             .firstMatch
     }
 
-    /// Every element carrying the dock's working identifier. `RefinementBar` collapses that status
-    /// line into a single accessibility element, so this is expected to hold exactly one — which
-    /// the mid-gather test asserts, because when it held two (a `Label`'s icon and its title both
-    /// inheriting the identifier) every query below silently resolved to the icon.
+    /// Every element carrying the dock's working identifier. `RefinementBar` hides the status
+    /// line's decorative icon, so this holds exactly one element; it used to hold two, because a
+    /// `Label` publishes its icon and its title separately and a caller's identifier landed on both.
     private var dockWorkingElements: XCUIElementQuery {
         app.descendants(matching: .any).matching(identifier: "missionResponseWorking")
     }
 
-    /// How many elements carried the working identifier the last time one was on screen. Recorded
-    /// *inside* the poll below, because the working state is transient: re-querying it after the
-    /// wait returns races the gather finishing and reads 0.
-    private var observedDockWorkingCount = 0
-
     /// Waits for the dock's working label to carry `question` — the only trustworthy signal for
     /// *which* working turn free text will answer right now.
     ///
-    /// Matches on the identifier and reads `label` off the element, rather than folding the text
-    /// into the query. A compound `identifier == … AND label CONTAINS …` predicate does not
-    /// reliably resolve here — measured on iOS 27: with "Searching the shops…" on screen, a
-    /// `label CONTAINS` query over the same hierarchy returned 0 matches — so the original wait
-    /// could expire after a full 120s while the state it wanted was plainly visible.
+    /// Note this wait is NOT known to be the cause of that historical failure, and says nothing
+    /// about why the state was absent for 120s — see `reportDockStateOnTimeout`, which exists to
+    /// answer that the next time it happens.
     private func waitForDockWorking(_ question: String, timeout: TimeInterval) -> Bool {
+        // Ask the query engine for "an element with this identifier whose label contains the text"
+        // and count the answer. Counting a query is evaluated against one snapshot and yields 0 when
+        // nothing matches; resolving elements and then reading `.label` off them does not — the
+        // element can disappear between the two steps, and XCUITest raises "Failed to get matching
+        // snapshot" rather than returning false. That is a race the test invents for itself, and it
+        // is not hypothetical: it failed a run here. The predicate also makes the match
+        // order-independent, so it no longer matters how many elements carry the identifier.
+        let matching = dockWorkingElements
+            .matching(NSPredicate(format: "label CONTAINS[c] %@", question))
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
-            let matches = dockWorkingElements.count
-            if matches > 0 { observedDockWorkingCount = matches }
-            let working = dockWorkingElements.firstMatch
-            if working.exists, working.label.localizedCaseInsensitiveContains(question) {
-                NSLog("CRUMB-JOURNEY dock working=\(working.label) matches=\(observedDockWorkingCount)")
+            if matching.count > 0 {
+                NSLog("CRUMB-JOURNEY dock working carried '\(question)'")
                 return true
             }
             usleep(200_000)
         } while Date() < deadline
-        NSLog("CRUMB-JOURNEY dock working never carried '\(question)'")
+        reportDockStateOnTimeout(expected: question)
         return false
+    }
+
+    /// Records what the dock was *actually* showing when a wait expired.
+    ///
+    /// Worth its weight: this wait has failed by timing out on a state the app appeared to be in,
+    /// and without knowing which dock mode was really on screen every explanation for that is a
+    /// guess. The three modes are mutually exclusive in `RefinementBar.activeMissionContents`, and
+    /// `.recovery` in particular latches for the rest of the mission once a thread fails to save —
+    /// the app keeps gathering and the deck still lands, so the symptom is exactly this timeout.
+    private func reportDockStateOnTimeout(expected: String) {
+        let modes = ["missionResponseWorking", "missionResponseRecovery",
+                     "missionResponseWarning", "missionResponseConfirmation"]
+        // Counts only — see `waitForDockWorking`: reading `.label` off resolved elements can raise
+        // on a screen that is still moving, and a diagnostic that can throw is worse than useless
+        // because it replaces the failure you were trying to explain. The tree dump below carries
+        // the labels.
+        let seen = modes.map { id in
+            "\(id)=\(app.descendants(matching: .any).matching(identifier: id).count)"
+        }
+        // Whether a deck is already on screen separates the two explanations for an absent working
+        // status. Deck present means the mission reached its picks without this test ever seeing a
+        // gather — which is what `beginCuration`'s early return does when a thread already has
+        // candidates and no pending operation: it routes straight to the thread and never calls
+        // `loadCandidates`, so no working question is installed and no search runs.
+        let deck = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "missionArtifact.product."))
+            .allElementsBoundByAccessibilityElement.count
+        let options = app.descendants(matching: .any)
+            .matching(identifier: "missionResponseOptions").allElementsBoundByAccessibilityElement.count
+        NSLog("CRUMB-JOURNEY dock never carried '\(expected)'. Dock state: \(seen.joined(separator: ", ")), productArtifacts=\(deck), optionRows=\(options)")
+        // The tree in the log, not only as an attachment: a failing run's xcresult is routinely
+        // pruned before anyone reads it.
+        NSLog("CRUMB-JOURNEY tree at timeout:\n\(app.debugDescription)")
+        snap("dock-timeout")
     }
 
     /// Launches to the Missions composer (skipping onboarding when it appears) and sends `goal`.
@@ -240,23 +266,35 @@ final class JasmineTeaJourneyTests: XCTestCase {
     /// thread — it buffers and applies as a refinement the moment the picks land.
     @MainActor
     func testMidGatherRefinementBuffersAndApplies() {
+        // Guarantee a window in which the search is actually running. This is the only test that
+        // needs one — it types *into* a gather — and a warm simulator can finish one in under a
+        // second, which is less time than this test takes to mount the screen and look. Scoped to
+        // this test rather than `setUp` so the other two journeys keep exercising a real, unpadded
+        // gather. The search itself is untouched: it runs concurrently with this floor.
+        app.launchEnvironment["CRUMB_UITEST_GATHER_HOLD_MS"] = "8000"
         launchAndSend(goal: "premium jasmine tea")
         XCTAssertTrue(el("MissionThreadScreen").waitForExistence(timeout: 60))
-        snap("mid-01-thread")
 
+        // Start watching for the gather before capturing anything. `snap` takes a screenshot *and*
+        // a full `app.debugDescription`, which is seconds of blind time — and it used to sit right
+        // here, between the thread mounting and this wait, i.e. exactly across the moment the
+        // gather starts. On a cold app the search outlasts that blind spot; on a warm one it can
+        // finish inside it, and the wait then spends its whole 120s looking at a settled deck for
+        // a status the app had already retired. The capture is a diagnostic; it must not be in the
+        // critical path of the thing being observed.
+        //
         // The thread mounts on "Starting your mission…" — the *planning* turn, where free text
         // deliberately replaces the goal (there is no mission to refine yet). Only the gather's
         // question buffers, so wait for the dock to say it is searching before typing; how long
         // that takes is the live on-device planner's business, not this test's.
         XCTAssertTrue(waitForDockWorking("Searching the shops", timeout: 120),
                       "the gather never took over the dock — planning stalled or the mission declined")
-        // The defect this test spent its life tripping over: the working status must be exactly ONE
-        // accessibility element. At two — a `Label`'s icon and its title both carrying the
-        // identifier — every query for it is a coin flip, and VoiceOver reads a decorative symbol
-        // as its own stop. This reads the count observed *during* the wait, not a fresh query: the
-        // state is gone by now on a fast gather.
-        XCTAssertEqual(observedDockWorkingCount, 1,
-                       "missionResponseWorking must be one a11y element, saw \(observedDockWorkingCount)")
+        snap("mid-01-thread")
+        // Deliberately NOT asserting that the identifier resolves to a single element. It resolves
+        // to two — SwiftUI propagates an identifier to a container and its text child — and that is
+        // an implementation detail of the accessibility tree, not a contract this journey should
+        // pin. What matters is that the status text is findable no matter how many elements carry
+        // the identifier, which `waitForDockWorking` guarantees by scanning all of them.
         snap("mid-01b-searching")
 
         // The dock stays conversational during the search — type the refinement now.

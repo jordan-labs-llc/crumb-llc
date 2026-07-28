@@ -466,19 +466,19 @@ struct MissionResponseDock: View {
     }
 
     private func contextLabel(_ text: String, systemImage: String, color: Color) -> some View {
-        Label(text, systemImage: systemImage)
-            .font(CrumbType.captionStrong)
-            .foregroundStyle(color)
-            .fixedSize(horizontal: false, vertical: true)
-            // One status line, one element. A `Label` publishes its icon and its title as two
-            // separate accessibility elements, and an identifier applied to the pair by a caller
-            // lands on BOTH — so `missionResponseWorking` matched an Image labelled "Sparkle" as
-            // well as the text. Anything querying that identifier then got whichever the engine
-            // resolved first, which is how a plainly visible "Searching the shops…" could time
-            // out a 120s wait. Collapsing to a single element fixes the query and the VoiceOver
-            // reading at once: the symbol is decoration, not its own stop.
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(text)
+        // The symbol is decoration; only the text is the status. Hiding the icon leaves one
+        // accessibility element instead of two, so a caller's identifier can no longer land on both
+        // an Image labelled "Sparkle" and the text — and VoiceOver stops announcing the symbol as
+        // its own stop. Hiding the icon rather than merging the pair keeps the text's static-text
+        // role, which `.accessibilityElement(children: .ignore)` would discard.
+        Label {
+            Text(text)
+        } icon: {
+            Image(systemName: systemImage).accessibilityHidden(true)
+        }
+        .font(CrumbType.captionStrong)
+        .foregroundStyle(color)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func hasDetail(_ option: MissionInteractionOption) -> Bool {

@@ -2660,21 +2660,6 @@ final class AppModel {
         // screenshot deep-entries), so the chips are ready before Curate appears regardless of route.
         refreshRefineChips(for: task)
 
-        #if DEBUG
-        // Hold the search window open for a UI test that needs to act *during* a gather.
-        //
-        // The mid-gather buffer is only reachable while this operation is in flight, and how long
-        // that is depends on the live broker, the on-device model and whatever else the machine is
-        // doing — on a warm simulator it can be shorter than the time it takes a UI test to observe
-        // it. Racing that window made the test fail intermittently for reasons that had nothing to
-        // do with the behaviour under test. This makes the window a known quantity; the phase, the
-        // dock state, the streaming and the buffering are all still the real ones.
-        if let hold = ProcessInfo.processInfo.environment["CRUMB_UITEST_GATHER_HOLD_MS"]
-            .flatMap(UInt64.init), hold > 0 {
-            try? await Task.sleep(nanoseconds: hold * 1_000_000)
-        }
-        #endif
-
         // Stream raw, then settle. The gather streams each newly-discovered batch through the
         // collector; we append raw picks to the deck the moment they land and flip to Curate on the
         // FIRST pick — so the user watches the deck fill instead of staring at "Scanning shops" until
@@ -2732,8 +2717,23 @@ final class AppModel {
         // only on a total catalog outage.
         let gathered = await CrumbTrace.measure("gather", summarize: {
             "queries=\(task.searchQueries.count) candidates=\($0?.products.count ?? 0) agent=\($0?.usedAgent ?? false)"
-        }) {
-            await orchestrator.gather(for: task, floor: Self.relevanceFloor, using: ucp, gate: relevanceGate, into: collector)
+        }) { () -> GatheredCandidates? in
+            async let picks = orchestrator.gather(for: task, floor: Self.relevanceFloor, using: ucp, gate: relevanceGate, into: collector)
+            #if DEBUG
+            // Put a floor under how long the search takes, for a UI test that has to act *during*
+            // one. Measured on a warm simulator, a gather can settle in under a second — the deck
+            // is already on the product question by the time a UI test finishes mounting the
+            // screen — so `testMidGatherRefinementBuffersAndApplies` had no window to type into and
+            // failed ~30% of runs. This is a floor, not a stall: the orchestrator above is already
+            // running, batches stream into the deck throughout, and the mission passes through the
+            // same `.refining` state with a filling deck that a real user types into. A slow
+            // gather is unaffected, and nothing here is compiled into a Release build.
+            if let hold = ProcessInfo.processInfo.environment["CRUMB_UITEST_GATHER_HOLD_MS"]
+                .flatMap(UInt64.init), hold > 0 {
+                try? await Task.sleep(nanoseconds: hold * 1_000_000)
+            }
+            #endif
+            return await picks
         }
         await collector.finish()      // close the stream so the subscriber's loop ends…
         _ = await streamTask.value    // …and drain any trailing picks before we settle the deck.

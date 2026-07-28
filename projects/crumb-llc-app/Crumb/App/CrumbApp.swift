@@ -107,16 +107,20 @@ struct CrumbApp: App {
         if env["CRUMB_SCREENSHOT"] != nil { return nil }
         // Two independent reasons to keep off the real store, and a test may want either one.
         // `PERSISTENT_MOCK` is the deterministic suites, which also swap every seam for a rule-based
-        // double. `RESET_STORE` is just "launch into an empty app", which the *live* journeys need
-        // without the mocking: they assert on a real gather, and a mission left behind by an earlier
-        // test — or by an earlier run of the same suite — makes the app resume a settled mission
-        // instead. Either flag moves the container off `default.store`, so a reset can never reach
-        // the real one.
-        if env["CRUMB_UITEST_PERSISTENT_MOCK"] == "1" || env["CRUMB_UITEST_RESET_STORE"] == "1" {
+        // double. `RESET_STORE` is just "launch into an empty app", which the live journeys want
+        // without the mocking, so one test's leftover mission is not another's starting state.
+        // Either flag moves the container off `default.store`, so a reset can never reach the real
+        // one — and they get *separate* directories, because `MissionThreadUITests` deliberately
+        // relaunches without `RESET_STORE` to prove a thread survives process death, and a live
+        // journey wiping that directory out from under it would break exactly that guarantee.
+        let mocked = env["CRUMB_UITEST_PERSISTENT_MOCK"] == "1"
+        let resets = env["CRUMB_UITEST_RESET_STORE"] == "1"
+        if mocked || resets {
             do {
+                let directory = mocked ? "MissionThreadUITests" : "LiveJourneyUITests"
                 let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                    .appendingPathComponent("MissionThreadUITests", isDirectory: true)
-                if env["CRUMB_UITEST_RESET_STORE"] == "1" {
+                    .appendingPathComponent(directory, isDirectory: true)
+                if resets {
                     try? FileManager.default.removeItem(at: root)
                 }
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
