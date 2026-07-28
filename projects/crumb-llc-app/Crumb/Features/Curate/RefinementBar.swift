@@ -466,10 +466,19 @@ struct MissionResponseDock: View {
     }
 
     private func contextLabel(_ text: String, systemImage: String, color: Color) -> some View {
-        Label(text, systemImage: systemImage)
-            .font(CrumbType.captionStrong)
-            .foregroundStyle(color)
-            .fixedSize(horizontal: false, vertical: true)
+        // The symbol is decoration; only the text is the status. Hiding the icon leaves one
+        // accessibility element instead of two, so a caller's identifier can no longer land on both
+        // an Image labelled "Sparkle" and the text — and VoiceOver stops announcing the symbol as
+        // its own stop. Hiding the icon rather than merging the pair keeps the text's static-text
+        // role, which `.accessibilityElement(children: .ignore)` would discard.
+        Label {
+            Text(text)
+        } icon: {
+            Image(systemName: systemImage).accessibilityHidden(true)
+        }
+        .font(CrumbType.captionStrong)
+        .foregroundStyle(color)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func hasDetail(_ option: MissionInteractionOption) -> Bool {
