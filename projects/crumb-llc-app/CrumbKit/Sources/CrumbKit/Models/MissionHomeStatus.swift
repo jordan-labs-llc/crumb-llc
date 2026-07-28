@@ -45,6 +45,28 @@ public enum MissionHomeStatus {
         }
     }
 
+    /// What a mission that is *currently searching* can truthfully say about its own progress, or
+    /// `nil` when it has nothing to add.
+    ///
+    /// The gather is the longest wait in the app — up to 45 seconds — and for all of it every surface
+    /// said the same static sentence ("Searching the shops…" in the feed pill and the dock, "Crumb is
+    /// working…" in the pinned header), so a run that was going well looked exactly like a run that
+    /// had hung. The streamed gather writes each batch into `candidates` as it lands, so the count is
+    /// already on the thread; nothing here computes or stores anything new.
+    ///
+    /// Deliberately narrow. `.planning` is also `.working` state, and a planning mission has issued no
+    /// catalog call at all — claiming a find count there would be fabrication, so it keeps its own
+    /// "Planning". An empty pool likewise stays quiet: before the first batch there is genuinely
+    /// nothing to report, and the pill beside the spinner is already saying so.
+    ///
+    /// It also says nothing about *shops*. The pinned header already owns that word for the distinct
+    /// merchants in the kit, and two different numbers both labelled "shops" in one line is worse than
+    /// one number.
+    public static func workingDetail(for thread: MissionThread) -> String? {
+        guard thread.phase == .gathering, !thread.candidates.isEmpty else { return nil }
+        return "Found \(thread.candidates.count) so far"
+    }
+
     /// The short second line on a Home row: what is waiting, or why Crumb stopped.
     ///
     /// For a stall this prefers the mission's own last failure sentence over a generic label, because
@@ -52,6 +74,9 @@ public enum MissionHomeStatus {
     public static func detail(for thread: MissionThread, currencyCode: String = "USD") -> String {
         switch state(for: thread) {
         case .ready, .working:
+            // A live search reports its own progress; everything else keeps the phase wording, which
+            // for those states is the whole truth.
+            if let working = workingDetail(for: thread) { return working }
             return MissionContinuationSummary.text(for: thread, currencyCode: currencyCode)
         case .stalled:
             if let failure = thread.timeline.last(where: { $0.kind == .failure })?.text,

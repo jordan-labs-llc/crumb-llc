@@ -1014,6 +1014,25 @@ final class AppModel {
         let option: String? = { if case .option(let id) = submission.answer { return id }; return nil }()
         let text: String? = { if case .freeText(let value) = submission.answer { return value.trimmed }; return nil }()
 
+        // The reversal rides every question until the person answers one that actually carried it —
+        // then it retires, because they have seen the offer and chosen otherwise.
+        //
+        // Retiring it on *any* submission looked tidier and was a real bug: a question can be
+        // superseded before it is ever drawn (free text typed mid-gather is buffered and drains into
+        // a refinement the instant the deck settles, which supersedes the question the same pass had
+        // just installed). The undo would then be cleared by the answer to some later, unrelated
+        // question, leaving picks Crumb made on its own with no one-tap way back and a receipt still
+        // advertising one.
+        let autoKeepUndo = thread.pendingAutoKeepUndo
+        if interaction.options.contains(where: { $0.id == "undo-auto" }) {
+            thread.pendingAutoKeepUndo = nil
+        }
+        if option == "undo-auto", let autoKeepUndo {
+            undoAutoKeep(autoKeepUndo, in: &thread)
+            installNextProductOrKitQuestion(in: &thread)
+            return
+        }
+
         switch interaction.resolver {
         case .plan:
             // Legacy only: nothing installs a plan-approval turn anymore, but a thread persisted
@@ -1123,7 +1142,11 @@ final class AppModel {
                 let kept = Set(thread.kit.map { $0.product.id })
                 thread.decisions.removeAll { $0.kind == .skipped }
                 thread.remainingDeckIDs = thread.candidates.map(\.id).filter { !kept.contains($0) }
-                installNextProductOrKitQuestion(in: &thread)
+                // Every card this re-opens is one the person has already seen and passed on — the
+                // branch has just erased the record of exactly that. So auto must sit this one out:
+                // running it here would let Crumb keep something its owner explicitly turned down,
+                // and the erased skips mean it could not even tell that it had.
+                installNextProductOrKitQuestion(in: &thread, runsAutoKeep: false)
             case "checkout":
                 effect = .startCheckout
             case "end":
@@ -1444,9 +1467,16 @@ final class AppModel {
             ),
             MissionInteractionOption(id: "skip", label: "Skip"),
         ]
-        // Right after a refinement lands, one contextual follow-up rides the next question — the
-        // moment it's alive. Save-to-taste when the directive can be kept, else Reset as the undo.
-        if includeRefinementFollowUps {
+        // One follow-up slot, spent on whichever is actually live — never both. The cap is four, and
+        // a question that overruns it fails validation and takes its whole transaction down with it,
+        // so this is an arithmetic invariant rather than a layout preference.
+        if let undo = thread.pendingAutoKeepUndo {
+            // Reversing what Crumb just did outranks a refinement nicety: it is the only option here
+            // that expires, and it is the one the person may be looking for.
+            options.append(undoOption(count: undo.productIDs.count))
+        } else if includeRefinementFollowUps {
+            // Right after a refinement lands, one contextual follow-up rides the next question — the
+            // moment it's alive. Save-to-taste when the directive can be kept, else Reset as the undo.
             if thread.refinementDirectives.contains(where: { $0.isActionable }) {
                 options.append(MissionInteractionOption(id: "save-to-taste", label: saveToTasteChipLabel))
             } else if !thread.refinementTurns.isEmpty {
@@ -1591,6 +1621,13 @@ final class AppModel {
         )
         guard let promptID = thread.timeline.last?.id else { return }
         var options = [MissionInteractionOption(id: "find-more", label: "Find more")]
+        // With picks Crumb made on its own still unanswered, the reversal takes the "Find more"
+        // slot rather than being appended: checkout, review, find-more and the exit already spend
+        // all four, and a fifth option fails validation and discards the whole transaction. Undo is
+        // the one that expires, and widening the search stays reachable by simply saying so.
+        if let undo = thread.pendingAutoKeepUndo {
+            options = [undoOption(count: undo.productIDs.count)]
+        }
         if !thread.kit.isEmpty {
             // Checkout leads. A kit with nowhere to go is the whole reported failure: the only
             // offers here used to be "Find more" and "End mission", so a finished mission had no
@@ -1656,10 +1693,160 @@ final class AppModel {
         }
     }
 
+    // MARK: Approvals — how much this mission asks before it keeps something
+
+    /// Whether delegation is even meaningful here. A one-part shortlist mission has nothing to
+    /// divide up, and a deck with a single card left is one question either way — offering a switch
+    /// on either is offering a control with nothing behind it.
+    ///
+    /// Deliberately `&&`. With `||` a twelve-card jasmine-tea mission (one plan part) would show the
+    /// switch, and auto's per-part rule would then be worth exactly one keep on it.
+    static func allowsDelegation(_ thread: MissionThread) -> Bool {
+        thread.plan.count >= MissionAutoKeep.minimumParts && thread.remainingDeckIDs.count > 1
+    }
+
+    var missionAllowsDelegation: Bool {
+        guard let thread = activeThread else { return false }
+        return Self.allowsDelegation(thread)
+    }
+
+    var missionApprovalMode: MissionApprovalMode {
+        activeThread?.approvalMode ?? .askEach
+    }
+
+    /// Changes how much the active mission asks. Switching *to* auto supersedes the live question
+    /// rather than answering it — a mode change is not an answer, and fabricating a submission for a
+    /// product the person never saw is exactly the thing this feature must never do — and then
+    /// re-enters the ordinary question funnel, where the pass runs.
+    func setApprovalMode(_ mode: MissionApprovalMode) {
+        guard let thread = activeThread, (thread.approvalMode ?? .askEach) != mode,
+              thread.blockingRecovery == nil else { return }
+        mutateActiveThread {
+            $0.approvalMode = mode
+            switch mode {
+            case .auto:
+                $0.appendEvent(
+                    kind: .notice,
+                    text: "Auto on — I'll keep the best fit for each part and ask about the rest. "
+                        + "Nothing gets bought without you.",
+                    createdAt: clock()
+                )
+                guard Self.allowsDelegation($0), $0.pendingOperation == nil else { return }
+                $0.supersedePendingInteraction()
+                installNextProductOrKitQuestion(in: &$0)
+            case .askEach:
+                $0.appendEvent(
+                    kind: .notice, text: "Back to asking about each pick.", createdAt: clock()
+                )
+            }
+        }
+    }
+
+    /// Runs one auto pass, if this mission has delegated that. Writes the keeps, the receipt that
+    /// makes them legible, and the undo that makes them cheap to reverse — as part of the caller's
+    /// single transaction, so a failed save takes all three back together.
+    private func runAutoKeep(in thread: inout MissionThread) {
+        guard thread.approvalMode == .auto, Self.allowsDelegation(thread) else { return }
+        let byID = Dictionary(uniqueKeysWithValues: thread.candidates.map { ($0.id, $0) })
+        let selection = MissionAutoKeep.selection(
+            plan: thread.plan.map(\.label),
+            kit: thread.kit.map(\.product),
+            deck: thread.remainingDeckIDs.compactMap { byID[$0] },
+            // The band comes from the whole candidate set, not the remaining deck: the norm a
+            // mispriced item is an outlier *against* shouldn't shift as cards are decided.
+            band: PriceBand.from(thread.candidates)
+        )
+        guard !selection.isEmpty else { return }
+
+        // Deterministic and revision-scoped, so a retried transaction cannot write the same keep
+        // twice and a later pass can never collide with this one's decision ids.
+        let receiptID = "auto-\(thread.id)-\(thread.revision)"
+        var decisionIDs: [String] = []
+        var kept: [MissionAutoKeepRow] = []
+        for pick in selection.kept {
+            let variant = pick.product.defaultVariant
+            guard !thread.kit.contains(where: { $0.product.id == pick.product.id }) else { continue }
+            let decisionID = "\(receiptID)-\(pick.product.id)"
+            thread.kit.append(KitItem(product: pick.product, variant: variant))
+            thread.remainingDeckIDs.removeAll { $0 == pick.product.id }
+            thread.decisions.append(MissionProductDecision(
+                id: decisionID, kind: .added, productID: pick.product.id,
+                variantID: variant.id, createdAt: clock(), decidedBy: .crumb
+            ))
+            decisionIDs.append(decisionID)
+            kept.append(MissionAutoKeepRow(
+                productID: pick.product.id, title: pick.product.name,
+                merchant: pick.product.shop.name, presentedPrice: variant.price, part: pick.part
+            ))
+        }
+        guard !kept.isEmpty else { return }
+
+        let snapshot = MissionAutoKeepSnapshot(
+            id: receiptID,
+            kept: kept,
+            heldBack: selection.heldBack.map { pick in
+                MissionAutoKeepRow(
+                    productID: pick.product.id, title: pick.product.name,
+                    merchant: pick.product.shop.name,
+                    presentedPrice: pick.product.defaultVariant.price, part: pick.part
+                )
+            },
+            heldBackReason: selection.heldBackReason
+        )
+        // One turn for the whole pass. Not one line per keep: that is the run log this screen
+        // deleted, and the ledger inside the receipt already says every name and price.
+        thread.appendEvent(kind: .assistantMessage, text: "", createdAt: clock(), blocks: [.autoKeep(snapshot)])
+        let undo = MissionAutoKeepUndo(
+            receiptIDs: [receiptID], decisionIDs: decisionIDs, productIDs: kept.map(\.productID)
+        )
+        // Folded into any outstanding reversal rather than replacing it: a refinement can settle
+        // straight into a second pass, and one chip has to answer for everything Crumb has kept that
+        // the person has not yet responded to.
+        thread.pendingAutoKeepUndo = thread.pendingAutoKeepUndo?.merging(undo) ?? undo
+    }
+
+    /// Puts an auto pass back: the picks leave the kit, their decisions leave the record, and the deck
+    /// is rebuilt in its ranked order — the same reconstruction "Find more" does, so an undone pick
+    /// returns to the position it was ranked in rather than to the head of the queue.
+    ///
+    /// Undoing also flips the mission back to asking about each pick. Reversing a delegation is the
+    /// strongest preference signal available, and honoring it as one is cheaper for the person than
+    /// undoing the same batch twice.
+    private func undoAutoKeep(_ undo: MissionAutoKeepUndo, in thread: inout MissionThread) {
+        let productIDs = Set(undo.productIDs)
+        let decisionIDs = Set(undo.decisionIDs)
+        thread.kit.removeAll { productIDs.contains($0.product.id) }
+        thread.decisions.removeAll { decisionIDs.contains($0.id) }
+        thread.approvalMode = .askEach
+        // The receipts stay in scrollback — the pass really happened — but they are now history of
+        // something reversed, not a statement about the kit. The same supersede treatment
+        // `resetRefinements` gives the turns it undoes; without it a "Kept 3 picks · $214.00" ledger
+        // reads at full weight directly above a header showing an empty kit.
+        let reversed = Set(undo.receiptIDs)
+        for index in thread.timeline.indices {
+            let isReversedReceipt = thread.timeline[index].blocks.contains { block in
+                if case .autoKeep(let snapshot) = block { return reversed.contains(snapshot.id) }
+                return false
+            }
+            if isReversedReceipt { thread.timeline[index].isSuperseded = true }
+        }
+        let unavailable = Set(thread.kit.map(\.product.id))
+            .union(thread.decisions.filter { $0.kind == .skipped }.map(\.productID))
+        thread.remainingDeckIDs = thread.candidates.map(\.id).filter { !unavailable.contains($0) }
+        let count = productIDs.count
+        thread.appendEvent(
+            kind: .notice,
+            text: "Put \(count == 1 ? "that one" : "those \(count)") back — I'll ask about each pick.",
+            createdAt: clock()
+        )
+    }
+
     private func installNextProductOrKitQuestion(
         in thread: inout MissionThread,
-        includeRefinementFollowUps: Bool = false
+        includeRefinementFollowUps: Bool = false,
+        runsAutoKeep: Bool = true
     ) {
+        if runsAutoKeep { runAutoKeep(in: &thread) }
         let byID = Dictionary(uniqueKeysWithValues: thread.candidates.map { ($0.id, $0) })
         if let product = thread.remainingDeckIDs.compactMap({ byID[$0] }).first {
             thread.phase = .deckReady
@@ -1673,6 +1860,21 @@ final class AppModel {
             thread.phase = .deckReady
             installKitQuestion(in: &thread)
         }
+    }
+
+    /// The reversal chip. One label, built in one place, because it appears on two different
+    /// questions and a person should not have to notice which one they are looking at.
+    ///
+    /// Deliberately carries **no** `detail`. The sentence that would go there ("Puts them back on
+    /// the deck and asks about each one") is long enough to trip `hasLongDetail`, which folds the
+    /// whole row into the "Choose a response" disclosure and buries the question's own answers
+    /// behind a sheet — a real cost, paid to explain a label that already says what it does. The
+    /// explanation lives in the receipt directly above it instead.
+    private func undoOption(count: Int) -> MissionInteractionOption {
+        MissionInteractionOption(
+            id: "undo-auto",
+            label: count == 1 ? "Undo that pick" : "Undo those \(count)"
+        )
     }
 
     private func installQuestionForStableState(in thread: inout MissionThread) {
@@ -1903,6 +2105,13 @@ final class AppModel {
             $0.phase = .planning
             $0.task = nil
             $0.plan = []
+            // The pool belonged to the goal being replaced. Leaving it in place meant the next
+            // gather opened on the previous mission's results — invisible while the only status was
+            // a static "Searching the shops…", and a plain untruth now that the header counts what
+            // has been found ("Found 24 so far" before this search has returned anything).
+            $0.candidates = []
+            $0.baseCandidates = []
+            $0.remainingDeckIDs = []
             $0.pendingOperation = MissionPendingOperation(id: operationID, retry: retry, startedAt: clock())
             $0.retry = nil
             if appendUserEvent {

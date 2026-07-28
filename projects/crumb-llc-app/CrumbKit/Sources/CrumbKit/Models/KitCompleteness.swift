@@ -34,13 +34,29 @@ public struct KitCompleteness: Sendable, Equatable {
     /// Assesses `plan` (the checklist) against the products in the kit. Parts with no significant
     /// tokens (all stopwords) are dropped — there's nothing concrete to require. An empty checklist
     /// or empty kit yields all-missing; the caller decides whether to surface it.
-    public static func assess(plan: [String], items: [Product]) -> KitCompleteness {
+    /// `readsRationale` decides whether Crumb's own sentence about a product counts as evidence of
+    /// what that product *is*.
+    ///
+    /// For the cart panel it should: the rationale is prose a curator wrote about this specific item
+    /// ("Grippy on wet rock"), and a checkout warning that over-reports missing parts is the worse
+    /// error. For a decision Crumb makes on its own it must not, because the deterministic curator —
+    /// the floor that runs on every no-model device — voices every card as `A steady pick for
+    /// "<mission title>"`. On a goal that names its parts ("lacrosse stick, helmet and gloves") that
+    /// sentence contains every head noun in the checklist, so *any* card would appear to cover
+    /// *every* part, and a pair of cleats would be kept and filed under "Lacrosse stick".
+    public static func assess(
+        plan: [String],
+        items: [Product],
+        readsRationale: Bool = true
+    ) -> KitCompleteness {
         let parts = plan.filter { !RuleBasedRelevanceGate.orderedTokens($0).isEmpty }
         guard !parts.isEmpty else { return KitCompleteness(covered: [], missing: []) }
 
         // One whole-kit package/bundle in the cart covers the entire checklist.
-        let hasBundle = items.contains(where: coversWholeKit)
-        let itemTokens = items.map { RuleBasedRelevanceGate.tokens($0.name + " " + $0.rationale) }
+        let hasBundle = items.contains { coversWholeKit($0, readsRationale: readsRationale) }
+        let itemTokens = items.map {
+            RuleBasedRelevanceGate.tokens(readsRationale ? $0.name + " " + $0.rationale : $0.name)
+        }
 
         var covered: [String] = []
         var missing: [String] = []
@@ -64,8 +80,8 @@ public struct KitCompleteness: Sendable, Equatable {
     /// ("player package", "gear bundle") — as opposed to a "complete *stick*" component, whose
     /// "complete" says nothing about the kit. Only the strong signals count, so a single complete
     /// component can't masquerade as a full kit. Pure.
-    static func coversWholeKit(_ product: Product) -> Bool {
-        let text = (product.name + " " + product.rationale).lowercased()
+    static func coversWholeKit(_ product: Product, readsRationale: Bool = true) -> Bool {
+        let text = (readsRationale ? product.name + " " + product.rationale : product.name).lowercased()
         if !RuleBasedRelevanceGate.tokens(text).isDisjoint(with: bundleWords) { return true }
         return bundlePhrases.contains { text.contains($0) }
     }

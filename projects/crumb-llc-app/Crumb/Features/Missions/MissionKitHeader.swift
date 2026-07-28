@@ -143,7 +143,13 @@ struct MissionKitHeader: View {
         }
         if let shopCount { parts.append("\(shopCount) shops") }
         switch state {
-        case .working: parts.append("Crumb is working…")
+        // While the search is actually returning things, the count *replaces* the generic sentence
+        // rather than joining it. A gather can run for the better part of a minute, and for all of
+        // it "Crumb is working…" said the same thing at second 2 and second 40 — the pill beside the
+        // spinner and the dock were already saying that much. A number that climbs is the one fact
+        // this line can add, and it costs no new state: the streamed gather writes each batch into
+        // the thread as it lands. Before the first batch, and while planning, it stays quiet.
+        case .working: parts.append(MissionHomeStatus.workingDetail(for: thread) ?? "Crumb is working…")
         case .stalled: parts.append("Needs a decision")
         case .ready: break
         }
@@ -163,7 +169,10 @@ struct MissionKitHeader: View {
         }
         if let shopCount { parts.append("across \(shopCount) shops") }
         switch state {
-        case .working: parts.append("Crumb is working")
+        // Mirrors `statusLine`. The header is one ignored element with a hand-built label, so a
+        // counter added only to the visible text would make the mission screen — the screen this
+        // whole thing is for — the one place the progress is inaudible.
+        case .working: parts.append(MissionHomeStatus.workingDetail(for: thread) ?? "Crumb is working")
         case .stalled: parts.append("needs a decision")
         case .ready: break
         }

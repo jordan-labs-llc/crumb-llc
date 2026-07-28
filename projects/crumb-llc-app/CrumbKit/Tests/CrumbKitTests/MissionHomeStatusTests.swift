@@ -89,6 +89,45 @@ struct MissionHomeStatusTests {
         #expect(MissionHomeStatus.detail(for: bare) == "Stopped before it finished")
     }
 
+    // MARK: The live work counter
+
+    @Test("A search that has found things says how many, in the header and on Home")
+    func gatheringReportsItsFindCount() {
+        var searching = thread(.gathering)
+        searching.task = SeedData.coffee
+        searching.candidates = (1...24).map { product("p\($0)", price: 12) }
+        #expect(MissionHomeStatus.workingDetail(for: searching) == "Found 24 so far")
+        #expect(MissionHomeStatus.detail(for: searching) == "Found 24 so far")
+    }
+
+    @Test("A search with nothing yet stays quiet rather than saying 'Found 0'")
+    func emptyGatherHasNothingToReport() {
+        var searching = thread(.gathering)
+        searching.task = SeedData.coffee
+        #expect(MissionHomeStatus.workingDetail(for: searching) == nil)
+        // The pill beside the spinner is already saying this much; a zero would be a third copy.
+        #expect(MissionHomeStatus.detail(for: searching) == MissionContinuationSummary.text(for: searching))
+    }
+
+    @Test("Planning never claims a find count — it has issued no search at all")
+    func planningIsNotSearching() {
+        // `.planning` and `.gathering` are both `.working` state, so this is the fabrication the
+        // counter has to be narrow enough to avoid.
+        var planning = thread(.planning)
+        planning.candidates = [product("stale", price: 9)]
+        #expect(MissionHomeStatus.workingDetail(for: planning) == nil)
+        #expect(MissionHomeStatus.detail(for: planning) == "Planning")
+    }
+
+    @Test("A settled deck goes back to reporting its contents, not its search")
+    func settledDeckDropsTheCounter() {
+        var settled = thread(.deckReady)
+        settled.candidates = (1...24).map { product("p\($0)", price: 12) }
+        settled.remainingDeckIDs = settled.candidates.map(\.id)
+        #expect(MissionHomeStatus.workingDetail(for: settled) == nil)
+        #expect(MissionHomeStatus.detail(for: settled) != "Found 24 so far")
+    }
+
     @Test("Every phase maps to a state, so a new phase is a compile error and not a silent default")
     func mappingIsTotal() {
         for phase in MissionThreadPhase.allCases {
