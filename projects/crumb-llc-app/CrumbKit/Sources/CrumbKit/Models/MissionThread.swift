@@ -1044,16 +1044,24 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
             if let variantID, !product.variants.contains(where: { $0.id == variantID }) {
                 throw MissionThreadValidationError.unresolvedInteractionVariant(productID: productID, variantID: variantID)
             }
+            let variant = variantID.flatMap { id in product.variants.first { $0.id == id } }
+            func matches(_ snapshot: MissionProductSnapshot) -> Bool {
+                snapshot.productID == productID && snapshot.variantID == variantID
+                    && snapshot.title == product.name && snapshot.merchant == product.shop.name
+                    && snapshot.imageURL == product.imageURL
+                    && snapshot.presentedPrice == (variant?.price ?? product.price)
+                    && snapshot.variantTitle == variant?.title && snapshot.rationale == product.rationale
+            }
+            // The frozen snapshot an answer refers to may be presented on its own *or* as the
+            // leading entry of a comparison — Crumb states one recommendation and shows the two
+            // foils that make it legible. Either way the identity being written is the one that
+            // was rendered, which is the property this check exists to hold.
             guard prompt.blocks.contains(where: { block in
-                if case .product(let snapshot) = block {
-                    let variant = variantID.flatMap { id in product.variants.first { $0.id == id } }
-                    return snapshot.productID == productID && snapshot.variantID == variantID
-                        && snapshot.title == product.name && snapshot.merchant == product.shop.name
-                        && snapshot.imageURL == product.imageURL
-                        && snapshot.presentedPrice == (variant?.price ?? product.price)
-                        && snapshot.variantTitle == variant?.title && snapshot.rationale == product.rationale
+                switch block {
+                case .product(let snapshot): return matches(snapshot)
+                case .comparison(let snapshot): return snapshot.products.contains(where: matches)
+                default: return false
                 }
-                return false
             }) else {
                 throw MissionThreadValidationError.unresolvedInteractionSnapshot(productID)
             }
