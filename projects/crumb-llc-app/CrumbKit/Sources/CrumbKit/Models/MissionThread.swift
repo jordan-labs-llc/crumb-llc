@@ -173,6 +173,14 @@ public struct MissionProductSnapshot: Hashable, Sendable, Codable {
         self.disclosure = disclosure
     }
 
+    /// Whether this can legally be frozen into a turn. See ``MissionComparisonSnapshot/isPresentable``.
+    public var isPresentable: Bool {
+        !productID.isEmpty
+            && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && presentedPrice >= 0
+    }
+
     public init(product: Product, variant: Variant? = nil, availability: String = "Available when shown", disclosure: String? = nil) {
         self.init(
             productID: product.id,
@@ -195,6 +203,19 @@ public struct MissionComparisonSnapshot: Identifiable, Hashable, Sendable, Codab
     public init(id: String, products: [MissionProductSnapshot]) {
         self.id = id
         self.products = products
+    }
+
+    /// Whether this can legally be frozen into a turn — the same invariants ``MissionThread``
+    /// enforces when it validates the document.
+    ///
+    /// Exposed so a *presentation* choice can be tested before it is committed. A block that fails
+    /// validation makes the whole enclosing `mutateActiveThread` transaction roll back, so an
+    /// unpresentable comparison does not merely fail to render: it silently destroys the commerce
+    /// mutation it was appended alongside. Callers check this and fall back to a single product.
+    public var isPresentable: Bool {
+        guard !id.isEmpty, (2...4).contains(products.count) else { return false }
+        guard products.allSatisfy(\.isPresentable) else { return false }
+        return Set(products.map(\.productID)).count == products.count
     }
 }
 
@@ -952,12 +973,9 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
             case .product(let snapshot):
                 try validate(productSnapshot: snapshot)
             case .comparison(let snapshot):
-                guard !snapshot.id.isEmpty, (2...4).contains(snapshot.products.count) else {
-                    throw MissionThreadValidationError.unresolvedInteractionSnapshot(snapshot.id)
-                }
                 for product in snapshot.products { try validate(productSnapshot: product) }
-                guard Set(snapshot.products.map(\.productID)).count == snapshot.products.count else {
-                    throw MissionThreadValidationError.conflictingProductID(snapshot.id)
+                guard snapshot.isPresentable else {
+                    throw MissionThreadValidationError.unresolvedInteractionSnapshot(snapshot.id)
                 }
             case .kit(let snapshot):
                 guard !snapshot.id.isEmpty, snapshot.revision >= 0,
@@ -974,10 +992,7 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
     }
 
     private func validate(productSnapshot: MissionProductSnapshot) throws {
-        guard !productSnapshot.productID.isEmpty,
-              !productSnapshot.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !productSnapshot.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              productSnapshot.presentedPrice >= 0 else {
+        guard productSnapshot.isPresentable else {
             throw MissionThreadValidationError.unresolvedInteractionSnapshot(productSnapshot.productID)
         }
     }
