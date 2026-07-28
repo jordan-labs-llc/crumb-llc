@@ -262,6 +262,59 @@ public struct MissionActivityReceipt: Identifiable, Hashable, Sendable, Codable 
     }
 }
 
+/// One line of an auto-keep receipt: what Crumb kept, and which part of the plan it was for.
+public struct MissionAutoKeepRow: Identifiable, Hashable, Sendable, Codable {
+    public var id: Product.ID { productID }
+    public let productID: Product.ID
+    public let title: String
+    public let merchant: String
+    public let presentedPrice: Decimal
+    /// The plan part this pick covered — the reason it was the one taken. `nil` when the mission
+    /// had no checklist to answer to.
+    public let part: String?
+
+    public init(
+        productID: Product.ID,
+        title: String,
+        merchant: String,
+        presentedPrice: Decimal,
+        part: String? = nil
+    ) {
+        self.productID = productID
+        self.title = title
+        self.merchant = merchant
+        self.presentedPrice = presentedPrice
+        self.part = part
+    }
+}
+
+/// What Crumb did on its own during one pass of ``MissionApprovalMode/auto``.
+///
+/// This is the *receipt*, not a progress log: it exists because those decisions happened without the
+/// person in the loop, so it is the only place the outcome can be attributed and reversed. A mission
+/// in `askEach` never produces one, which is why nothing about the default experience changes.
+public struct MissionAutoKeepSnapshot: Identifiable, Hashable, Sendable, Codable {
+    public let id: String
+    /// The picks Crumb kept, in the order it kept them.
+    public let kept: [MissionAutoKeepRow]
+    /// Picks auto deliberately refused and left on the deck for the person, with `heldBackReason`
+    /// naming why. Empty on an unremarkable pass.
+    public let heldBack: [MissionAutoKeepRow]
+    public let heldBackReason: String?
+
+    public init(
+        id: String,
+        kept: [MissionAutoKeepRow],
+        heldBack: [MissionAutoKeepRow] = [],
+        heldBackReason: String? = nil
+    ) {
+        self.id = id
+        self.kept = kept
+        self.heldBack = heldBack
+        self.heldBackReason = heldBackReason
+    }
+}
+
 public enum MissionMessageBlock: Hashable, Sendable, Codable {
     case text(String)
     case plan(MissionPlanSnapshot)
@@ -269,6 +322,44 @@ public enum MissionMessageBlock: Hashable, Sendable, Codable {
     case comparison(MissionComparisonSnapshot)
     case kit(MissionKitSnapshot)
     case activity(MissionActivityReceipt)
+    case autoKeep(MissionAutoKeepSnapshot)
+}
+
+/// The reversal auto-keep leaves behind: everything Crumb has kept on its own that the person has
+/// not yet answered for.
+///
+/// Held on the aggregate rather than derived from the timeline because undo has to restore *state* —
+/// kit membership, decisions, deck order — and reconstructing that by parsing a display snapshot is
+/// exactly what the thread's frozen blocks are forbidden from being used for.
+///
+/// It spans passes rather than tracking only the latest one. A refinement can settle straight into a
+/// second pass before the first has been acknowledged, and a chip reading "Undo those 2" that
+/// silently leaves three earlier picks in the kit is worse than no chip at all.
+public struct MissionAutoKeepUndo: Hashable, Sendable, Codable {
+    /// Every receipt this reversal covers, oldest first — the turns to mark reversed when it is taken.
+    public let receiptIDs: [String]
+    /// The decision ids written by those passes — the handles onto both the kit items and the record.
+    public let decisionIDs: [String]
+    public let productIDs: [Product.ID]
+
+    public init(receiptIDs: [String], decisionIDs: [String], productIDs: [Product.ID]) {
+        self.receiptIDs = receiptIDs
+        self.decisionIDs = decisionIDs
+        self.productIDs = productIDs
+    }
+
+    /// Folds a fresh pass into an outstanding one, preserving order and never double-counting.
+    public func merging(_ other: MissionAutoKeepUndo) -> MissionAutoKeepUndo {
+        func appended(_ base: [String], _ new: [String]) -> [String] {
+            var seen = Set(base)
+            return base + new.filter { seen.insert($0).inserted }
+        }
+        return MissionAutoKeepUndo(
+            receiptIDs: appended(receiptIDs, other.receiptIDs),
+            decisionIDs: appended(decisionIDs, other.decisionIDs),
+            productIDs: appended(productIDs, other.productIDs)
+        )
+    }
 }
 
 // MARK: - Durable interaction protocol
@@ -462,6 +553,17 @@ public struct MissionPendingOperation: Identifiable, Hashable, Sendable, Codable
     }
 }
 
+/// Who made a decision — the person, or Crumb acting on delegated authority.
+///
+/// Recorded on the decision rather than inferred from the timeline, because once Crumb can keep
+/// things on its own the two are otherwise indistinguishable in the record: a kit assembled under
+/// ``MissionApprovalMode/auto`` and one assembled a tap at a time produce byte-identical `kit`
+/// arrays. "Which of these did I actually approve?" has to remain answerable.
+public enum MissionDecider: String, Hashable, Sendable, Codable, CaseIterable {
+    case person
+    case crumb
+}
+
 /// A deterministic product decision kept alongside the snapshot.
 public struct MissionProductDecision: Identifiable, Hashable, Sendable, Codable {
     public enum Kind: String, Hashable, Sendable, Codable, CaseIterable {
@@ -477,20 +579,46 @@ public struct MissionProductDecision: Identifiable, Hashable, Sendable, Codable 
     public let productID: Product.ID
     public let variantID: Variant.ID?
     public let createdAt: Date
+    /// Optional so every decision persisted before delegation existed decodes unchanged. `nil` reads
+    /// as ``MissionDecider/person`` — every one of them was a tap — and surfaces treat it that way,
+    /// so absence can never mis-attribute a human decision to Crumb.
+    public let decidedBy: MissionDecider?
 
     public init(
         id: String = UUID().uuidString,
         kind: Kind,
         productID: Product.ID,
         variantID: Variant.ID? = nil,
-        createdAt: Date
+        createdAt: Date,
+        decidedBy: MissionDecider? = nil
     ) {
         self.id = id
         self.kind = kind
         self.productID = productID
         self.variantID = variantID
         self.createdAt = createdAt
+        self.decidedBy = decidedBy
     }
+
+    /// True only when Crumb decided this one itself.
+    public var wasDecidedByCrumb: Bool { decidedBy == .crumb }
+}
+
+/// How much a mission asks before it keeps something.
+///
+/// The status quo is ``askEach``: every candidate is its own blocking question, so a five-part kit is
+/// five sequential decisions before anything can be reviewed. ``auto`` delegates the obvious half of
+/// that — one keep per plan part the kit doesn't cover yet — and reports it as a single reversible
+/// receipt. It is per-mission, not a global setting: delegation is a judgement about *this* errand.
+///
+/// What `auto` may never do is as much of the definition as what it may. It only ever moves in the
+/// keep direction (a skip is a decision too, and a passed-over card stays on the deck), it never
+/// answers a cart, retry, recovery or refinement question, it never chooses a destructive option, and
+/// it never opens the cart or starts a checkout. Money leaving the mission stays a human tap in every
+/// mode.
+public enum MissionApprovalMode: String, Hashable, Sendable, Codable, CaseIterable {
+    case askEach
+    case auto
 }
 
 /// Why a decoded mission document cannot safely become an actionable workspace.
@@ -566,6 +694,12 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
     /// or wedges an empty deck. Optional so threads persisted before this field decode
     /// unchanged (`nil` == none queued).
     public var queuedRefinements: [String]?
+    /// How much this mission asks before keeping something. Optional so every thread persisted before
+    /// delegation existed decodes unchanged; `nil` reads as ``MissionApprovalMode/askEach``, which is
+    /// exactly what those threads did.
+    public var approvalMode: MissionApprovalMode?
+    /// The reversal offered on the question immediately after an auto-keep pass, and only there.
+    public var pendingAutoKeepUndo: MissionAutoKeepUndo?
     /// Full immutable-at-mission-start snapshot; its id still lets AppModel target a live roster edit.
     public var recipient: Recipient?
     public var tasteSnapshot: TasteProfile
@@ -635,6 +769,8 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
         refinementTurns: [String],
         refinementDirectives: [RefinementDirective],
         queuedRefinements: [String]? = nil,
+        approvalMode: MissionApprovalMode? = nil,
+        pendingAutoKeepUndo: MissionAutoKeepUndo? = nil,
         recipient: Recipient?,
         tasteSnapshot: TasteProfile,
         pendingOperation: MissionPendingOperation?,
@@ -662,6 +798,8 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
         self.refinementTurns = refinementTurns
         self.refinementDirectives = refinementDirectives
         self.queuedRefinements = queuedRefinements
+        self.approvalMode = approvalMode
+        self.pendingAutoKeepUndo = pendingAutoKeepUndo
         self.recipient = recipient
         self.tasteSnapshot = tasteSnapshot
         self.pendingOperation = pendingOperation
@@ -986,6 +1124,17 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
                 guard !receipt.id.isEmpty,
                       !receipt.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     throw MissionThreadValidationError.unresolvedInteractionSnapshot(receipt.id)
+                }
+            case .autoKeep(let snapshot):
+                // An empty receipt is the failure mode worth catching: it would render as "Kept 0
+                // picks on my own", claiming a pass that did nothing.
+                let rows = snapshot.kept + snapshot.heldBack
+                guard !snapshot.id.isEmpty, !snapshot.kept.isEmpty,
+                      Set(rows.map(\.productID)).count == rows.count,
+                      rows.allSatisfy({ !$0.productID.isEmpty && $0.presentedPrice >= 0
+                          && !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+                      snapshot.heldBack.isEmpty == (snapshot.heldBackReason == nil) else {
+                    throw MissionThreadValidationError.unresolvedInteractionSnapshot(snapshot.id)
                 }
             }
         }

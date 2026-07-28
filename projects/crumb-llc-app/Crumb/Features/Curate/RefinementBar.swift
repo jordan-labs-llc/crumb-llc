@@ -160,6 +160,8 @@ struct MissionResponseDock: View {
     @ViewBuilder
     private var activeMissionContents: some View {
         if let state {
+            if showsApprovalAccessory { approvalAccessory }
+
             if let warning = model.threadPersistenceWarning, state.showsSaveRecovery == false {
                 contextLabel(warning, systemImage: "exclamationmark.triangle", color: CrumbColor.ochre)
                     .accessibilityIdentifier("missionResponseWarning")
@@ -237,6 +239,59 @@ struct MissionResponseDock: View {
                 }
             }
         }
+    }
+
+    // MARK: Approvals
+
+    /// The delegation control appears where delegation means something — a mission with a real
+    /// checklist and more than one card left — and never over a save-recovery or unavailable dock,
+    /// where the only sane next action is fixing that.
+    ///
+    /// It also appears, unconditionally, on a mission that is *already* delegating. Gating purely on
+    /// the deck meant an armed mission whose deck ran down to one card hid its own switch: the
+    /// setting stayed on with nothing on screen saying so and no way to turn it off.
+    private var showsApprovalAccessory: Bool {
+        guard case .activeMission = mode, let state else { return false }
+        guard state.mode != .recovery, state.mode != .unavailable, !state.showsSaveRecovery else { return false }
+        return model.missionApprovalMode == .auto || model.missionAllowsDelegation
+    }
+
+    /// Deliberately the same shape as ``newMissionRecipientAccessory`` — noun, current value,
+    /// chevron. Both answer "how is this mission set up", and a person who has learned one has
+    /// learned the other.
+    private var approvalAccessory: some View {
+        let current = model.missionApprovalMode
+        return Menu {
+            Button {
+                model.setApprovalMode(.askEach)
+            } label: {
+                Label("Ask about each pick", systemImage: current == .askEach ? "checkmark" : "hand.raised")
+            }
+            Button {
+                model.setApprovalMode(.auto)
+            } label: {
+                Label("Keep the best fit for each part", systemImage: current == .auto ? "checkmark" : "bolt")
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text("Approvals")
+                    .foregroundStyle(CrumbColor.ink3)
+                Text(current == .auto ? "Auto" : "Ask each")
+                    .foregroundStyle(CrumbColor.ink)
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(CrumbColor.ink3)
+            }
+            .font(CrumbType.captionStrong)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .accessibilityLabel(
+            current == .auto
+                ? "Approvals: Auto. Crumb keeps the best fit for each part and asks about the rest."
+                : "Approvals: asks about each pick."
+        )
+        .accessibilityIdentifier("missionApprovalAccessory")
     }
 
     private var interactionWasSubmitted: Bool {

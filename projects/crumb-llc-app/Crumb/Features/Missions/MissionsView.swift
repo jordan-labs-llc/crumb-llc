@@ -145,8 +145,13 @@ private struct HomeHeroCard: View {
     }
 
     /// The capped option list, split the way it is rendered: the things you can do, then the exit.
+    ///
+    /// "Undo those 4" is deliberately withheld here. Home renders a title, a status line and four
+    /// thumbnails — never the timeline — so the receipt naming what "those 4" *are* cannot be shown
+    /// beside the chip that discards them. A reversal you cannot read before taking is not a
+    /// one-tap answer; opening the mission (which the card already offers) shows both.
     private func answerChoices(_ interaction: MissionPendingInteraction) -> [MissionInteractionOption] {
-        interaction.options.prefix(4).filter { !$0.isDestructive }
+        interaction.options.prefix(4).filter { !$0.isDestructive && $0.id != "undo-auto" }
     }
 
     private func answerEnders(_ interaction: MissionPendingInteraction) -> [MissionInteractionOption] {

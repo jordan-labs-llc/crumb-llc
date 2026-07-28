@@ -103,6 +103,7 @@ private struct MissionConversationFeed: View {
                                 event: event,
                                 isSettledPick: !isLivePrompt(event),
                                 decision: decision(for: event),
+                                decidedByCrumb: decidedByCrumb(event),
                                 isExpanded: expandedPicks.contains(event.id),
                                 onToggleExpansion: { toggleExpansion(of: event) }
                             )
@@ -259,6 +260,14 @@ private struct MissionConversationFeed: View {
     private func decision(for event: MissionThreadEvent) -> MissionProductDecision.Kind? {
         guard let productID = event.productID else { return nil }
         return thread.decisions.last { $0.productID == productID }?.kind
+    }
+
+    /// Whether the decision on this turn's product was Crumb's rather than the person's. Read off
+    /// the decision record, never inferred from the timeline: once delegation exists, a kit
+    /// assembled automatically and one assembled a tap at a time are otherwise identical.
+    private func decidedByCrumb(_ event: MissionThreadEvent) -> Bool {
+        guard let productID = event.productID else { return false }
+        return thread.decisions.last { $0.productID == productID }?.wasDecidedByCrumb == true
     }
 
     private func position(
@@ -452,6 +461,8 @@ private struct MissionTurnView: View {
     var isSettledPick = false
     /// What was decided about this turn's product, when it carries one.
     var decision: MissionProductDecision.Kind?
+    /// Whether Crumb made that decision itself.
+    var decidedByCrumb = false
     /// Owned by the feed, so scrolling a re-opened pick out of view doesn't fold it back up.
     var isExpanded = false
     var onToggleExpansion: () -> Void = {}
@@ -471,7 +482,10 @@ private struct MissionTurnView: View {
     var body: some View {
         Group {
             if collapsesPick, let snapshot = event.proposedProduct {
-                MissionSettledPickRow(snapshot: snapshot, decision: decision, onExpand: onToggleExpansion)
+                MissionSettledPickRow(
+                    snapshot: snapshot, decision: decision,
+                    decidedByCrumb: decidedByCrumb, onExpand: onToggleExpansion
+                )
             } else if event.kind == .userMessage {
                 userTurn
             } else if isAssistantTurn {
@@ -556,7 +570,12 @@ private struct MissionTurnView: View {
 
     private var artifactBlocks: some View {
         ForEach(Array(event.blocks.enumerated()), id: \.offset) { _, block in
-            MissionArtifactView(block: block, isSuperseded: event.isSuperseded)
+            MissionArtifactView(
+                block: block,
+                isSuperseded: event.isSuperseded,
+                isExpanded: isExpanded,
+                onToggleExpansion: onToggleExpansion
+            )
         }
     }
 
@@ -564,7 +583,9 @@ private struct MissionTurnView: View {
         event.blocks.contains { block in
             switch block {
             case .plan, .product, .comparison, .kit: true
-            case .text, .activity: false
+            // A receipt turn carries no question of its own — the question follows in its own turn —
+            // so there is no reading order to reverse here.
+            case .text, .activity, .autoKeep: false
             }
         }
     }
@@ -621,10 +642,15 @@ private struct MissionTurnView: View {
 private struct MissionSettledPickRow: View {
     let snapshot: MissionProductSnapshot
     let decision: MissionProductDecision.Kind?
+    var decidedByCrumb = false
     let onExpand: () -> Void
 
     private var glyph: String {
         switch decision {
+        // The same bolt the auto receipt wears. A row Crumb decided and a row you decided are both
+        // "kept", and the checkmark alone said so identically — the tie back to the receipt is what
+        // makes the distinction readable without spending a line of text on it.
+        case .added where decidedByCrumb: return "bolt.fill"
         case .added: return "checkmark"
         case .skipped: return "arrow.uturn.forward"
         case .removed: return "minus"
@@ -637,9 +663,11 @@ private struct MissionSettledPickRow: View {
     /// tinting it would make a browsed-and-declined product look like a problem.
     private var isKept: Bool { decision == .added || decision == .variantChanged }
 
+    /// "Kept" and "Kept by Crumb" are different facts about the same row, and only one of them is
+    /// something the person is on the hook for having chosen.
     private var decisionWord: String {
         switch decision {
-        case .added: return "Kept"
+        case .added: return decidedByCrumb ? "Kept by Crumb" : "Kept"
         case .skipped: return "Passed"
         case .removed: return "Removed"
         case .variantChanged: return "Kept, changed"
@@ -701,6 +729,10 @@ private struct MissionSettledPickRow: View {
 private struct MissionArtifactView: View {
     let block: MissionMessageBlock
     let isSuperseded: Bool
+    /// Shared with the settled-pick collapse: both are "this turn is folded up", and a turn is
+    /// never both at once.
+    var isExpanded = false
+    var onToggleExpansion: () -> Void = {}
 
     @ViewBuilder
     var body: some View {
@@ -725,7 +757,130 @@ private struct MissionArtifactView: View {
             EmptyView()
         case .activity(let receipt):
             MissionActivityArtifact(receipt: receipt, isSettled: isSuperseded)
+        case .autoKeep(let snapshot):
+            MissionAutoKeepArtifact(
+                snapshot: snapshot, isReversed: isSuperseded,
+                isExpanded: isExpanded, onToggle: onToggleExpansion
+            )
         }
+    }
+}
+
+/// What Crumb kept while you weren't answering, folded into one line.
+///
+/// This is the one piece of narration the mission screen reintroduces, and it earns the space on a
+/// rule the deleted receipts failed: those described work whose *result was already on screen*, so
+/// reading them told you nothing new. These are decisions nobody watched being made. Collapsed it is
+/// a single row; open it is a ledger in the settled picks' own visual language; and when auto refused
+/// something, the refusal is stated in ochre rather than left to be discovered in the deck.
+private struct MissionAutoKeepArtifact: View {
+    let snapshot: MissionAutoKeepSnapshot
+    /// The person took the undo. The row stays — it happened — but it must stop reading as a
+    /// statement about what is in the kit right now.
+    var isReversed = false
+    let isExpanded: Bool
+    let onToggle: () -> Void
+
+    private var headline: String {
+        let kept = snapshot.kept.count == 1
+            ? "Kept 1 pick on my own"
+            : "Kept \(snapshot.kept.count) picks on my own"
+        return isReversed ? "\(kept) — undone" : kept
+    }
+
+    private var subtotal: Decimal { snapshot.kept.reduce(0) { $0 + $1.presentedPrice } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
+            Button(action: onToggle) {
+                HStack(spacing: CrumbMetrics.Space.s) {
+                    Image(systemName: "bolt.badge.clock")
+                        .font(.subheadline)
+                        .foregroundStyle(CrumbColor.pine)
+                        .accessibilityHidden(true)
+                    Text(headline)
+                        .font(CrumbType.captionStrong)
+                        .foregroundStyle(CrumbColor.ink)
+                    Spacer(minLength: CrumbMetrics.Space.xs)
+                    Text(subtotal, format: .currency(code: "USD"))
+                        .font(CrumbType.caption)
+                        .foregroundStyle(CrumbColor.ink2)
+                        .monospacedDigit()
+                        .fixedSize()
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(CrumbColor.ink3)
+                        .accessibilityHidden(true)
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(
+                "\(headline), \(subtotal.formatted(.currency(code: "USD"))) in total"
+            )
+            .accessibilityHint("Shows what Crumb kept and why")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityIdentifier("missionAutoKeepReceipt.\(snapshot.id)")
+
+            if isExpanded {
+                ForEach(snapshot.kept) { row in
+                    autoKeepRow(row)
+                }
+            }
+
+            // The badge on the collapsed row in the reference design. It stays visible folded up,
+            // because a refusal is the part of the pass a person most needs to know happened.
+            if let reason = snapshot.heldBackReason, let held = snapshot.heldBack.first {
+                Label(
+                    snapshot.heldBack.count == 1
+                        ? "Left \(held.title) for you — \(reason)."
+                        : "Left \(snapshot.heldBack.count) for you — \(reason).",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(CrumbType.caption)
+                .foregroundStyle(CrumbColor.ochre)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("missionAutoKeepHeldBack.\(snapshot.id)")
+            }
+        }
+        .padding(CrumbMetrics.Space.m)
+        .background(
+            CrumbColor.pineSoft,
+            in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous)
+        )
+        .accessibilityElement(children: .contain)
+    }
+
+    private func autoKeepRow(_ row: MissionAutoKeepRow) -> some View {
+        HStack(spacing: CrumbMetrics.Space.s) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(row.title)
+                    .font(CrumbType.callout)
+                    .foregroundStyle(CrumbColor.ink)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                // The part is the *reason* this one was taken, which is the question a receipt for
+                // an unwatched decision has to answer.
+                Text([row.part, row.merchant].compactMap { $0 }.joined(separator: " · "))
+                    .font(CrumbType.caption)
+                    .foregroundStyle(CrumbColor.ink3)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: CrumbMetrics.Space.xs)
+            Text(row.presentedPrice, format: .currency(code: "USD"))
+                .font(CrumbType.caption)
+                .foregroundStyle(CrumbColor.ink)
+                .monospacedDigit()
+                .fixedSize()
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            "\(row.title), \(row.presentedPrice.formatted(.currency(code: "USD"))), from \(row.merchant)"
+                + (row.part.map { ", for \($0)" } ?? "")
+        )
+        .accessibilityIdentifier("missionAutoKeepRow.\(row.productID)")
     }
 }
 
