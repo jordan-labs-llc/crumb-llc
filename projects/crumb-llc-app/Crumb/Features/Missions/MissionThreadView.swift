@@ -18,7 +18,16 @@ struct MissionThreadView: View {
                     MissionKitHeader(thread: thread)
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    MissionResponseDock()
+                    VStack(spacing: 0) {
+                        // Once anything is kept there is always a way to buy it, whatever question
+                        // happens to be on the table. The reported session ended on a dock offering
+                        // "Find more" and "End mission" — a finished kit with no button that moved
+                        // it forward, and free text as the only way out.
+                        if !thread.kit.isEmpty {
+                            MissionCheckoutBar(kit: thread.kit)
+                        }
+                        MissionResponseDock()
+                    }
                 }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("MissionThreadScreen")
@@ -44,6 +53,10 @@ private struct MissionConversationFeed: View {
     /// `LazyVStack` discards off-screen rows, so per-row `@State` would silently re-collapse a pick the
     /// moment it scrolled out of view — exactly when someone is scrolling up to compare two of them.
     @State private var expandedPicks: Set<String> = []
+    /// Folded by default: a mission screen leads with the decision, not the record of how it got
+    /// here. Opt-in because the record is exactly what someone about to authorize a multi-merchant
+    /// charge may want to audit.
+    @State private var isHistoryExpanded = false
 
     private let endID = "missionFeedEnd"
 
@@ -58,10 +71,34 @@ private struct MissionConversationFeed: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: CrumbMetrics.Space.l) {
+                        // Everything already decided folds into one line, so the screen is the
+                        // decision in front of you rather than the log of how you got here. The
+                        // reported session was five collapsed pick rows and no live card at all —
+                        // a transcript of work, with the actual question pushed off the bottom.
+                        if !settledHistory.isEmpty {
+                            MissionHistoryDisclosure(
+                                count: settledHistory.count,
+                                isExpanded: isHistoryExpanded,
+                                onToggle: { withAnimation(.easeOut(duration: 0.2)) { isHistoryExpanded.toggle() } }
+                            )
+                            if isHistoryExpanded {
+                                ForEach(settledHistory) { event in
+                                    MissionTurnView(
+                                        event: event,
+                                        isSettledPick: true,
+                                        decision: decision(for: event),
+                                        isExpanded: expandedPicks.contains(event.id),
+                                        onToggleExpansion: { toggleExpansion(of: event) }
+                                    )
+                                    .id(event.id)
+                                }
+                            }
+                        }
+
                         // Bookkeeping never reaches the conversation: it stays in the domain
                         // timeline (and in History) but the screen no longer reads a line for every
                         // internal step. See `isRenderedTurn`.
-                        ForEach(renderedTimeline) { event in
+                        ForEach(liveTurns) { event in
                             MissionTurnView(
                                 event: event,
                                 isSettledPick: !isLivePrompt(event),
@@ -164,6 +201,25 @@ private struct MissionConversationFeed: View {
                 }
             }
         }
+    }
+
+    /// Everything settled before the live question — folded away by default.
+    ///
+    /// Empty while a mission has no question on the table (it is finished, or failed), because then
+    /// the record *is* the content and hiding it behind a disclosure would leave a blank screen.
+    private var settledHistory: [MissionThreadEvent] {
+        guard thread.pendingInteraction != nil,
+              let liveIndex = renderedTimeline.firstIndex(where: isLivePrompt) else { return [] }
+        return Array(renderedTimeline[..<liveIndex])
+    }
+
+    /// The live question and anything after it — what the screen leads with.
+    private var liveTurns: [MissionThreadEvent] {
+        guard thread.pendingInteraction != nil,
+              let liveIndex = renderedTimeline.firstIndex(where: isLivePrompt) else {
+            return renderedTimeline
+        }
+        return Array(renderedTimeline[liveIndex...])
     }
 
     /// The turns the conversation actually reads.
@@ -278,6 +334,103 @@ private extension MissionThreadEvent {
             if case .product(let snapshot) = block { return snapshot }
         }
         return nil
+    }
+}
+
+/// The standing way out of a mission that has something in it.
+///
+/// Deliberately not a chip in the dock: dock options belong to whatever question is currently
+/// being asked and change as it changes, which is precisely how a kit ends up with nowhere to go.
+/// This is a property of the *kit*, so it persists across every question.
+private struct MissionCheckoutBar: View {
+    @Environment(AppModel.self) private var model
+    let kit: [KitItem]
+
+    private var subtotal: Decimal { kit.reduce(0) { $0 + $1.variant.price } }
+    private var shopCount: Int { Set(kit.map(\.product.shop.id)).count }
+
+    /// Multi-shop is a fact worth stating before someone taps: UCP makes each merchant its own
+    /// order, so "check out" here is more than one transaction and should not be a surprise.
+    private var detail: String {
+        let items = kit.count == 1 ? "1 item" : "\(kit.count) items"
+        return shopCount >= 2 ? "\(items) · \(shopCount) shops" : items
+    }
+
+    var body: some View {
+        Button {
+            model.openCart()
+            Task { @MainActor in await model.startCheckoutWorkflow() }
+        } label: {
+            HStack(spacing: CrumbMetrics.Space.m) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Check out")
+                        .font(CrumbType.headline)
+                        .foregroundStyle(.white)
+                    Text(detail)
+                        .font(CrumbType.caption)
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+                Spacer(minLength: CrumbMetrics.Space.s)
+                Text(subtotal, format: .currency(code: "USD"))
+                    .font(CrumbType.title2)
+                    .foregroundStyle(.white)
+                    .monospacedDigit()
+                    .fixedSize()
+            }
+            .padding(.horizontal, CrumbMetrics.Space.l)
+            .padding(.vertical, CrumbMetrics.Space.m)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(CrumbColor.pine, in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, CrumbMetrics.Space.l)
+        .padding(.bottom, CrumbMetrics.Space.s)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Check out, \(detail), \(subtotal.formatted(.currency(code: "USD")))")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("missionCheckoutBar")
+    }
+}
+
+/// The one line that stands in for everything already decided.
+///
+/// Named for what it contains rather than styled as a section header: a person opens this to answer
+/// "why did Crumb pick that", which is a question about work, not about chronology.
+private struct MissionHistoryDisclosure: View {
+    let count: Int
+    let isExpanded: Bool
+    let onToggle: () -> Void
+
+    private var label: String {
+        isExpanded ? "Hide what Crumb did" : "What Crumb did"
+    }
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: CrumbMetrics.Space.s) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(CrumbColor.ink3)
+                    .accessibilityHidden(true)
+                Text(label)
+                    .font(CrumbType.captionStrong)
+                    .foregroundStyle(CrumbColor.ink2)
+                if !isExpanded {
+                    Text("\(count)")
+                        .font(CrumbType.caption)
+                        .foregroundStyle(CrumbColor.ink3)
+                        .monospacedDigit()
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isExpanded ? "Hide what Crumb did" : "What Crumb did, \(count) steps")
+        .accessibilityHint(isExpanded ? "Folds the earlier steps away" : "Shows the earlier steps")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("missionHistoryDisclosure")
     }
 }
 

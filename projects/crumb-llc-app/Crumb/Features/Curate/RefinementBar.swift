@@ -20,6 +20,9 @@ struct MissionResponseDock: View {
     @State private var expandedChoices: MissionChoicePresentation?
     @State private var pendingDestructive: PendingDestructiveChoice?
     @State private var addingPerson = false
+    /// Whether the person has opened the prose field on a question that also offers buttons.
+    /// Reset with `identity`, so it never carries across to a different question.
+    @State private var isComposingProse = false
     @FocusState private var focused: Bool
 
     init(mode: Mode = .activeMission) {
@@ -113,6 +116,7 @@ struct MissionResponseDock: View {
             submittedIdentity = nil
             expandedChoices = nil
             pendingDestructive = nil
+            isComposingProse = false
         }
         .confirmationDialog(
             "End this mission?",
@@ -179,7 +183,7 @@ struct MissionResponseDock: View {
                 MissionResponseOptions(
                     question: state.question,
                     options: state.options,
-                    usesDisclosure: dynamicTypeSize.isAccessibilitySize || state.options.contains(where: hasDetail),
+                    usesDisclosure: dynamicTypeSize.isAccessibilitySize || state.options.contains(where: hasLongDetail),
                     isEnabled: optionsEnabled,
                     identity: identity,
                     context: submissionContext,
@@ -190,17 +194,42 @@ struct MissionResponseDock: View {
 
             // A choice-only or confirmation question deliberately has no inert text field. The
             // envelope contains only the controls that can answer the current question.
+            //
+            // When the question *does* offer buttons, the field is folded behind "Tell Crumb
+            // more". Standing open beside them it read as the primary way to answer — which is how
+            // a session ends up typing "Let's create a cart" at a dock whose buttons were "Find
+            // more" and "End mission". Buttons carry the common moves; prose is for the things a
+            // button cannot say. A question with no buttons keeps the field inline, because then
+            // it is the only way to answer at all.
             if state.allowsFreeText {
-                if !state.options.isEmpty { Divider().foregroundStyle(CrumbColor.line) }
-                MissionTextInputRow(
-                    text: draft,
-                    focused: $focused,
-                    placeholder: state.placeholder,
-                    isEnabled: textEnabled,
-                    fieldIdentifier: "missionResponseField",
-                    sendIdentifier: "missionResponseSend",
-                    onSubmit: submitText
-                )
+                if state.options.isEmpty || isComposingProse {
+                    if !state.options.isEmpty { Divider().foregroundStyle(CrumbColor.line) }
+                    MissionTextInputRow(
+                        text: draft,
+                        focused: $focused,
+                        placeholder: state.placeholder,
+                        isEnabled: textEnabled,
+                        fieldIdentifier: "missionResponseField",
+                        sendIdentifier: "missionResponseSend",
+                        onSubmit: submitText
+                    )
+                } else {
+                    Button {
+                        isComposingProse = true
+                        focused = true
+                    } label: {
+                        Label("Tell Crumb more", systemImage: "text.bubble")
+                            .font(CrumbType.caption)
+                            .foregroundStyle(CrumbColor.ink3)
+                            .frame(minHeight: 44)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!textEnabled)
+                    .accessibilityHint("Opens a field to answer in your own words")
+                    .accessibilityIdentifier("missionResponseComposeProse")
+                }
             }
         }
     }
@@ -472,8 +501,10 @@ struct MissionResponseDock: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func hasDetail(_ option: MissionInteractionOption) -> Bool {
-        option.detail?.isEmpty == false
+    /// A detail long enough that it cannot ride a capsule and needs the expanded chooser.
+    /// A price ("$36.00") rides; a sentence does not.
+    private func hasLongDetail(_ option: MissionInteractionOption) -> Bool {
+        (option.detail?.count ?? 0) > 16
     }
 }
 
@@ -567,9 +598,18 @@ private struct MissionResponseOptions: View {
         .accessibilityIdentifier("missionResponseChoiceDisclosure")
     }
 
+    /// The capsule's text: the label, plus a short detail when there is one.
+    private func compactTitle(_ option: MissionInteractionOption) -> String {
+        guard let detail = option.detail, !detail.isEmpty, detail.count <= 16 else { return option.label }
+        return "\(option.label) \u{00B7} \(detail)"
+    }
+
     private func compactButton(_ option: MissionInteractionOption) -> some View {
         Button { onSelect(option, context, identity) } label: {
-            Text(option.label)
+            // A short detail rides the chip: "Add to cart · $36", "Cheaper · $24". It used to force
+            // the whole row behind a "Choose a response" disclosure, which buried the primary
+            // action two taps deep — a worse trade than a slightly wider capsule.
+            Text(compactTitle(option))
                 .font(CrumbType.captionStrong)
                 .foregroundStyle(CrumbColor.ink)
                 .lineLimit(2)
@@ -582,6 +622,12 @@ private struct MissionResponseOptions: View {
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
+        // Spoken with a comma rather than the visible "·", which VoiceOver reads as "middle dot".
+        .accessibilityLabel(
+            option.detail.map { detail in
+                detail.isEmpty || detail.count > 16 ? option.label : "\(option.label), \(detail)"
+            } ?? option.label
+        )
         .accessibilityIdentifier("missionResponseOption.\(option.id)")
     }
 

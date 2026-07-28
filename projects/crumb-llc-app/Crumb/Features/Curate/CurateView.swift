@@ -107,19 +107,116 @@ struct MissionProductSnapshotView: View {
     }
 }
 
+/// Crumb's recommendation, with the two options that make it legible underneath.
+///
+/// The first product is the answer and gets the full card — photo, price, and the curator's
+/// reason. The rest are foils, and they are deliberately *small*: three full cards is 1,300pt of
+/// scrolling and turns a recommendation back into the price ladder this design exists to replace.
+/// A foil states the one thing it is for — costs less, or is a step up — and what that costs.
 struct MissionComparisonSnapshotView: View {
     let snapshot: MissionComparisonSnapshot
 
+    private var recommendation: MissionProductSnapshot? { snapshot.products.first }
+    private var foils: [MissionProductSnapshot] { Array(snapshot.products.dropFirst()) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: CrumbMetrics.Space.m) {
-            Text("Options to compare")
-                .font(CrumbType.captionStrong)
-                .foregroundStyle(CrumbColor.pine)
-            ForEach(snapshot.products, id: \.productID) { product in
-                MissionProductSnapshotView(snapshot: product)
+            if let recommendation {
+                MissionProductSnapshotView(snapshot: recommendation)
+
+                if !foils.isEmpty {
+                    Text("Also considered")
+                        .font(CrumbType.captionStrong)
+                        .foregroundStyle(CrumbColor.ink3)
+                        .padding(.top, CrumbMetrics.Space.xs)
+
+                    VStack(spacing: 0) {
+                        ForEach(Array(foils.enumerated()), id: \.element.productID) { index, foil in
+                            if index > 0 { Divider().overlay(CrumbColor.line) }
+                            MissionFoilRow(
+                                snapshot: foil,
+                                framing: foil.presentedPrice < recommendation.presentedPrice
+                                    ? "Costs less" : "A step up"
+                            )
+                        }
+                    }
+                    .background(
+                        CrumbColor.raised,
+                        in: RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: CrumbMetrics.Radius.card, style: .continuous)
+                            .strokeBorder(CrumbColor.line, lineWidth: 1)
+                    )
+                }
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("missionArtifact.comparison.\(snapshot.id)")
+    }
+}
+
+/// One alternative, at a glance. Read-only: choosing it happens in the dock, so scrollback can
+/// never stay accidentally actionable — the same rule the full product card follows.
+private struct MissionFoilRow: View {
+    let snapshot: MissionProductSnapshot
+    /// Why this row is here at all, in two words.
+    let framing: String
+
+    var body: some View {
+        HStack(spacing: CrumbMetrics.Space.m) {
+            art
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: CrumbMetrics.Radius.tile, style: .continuous))
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(framing)
+                    .font(CrumbType.captionStrong)
+                    .foregroundStyle(CrumbColor.pine)
+                Text(snapshot.title)
+                    .font(CrumbType.callout)
+                    .foregroundStyle(CrumbColor.ink)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(snapshot.merchant)
+                    .font(CrumbType.caption)
+                    .foregroundStyle(CrumbColor.ink3)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: CrumbMetrics.Space.s)
+
+            Text(snapshot.presentedPrice, format: .currency(code: "USD"))
+                .font(CrumbType.headline)
+                .foregroundStyle(CrumbColor.ink)
+                .monospacedDigit()
+                .fixedSize()
+        }
+        .padding(CrumbMetrics.Space.m)
+        .frame(minHeight: 44)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            "\(framing): \(snapshot.title), \(snapshot.presentedPrice.formatted(.currency(code: "USD"))), from \(snapshot.merchant)"
+        )
+        .accessibilityIdentifier("missionFoil.\(snapshot.productID)")
+    }
+
+    @ViewBuilder
+    private var art: some View {
+        if let imageURL = snapshot.imageURL {
+            AsyncImage(url: imageURL) { phase in
+                switch phase {
+                case .success(let image): image.resizable().scaledToFill()
+                default: placeholder
+                }
+            }
+        } else {
+            placeholder
+        }
+    }
+
+    private var placeholder: some View {
+        ProductArt(stops: [0x315F5A, 0x8AB5A8], symbol: "shippingbox.fill", seed: snapshot.productID)
     }
 }

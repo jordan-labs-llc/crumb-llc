@@ -19,7 +19,13 @@ struct MissionKitHeader: View {
     private var title: String { thread.task?.title ?? thread.goal }
     private var state: MissionHomeState { MissionHomeStatus.state(for: thread) }
     private var kept: [KitItem] { thread.kit }
-    private var partCount: Int { thread.plan.count }
+
+    /// How many things this mission is assembling.
+    ///
+    /// A single-item mission is looking for *one* thing however many queries it ran to find it, so
+    /// it reports one part and the header stays quiet about counts. Reading `plan.count` alone let
+    /// a shortlist mission announce "5 parts" while showing one product and its two alternatives.
+    private var partCount: Int { thread.task?.isSingleItem == true ? 1 : thread.plan.count }
     private var subtotal: Decimal { kept.reduce(0) { $0 + $1.variant.price } }
 
     /// Only ever ≥ 2. One shop is not a fact worth a slot; two is the point at which the kit means
@@ -127,7 +133,10 @@ struct MissionKitHeader: View {
     /// "Found 5 options so far." removed the only ambient signal that anything was happening.
     private var statusLine: String {
         var parts: [String] = []
-        if partCount > 0 {
+        // A single-part mission says nothing about parts. "1 parts" was both ungrammatical and
+        // noise — the title already names the one thing being shopped for, so counting it tells
+        // nobody anything. Parts are only a fact worth a slot once there is more than one.
+        if partCount > 1 {
             parts.append(hasDeliverable ? "\(kept.count) of \(partCount) kept" : "\(partCount) parts")
         } else if hasDeliverable {
             parts.append(kept.count == 1 ? "1 kept" : "\(kept.count) kept")
@@ -147,8 +156,10 @@ struct MissionKitHeader: View {
             parts.append("\(kept.count) kept")
             parts.append("subtotal \(subtotal.formatted(.currency(code: "USD")))")
             if partCount > 0 { parts.append("of \(partCount) parts") }
-        } else if partCount > 0 {
+        } else if partCount > 1 {
             parts.append("\(partCount) parts, nothing kept yet")
+        } else if partCount == 1 {
+            parts.append("nothing kept yet")
         }
         if let shopCount { parts.append("across \(shopCount) shops") }
         switch state {

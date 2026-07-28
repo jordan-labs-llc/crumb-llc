@@ -66,6 +66,7 @@ struct RootView: View {
             switch env["CRUMB_SCREENSHOT"] {
             case "curate", "conversation-product":
                 await model.presentCurateForScreenshot(missionID: mission)
+            case "typed-answer": await model.presentTypedAnswerForScreenshot(missionID: mission)
             case "cart": await model.presentCartForScreenshot(missionID: mission)
             case "sandbox-contact": await model.presentSandboxCheckoutForScreenshot(missionID: mission, stage: "contact")
             case "sandbox-review": await model.presentSandboxCheckoutForScreenshot(missionID: mission, stage: "review")
