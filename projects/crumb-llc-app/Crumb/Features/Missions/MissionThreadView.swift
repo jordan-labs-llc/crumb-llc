@@ -203,23 +203,30 @@ private struct MissionConversationFeed: View {
         }
     }
 
-    /// Everything settled before the live question — folded away by default.
+    /// The already-decided picks, folded away by default.
+    ///
+    /// **Only picks fold.** A five-part kit's settled cards were what buried the live decision, and
+    /// they are the one kind of turn whose content is fully restated elsewhere — the header carries
+    /// the count and subtotal, the cart carries the lines. Everything else stays on screen:
+    /// notices, failures, interruptions and Crumb's replies are things a person could not have
+    /// worked out for themselves, and several have no other trace at all. Folding them away made
+    /// Crumb answer "under $50" mid-search by appearing to say nothing.
     ///
     /// Empty while a mission has no question on the table (it is finished, or failed), because then
-    /// the record *is* the content and hiding it behind a disclosure would leave a blank screen.
+    /// the record *is* the content and hiding it would leave a blank screen.
     private var settledHistory: [MissionThreadEvent] {
         guard thread.pendingInteraction != nil,
               let liveIndex = renderedTimeline.firstIndex(where: isLivePrompt) else { return [] }
-        return Array(renderedTimeline[..<liveIndex])
+        return renderedTimeline[..<liveIndex].filter { $0.proposedProduct != nil }
     }
 
-    /// The live question and anything after it — what the screen leads with.
+    /// Everything the screen shows inline: the live question, and every settled turn that is not a
+    /// pick. Order is preserved; only the picks are lifted out into the disclosure.
     private var liveTurns: [MissionThreadEvent] {
         guard thread.pendingInteraction != nil,
-              let liveIndex = renderedTimeline.firstIndex(where: isLivePrompt) else {
-            return renderedTimeline
-        }
-        return Array(renderedTimeline[liveIndex...])
+              renderedTimeline.contains(where: isLivePrompt) else { return renderedTimeline }
+        let folded = Set(settledHistory.map(\.id))
+        return renderedTimeline.filter { !folded.contains($0.id) }
     }
 
     /// The turns the conversation actually reads.

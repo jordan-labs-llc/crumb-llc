@@ -202,7 +202,12 @@ struct MissionResponseDock: View {
             // button cannot say. A question with no buttons keeps the field inline, because then
             // it is the only way to answer at all.
             if state.allowsFreeText {
-                if state.options.isEmpty || isComposingProse {
+                // `.working` keeps the field inline even though the dock carries a "Stop" chip.
+                // While Crumb is searching there is no question to answer — the one thing a person
+                // can usefully do is toss in a constraint, which the gather buffers and applies the
+                // moment the deck settles. Folding that behind "Tell Crumb more" hid the only
+                // interaction the state has. Stop is an escape hatch, not an answer.
+                if state.options.isEmpty || state.mode == .working || isComposingProse {
                     if !state.options.isEmpty { Divider().foregroundStyle(CrumbColor.line) }
                     MissionTextInputRow(
                         text: draft,

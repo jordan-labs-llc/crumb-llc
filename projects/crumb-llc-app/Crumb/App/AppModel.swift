@@ -1395,17 +1395,34 @@ final class AppModel {
         // up spending less, what you'd get spending more. The reported session offered five
         // near-identical teas on a price ladder with no photo and no reason, which is the job of
         // deciding handed straight back to the person who asked Crumb to decide.
-        let foils = Self.foils(for: product, in: thread)
+        var foils = Self.foils(for: product, in: thread)
+        let comparison = foils.isEmpty ? nil : MissionComparisonSnapshot(
+            id: "compare-\(thread.id)-\(thread.revision)-\(product.id)",
+            products: ([product] + foils).map {
+                MissionProductSnapshot(product: $0, variant: $0.defaultVariant)
+            }
+        )
+        // A comparison that cannot be frozen must never reach the timeline. Blocks are validated
+        // for the *whole document*, so an unpresentable one throws out of `validateAndNormalize`
+        // and rolls back the entire enclosing transaction — silently destroying the commerce
+        // mutation it was appended alongside. That is how showing foils made a mid-gather
+        // refinement vanish: the deck was reworked, then the rollback took the record of it.
+        // Showing one product instead of three is a small loss; losing the write is not.
         let block: MissionMessageBlock
-        if foils.isEmpty {
-            block = .product(MissionProductSnapshot(product: product, variant: variant))
+        if let comparison, comparison.isPresentable {
+            block = .comparison(comparison)
         } else {
-            block = .comparison(MissionComparisonSnapshot(
-                id: "compare-\(thread.id)-\(thread.revision)-\(product.id)",
-                products: ([product] + foils).map {
-                    MissionProductSnapshot(product: $0, variant: $0.defaultVariant)
-                }
-            ))
+            if let comparison {
+                let bad = comparison.products.filter { !$0.isPresentable }
+                    .map { "\($0.productID)(title:\($0.title.isEmpty ? "blank" : "ok"),merchant:\($0.merchant.isEmpty ? "blank" : "ok"),price:\($0.presentedPrice))" }
+                CrumbTrace.emit(
+                    stage: "comparison-fallback",
+                    elapsedMillis: 0,
+                    summary: "count=\(comparison.products.count) offenders=\(bad.joined(separator: ","))"
+                )
+            }
+            foils = []
+            block = .product(MissionProductSnapshot(product: product, variant: variant))
         }
         thread.appendEvent(
             kind: .assistantMessage,
