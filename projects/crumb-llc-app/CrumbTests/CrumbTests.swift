@@ -418,23 +418,59 @@ struct CrumbTests {
         #expect(model.activeThread?.pendingInteraction?.id != submission.interactionID)
     }
 
-    @Test("Show another rotates without recording a skip")
+    /// A pick question shows Crumb's recommendation beside the two foils that make it legible, and
+    /// names them with their prices. "Show another" retires when foils are present: the foils *are*
+    /// the other options, shown rather than promised. It still appears when there is nothing to
+    /// compare against, and the reducer still honors it for threads persisted before this change.
+    @Test("A pick question offers its alternatives by name and price, not a generic 'show another'")
     @MainActor
-    func showAnotherDoesNotSkip() async throws {
+    func pickQuestionNamesItsAlternatives() async throws {
+        // Single-item: only there is the deck an apples-to-apples set. See `AppModel.foils(for:in:)`.
+        let mission = SeedData.hike.settingSingleItem(true)
         let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
-        model.enterPlan(with: SeedData.hike)
-        await model.loadCandidates(for: SeedData.hike)
-        let before = model.deck.map(\.id)
-        let product = try #require(model.deck.first)
-        let submission = try #require(model.productInteractionSubmission(productID: product.id, optionID: "show-another"))
+        model.enterPlan(with: mission)
+        await model.loadCandidates(for: mission)
 
-        model.submitMissionAnswer(submission)
+        let interaction = try #require(model.activeThread?.pendingInteraction)
+        let ids = interaction.options.map(\.id)
+        #expect(ids.contains("add"))
+        #expect(ids.contains("skip"), "rejecting the pick must always be one tap")
+        #expect(interaction.options.count <= 4, "the interaction contract caps a question at four")
 
-        #expect(model.activeThread?.decisions.contains { $0.productID == product.id && $0.kind == .skipped } == false)
-        if before.count > 1 {
-            #expect(model.deck.first?.id == before[1])
-            #expect(model.deck.last?.id == product.id)
+        let foilChips = interaction.options.filter { $0.id.hasPrefix("foil:") }
+        #expect(!foilChips.isEmpty, "the seed deck has alternatives worth naming")
+        #expect(!ids.contains("show-another"), "foils replace the generic offer")
+        for chip in foilChips {
+            #expect(chip.label == "Cheaper" || chip.label == "Nicer")
+            #expect(chip.detail?.isEmpty == false, "an alternative must say what it costs")
         }
+    }
+
+    /// Choosing an alternative is a *look*, not a purchase: it becomes the recommendation and is
+    /// asked again with its own card and reason, so no tap on a price ever buys something.
+    @Test("Choosing an alternative promotes it without kitting it")
+    @MainActor
+    func choosingAFoilPromotesIt() async throws {
+        let mission = SeedData.hike.settingSingleItem(true)
+        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
+        model.enterPlan(with: mission)
+        await model.loadCandidates(for: mission)
+
+        let interaction = try #require(model.activeThread?.pendingInteraction)
+        let foilChip = try #require(interaction.options.first { $0.id.hasPrefix("foil:") })
+        let foilID = String(foilChip.id.dropFirst("foil:".count))
+
+        model.submitMissionOption(foilChip.id)
+
+        #expect(model.kit.isEmpty, "looking at an alternative must never add it")
+        #expect(model.activeThread?.decisions.isEmpty == true, "and must not record a decision")
+        let next = try #require(model.activeThread?.pendingInteraction)
+        #expect(next.kind == .productDecision)
+        guard case .product(let asked, _) = next.resolver else {
+            Issue.record("expected a product question, got \(next.resolver)")
+            return
+        }
+        #expect(asked == foilID, "the alternative is now the recommendation")
     }
 
     @Test("Typed write intent acts immediately — the frozen question makes 'add it' as unambiguous as the chip")

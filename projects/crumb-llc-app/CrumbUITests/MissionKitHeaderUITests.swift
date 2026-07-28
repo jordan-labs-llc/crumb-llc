@@ -124,7 +124,15 @@ final class MissionKitHeaderUITests: XCTestCase {
             XCTAssertFalse(line.exists, "The conversation still reads a run-log receipt: \(receipt)")
         }
 
-        // What replaced them: each answered pick as one row that states its own verdict.
+        // What replaced them: each answered pick as one row that states its own verdict — now
+        // folded behind "What Crumb did", because the screen leads with the open decision rather
+        // than the record of how it got here. The rows still exist, and still say what they say.
+        let disclosure = app.descendants(matching: .any)
+            .matching(identifier: "missionHistoryDisclosure").firstMatch
+        XCTAssertTrue(disclosure.waitForExistence(timeout: 30),
+                      "Answered picks were not folded into a 'What Crumb did' disclosure")
+        disclosure.tap()
+
         XCTAssertTrue(settledPicks(app).firstMatch.waitForExistence(timeout: 30),
                       "Answered picks did not collapse into settled rows")
         XCTAssertTrue(settledPicks(app).count >= 2,

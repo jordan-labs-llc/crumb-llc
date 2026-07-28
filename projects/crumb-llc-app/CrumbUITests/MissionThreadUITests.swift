@@ -115,7 +115,12 @@ final class MissionThreadUITests: XCTestCase {
         line: UInt = #line
     ) {
         XCTAssertTrue(element("missionResponseDock").exists, file: file, line: line)
-        XCTAssertEqual(element("missionResponseField").exists, expectsEditableField, file: file, line: line)
+        // Prose is still reachable, but on a question that offers buttons it now sits behind
+        // "Tell Crumb more" rather than standing open beside them. Either surface satisfies "you
+        // can answer in your own words"; what must stay true is that there is only ever one.
+        let canType = element("missionResponseField").exists
+            || element("missionResponseComposeProse").exists
+        XCTAssertEqual(canType, expectsEditableField, file: file, line: line)
         XCTAssertLessThanOrEqual(app.textFields.count, 1, "Mission must expose zero or one editable field", file: file, line: line)
         for removed in [
             "curateButton", "addButton", "skipButton", "kitTray", "threadRetryButton",
@@ -124,6 +129,60 @@ final class MissionThreadUITests: XCTestCase {
         ] {
             XCTAssertFalse(element(removed).exists, "Legacy action remains outside the dock: \(removed)", file: file, line: line)
         }
+    }
+
+    /// Opens "What Crumb did". Settled picks live behind it now: the mission screen leads with the
+    /// open decision, and the record of how it got there is opt-in. The rows themselves are
+    /// unchanged, so assertions about their verdicts still hold once the fold is open.
+    ///
+    /// Two things make this fiddly, and both are real properties of the screen rather than test
+    /// noise. `LazyVStack` does not realize rows above the viewport, so the disclosure has to be
+    /// scrolled into existence. And the feed scrolls *under* the translucent pinned header, so a
+    /// row resting at the top seam reports `isHittable` while its centre is occluded — the tap
+    /// lands on the header and silently does nothing. So: scroll it clear of the seam, tap, and
+    /// confirm the label actually flipped before trusting it.
+    @MainActor
+    private func expandHistory(timeout: TimeInterval = 15) {
+        let feed = element("missionConversationFeed")
+        XCTAssertTrue(feed.waitForExistence(timeout: timeout), "No conversation feed to expand")
+        let disclosure = element("missionHistoryDisclosure")
+
+        for _ in 0..<8 where !disclosure.exists {
+            feed.swipeDown()
+        }
+        guard disclosure.exists else {
+            XCTFail("Answered turns were not folded into a 'What Crumb did' disclosure")
+            return
+        }
+
+        var expanded = disclosure.label.localizedCaseInsensitiveContains("Hide")
+        for _ in 0..<4 where !expanded {
+            // Push the row clear of the header seam before aiming at it.
+            feed.swipeDown()
+            if disclosure.isHittable { disclosure.tap() }
+            expanded = disclosure.label.localizedCaseInsensitiveContains("Hide")
+        }
+        XCTAssertTrue(expanded, "Tapping 'What Crumb did' never unfolded the record")
+
+        for _ in 0..<8 where !artifact(prefix: "missionSettledPick.").exists {
+            feed.swipeDown()
+        }
+    }
+
+    /// Opens the dock's prose field, which a question offering buttons keeps folded behind
+    /// "Tell Crumb more". A no-op when the field is already inline (a question with no buttons,
+    /// and the new-mission composer).
+    @MainActor
+    @discardableResult
+    private func revealProseField(timeout: TimeInterval = 10) -> XCUIElement {
+        let field = element("missionResponseField")
+        if field.exists { return field }
+        let compose = element("missionResponseComposeProse")
+        if compose.waitForExistence(timeout: timeout) {
+            XCTAssertTrue(waitTap(compose, timeout: timeout, "reveal prose field"))
+        }
+        _ = field.waitForExistence(timeout: timeout)
+        return field
     }
 
     /// Reaches the first frozen product question. Direct missions: sending the goal starts the
@@ -161,7 +220,7 @@ final class MissionThreadUITests: XCTestCase {
     func testTypedProductWriteActsImmediately() {
         _ = launchToFirstProductQuestion()
 
-        let field = element("missionResponseField")
+        let field = revealProseField()
         XCTAssertTrue(waitTap(field, timeout: 10, "product response field"))
         field.typeText("add it")
         XCTAssertTrue(waitTap(element("missionResponseSend"), timeout: 5, "send product request"))
@@ -171,6 +230,7 @@ final class MissionThreadUITests: XCTestCase {
         // the header owning the deliverable, rather than as an "Added <product>." receipt.
         XCTAssertTrue(keptHeader.waitForExistence(timeout: 10),
                       "Typed 'add it' did not commit the frozen product")
+        expandHistory()
         XCTAssertTrue(artifact(prefix: "missionSettledPick.").waitForExistence(timeout: 10),
                       "The committed pick did not settle into a row")
         XCTAssertFalse(dockOption("cancel").exists, "The removed confirmation turn resurfaced")
@@ -214,11 +274,12 @@ final class MissionThreadUITests: XCTestCase {
         XCTAssertTrue(waitTap(option("skip"), timeout: 10, "Skip"))
         // A pass settles into its own row too — labelled "Passed", and deliberately untinted, because
         // declining a product is not a problem.
+        expandHistory()
         XCTAssertTrue(passedPick.waitForExistence(timeout: 10),
                       "Skip did not settle the pick into a passed row")
 
         // Free text also stays in the dock and produces a normal user turn before reworking.
-        let responseField = element("missionResponseField")
+        let responseField = revealProseField()
         XCTAssertTrue(waitTap(responseField, timeout: 10, "refinement field"))
         responseField.typeText("Make the remaining picks cheaper")
         XCTAssertTrue(waitTap(element("missionResponseSend"), timeout: 5, "send refinement"))
@@ -307,7 +368,8 @@ final class MissionThreadUITests: XCTestCase {
         XCTAssertTrue(pendingQuestion.isHittable,
                       "AX pending product question exists only in offscreen scrollback")
         XCTAssertTrue(element("missionResponseDock").waitForExistence(timeout: 10))
-        XCTAssertTrue(element("missionResponseField").exists)
+        XCTAssertTrue(element("missionResponseComposeProse").exists,
+                      "Prose must stay reachable at accessibility sizes, folded but present")
         XCTAssertTrue(waitTap(
             element("missionResponseChoiceDisclosure"),
             timeout: 10,
