@@ -88,12 +88,27 @@ struct CartView: View {
             Text(model.isSingleProductMission ? "Your shortlist" : "Your kit")
                 .font(CrumbType.title)
                 .foregroundStyle(CrumbColor.ink)
-            Text(model.isSingleProductMission
-                ? "Comparing ^[\(cart.items.count) option](inflect: true) · ^[\(cart.shops.count) shop](inflect: true)"
-                : "^[\(cart.items.count) item](inflect: true) · ^[\(cart.shops.count) shop](inflect: true)")
+            // "Comparing 1 option" is not a comparison. A shortlist of one is a decision already
+            // made, and saying otherwise makes Crumb sound like it did not notice.
+            Text(shortlistSummary)
                 .font(CrumbType.callout)
                 .foregroundStyle(CrumbColor.ink2)
         }
+    }
+
+    /// The line under the cart title. A single-item mission is shortlisting alternatives, so it
+    /// counts options — until there is only one, when it is simply the thing you chose.
+    ///
+    /// Each branch spells out its own `^[...](inflect:)` markup. Interpolating a pre-built markup
+    /// *String* into a `LocalizedStringKey` escapes it, and the literal "^[1 shop](inflect: true)"
+    /// renders on screen.
+    private var shortlistSummary: LocalizedStringKey {
+        guard model.isSingleProductMission else {
+            return "^[\(cart.items.count) item](inflect: true) · ^[\(cart.shops.count) shop](inflect: true)"
+        }
+        return cart.items.count == 1
+            ? "Ready to check out · ^[\(cart.shops.count) shop](inflect: true)"
+            : "Comparing ^[\(cart.items.count) option](inflect: true) · ^[\(cart.shops.count) shop](inflect: true)"
     }
 
     private var handoffNote: some View {

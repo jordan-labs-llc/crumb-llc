@@ -902,6 +902,10 @@ final class AppModel {
         case retry(MissionRetryDescriptor)
         case saveTaste
         case openCart
+        /// Start paying: prepare a UCP checkout session per shop in the kit. Distinct from
+        /// ``openCart`` because looking at a cart and paying for one are different requests, and
+        /// answering one with the other is how this loop used to strand people.
+        case startCheckout
         /// A terminal answer: the mission is over and we leave for Home. Distinct from plain
         /// navigation because ending is also a **save trigger** — see ``runMissionEffect(_:)``.
         case endMission
@@ -923,6 +927,12 @@ final class AppModel {
         case .retry(let retry): runRetry(retry)
         case .saveTaste: Task { @MainActor [weak self] in await self?.performQueuedTasteSave() }
         case .openCart: openCart()
+        case .startCheckout:
+            // Opening the cart first is deliberate: the checkout sheet is presented over it, so
+            // dismissing payment lands on the kit rather than dumping the person back into the
+            // mission with no idea whether anything was kept.
+            openCart()
+            Task { @MainActor [weak self] in await self?.startCheckoutWorkflow() }
         case .endMission:
             // Ending is the *other* save trigger. Reaching the cart used to be the only one, so a
             // kit assembled and then ended — never opened — left Home (its phase is terminal, so
@@ -965,7 +975,7 @@ final class AppModel {
         case .saveTaste:
             retry = MissionRetryDescriptor(kind: .chips, input: "save-to-taste", taskRevision: thread.revision, returnPhase: .deckReady)
             title = "Saving this to taste…"
-        case .openCart, .endMission:
+        case .openCart, .startCheckout, .endMission:
             retry = nil
             title = ""
         }
@@ -1022,15 +1032,22 @@ final class AppModel {
                 installNextProductOrKitQuestion(in: &thread)
                 return
             }
-            // A typed answer that exactly matches the question's own vocabulary IS the answer —
-            // it carries the same frozen product identity as the chip, so it acts immediately
-            // instead of detouring through a confirmation turn.
-            let choice = option ?? text.flatMap(Self.conversationalProductChoice(in:))
+            // A typed answer that matches the question's own vocabulary IS the answer — it carries
+            // the same frozen product identity as the chip, so it acts immediately instead of
+            // detouring through a confirmation turn. Prose can now also carry a *next step* in the
+            // same breath ("I like it. Let's create a cart."); the decision is applied here and
+            // `nextStep` is honored below, after the write has landed.
+            let utterance = text.map(MissionUtterance.parse)
+            let choice = option ?? utterance?.decision.map(Self.optionID(for:))
+            // When the same message also says where to go, `applyNextStep` installs the question
+            // that lands there. Installing the *next product* question first would append an
+            // assistant turn nobody asked for and immediately supersede it.
+            let goesElsewhere = utterance?.nextStep != nil
             switch choice {
             case "add":
                 guard let variantID,
                       let variant = product.variants.first(where: { $0.id == variantID }),
-                      let snapshot = productSnapshot(for: interaction, in: thread),
+                      let snapshot = productSnapshot(for: interaction, productID: productID, in: thread),
                       snapshot.productID == product.id,
                       snapshot.variantID == variant.id,
                       snapshot.title == product.name,
@@ -1053,17 +1070,30 @@ final class AppModel {
                     ))
                     thread.appendEvent(kind: .productAdded, text: "Added \(product.name).", createdAt: clock(), productID: productID, operationID: submission.idempotencyID)
                 }
-                installNextProductOrKitQuestion(in: &thread)
+                if !goesElsewhere { installNextProductOrKitQuestion(in: &thread) }
             case "skip":
                 thread.remainingDeckIDs.removeAll { $0 == productID }
                 thread.decisions.append(MissionProductDecision(id: submission.idempotencyID, kind: .skipped, productID: productID, createdAt: clock()))
                 thread.appendEvent(kind: .productSkipped, text: "Skipped \(product.name).", createdAt: clock(), productID: productID, operationID: submission.idempotencyID)
-                installNextProductOrKitQuestion(in: &thread)
+                if !goesElsewhere { installNextProductOrKitQuestion(in: &thread) }
             case "show-another":
                 thread.remainingDeckIDs.removeAll { $0 == productID }
                 thread.remainingDeckIDs.append(productID)
                 thread.appendEvent(kind: .notice, text: "Showing another option.", createdAt: clock(), productID: productID)
                 installNextProductOrKitQuestion(in: &thread)
+            case let choice? where choice.hasPrefix("foil:"):
+                // Promote the chosen alternative to the recommendation and ask again, so it gets
+                // its own card and its own reason. A tap on a price is a look, not a purchase.
+                let foilID = String(choice.dropFirst("foil:".count))
+                guard let foil = thread.candidates.first(where: { $0.id == foilID }),
+                      thread.remainingDeckIDs.contains(foilID) else {
+                    installNextProductOrKitQuestion(in: &thread)
+                    return
+                }
+                thread.remainingDeckIDs.removeAll { $0 == foilID }
+                thread.remainingDeckIDs.insert(foilID, at: 0)
+                thread.phase = .deckReady
+                installProductQuestion(in: &thread, product: foil)
             // Legacy: persisted threads may still carry an "Adjust search" option.
             case "adjust-search": installRefinementQuestion(in: &thread)
             case "reset":
@@ -1072,8 +1102,16 @@ final class AppModel {
             case "save-to-taste":
                 effect = .saveTaste
             default:
-                if let text { effect = .refine(text) }
-                else { installNextProductOrKitQuestion(in: &thread) }
+                // Nothing in the message decided anything about *this* product. If it asked to go
+                // somewhere, honor that below; otherwise it is a change request, as before.
+                if utterance?.nextStep == nil, let refinement = utterance?.refinement {
+                    effect = .refine(refinement)
+                } else if utterance?.nextStep == nil {
+                    installNextProductOrKitQuestion(in: &thread)
+                }
+            }
+            if let utterance {
+                applyNextStep(utterance, in: &thread, effect: &effect)
             }
 
         case .kit:
@@ -1086,13 +1124,22 @@ final class AppModel {
                 thread.decisions.removeAll { $0.kind == .skipped }
                 thread.remainingDeckIDs = thread.candidates.map(\.id).filter { !kept.contains($0) }
                 installNextProductOrKitQuestion(in: &thread)
+            case "checkout":
+                effect = .startCheckout
             case "end":
                 thread.phase = .completed
                 thread.appendEvent(kind: .notice, text: "Ended this mission.", createdAt: clock())
                 effect = .endMission
             default:
-                if let text { effect = .refine(text) }
-                else { installNextProductOrKitQuestion(in: &thread) }
+                // "Check out" typed at the kit question means the same thing as tapping it.
+                let utterance = text.map(MissionUtterance.parse)
+                if let utterance, utterance.nextStep != nil {
+                    applyNextStep(utterance, in: &thread, effect: &effect)
+                } else if let refinement = utterance?.refinement {
+                    effect = .refine(refinement)
+                } else {
+                    installNextProductOrKitQuestion(in: &thread)
+                }
             }
 
         case .retry(let retry):
@@ -1344,26 +1391,68 @@ final class AppModel {
     ) {
         thread.supersedePendingInteraction()
         let variant = product.defaultVariant
+        // Crumb answers with one pick and the two options that make it legible — what you'd give
+        // up spending less, what you'd get spending more. The reported session offered five
+        // near-identical teas on a price ladder with no photo and no reason, which is the job of
+        // deciding handed straight back to the person who asked Crumb to decide.
+        let foils = Self.foils(for: product, in: thread)
+        let block: MissionMessageBlock
+        if foils.isEmpty {
+            block = .product(MissionProductSnapshot(product: product, variant: variant))
+        } else {
+            block = .comparison(MissionComparisonSnapshot(
+                id: "compare-\(thread.id)-\(thread.revision)-\(product.id)",
+                products: ([product] + foils).map {
+                    MissionProductSnapshot(product: $0, variant: $0.defaultVariant)
+                }
+            ))
+        }
         thread.appendEvent(
             kind: .assistantMessage,
-            text: "How does this one look?",
+            // The prompt sits *after* its artifact (see `placesQuestionAfterArtifacts`), so this has
+            // to read as a closing line, not a lead-in.
+            text: foils.isEmpty ? "How does this one look?" : "That's the one I'd get.",
             createdAt: clock(), productID: product.id,
-            blocks: [.product(MissionProductSnapshot(product: product, variant: variant))]
+            blocks: [block]
         )
         guard let promptID = thread.timeline.last?.id else { return }
+        // The interaction contract caps a question at four options, so the slots are spent in
+        // order of what a person needs: act on the pick, reject the pick, the one time-sensitive
+        // follow-up, then the alternatives.
         var options = [
-            MissionInteractionOption(id: "add", label: isSingleProductMission ? "Shortlist" : "Add"),
+            MissionInteractionOption(
+                id: "add",
+                label: isSingleProductMission ? "Shortlist" : "Add to cart",
+                detail: variant.price.formatted(.currency(code: "USD"))
+            ),
             MissionInteractionOption(id: "skip", label: "Skip"),
-            MissionInteractionOption(id: "show-another", label: "Show another"),
         ]
         // Right after a refinement lands, one contextual follow-up rides the next question — the
         // moment it's alive. Save-to-taste when the directive can be kept, else Reset as the undo.
-        // One chip only: the interaction contract caps a question at four options.
         if includeRefinementFollowUps {
             if thread.refinementDirectives.contains(where: { $0.isActionable }) {
                 options.append(MissionInteractionOption(id: "save-to-taste", label: saveToTasteChipLabel))
             } else if !thread.refinementTurns.isEmpty {
                 options.append(MissionInteractionOption(id: "reset", label: "Reset changes"))
+            }
+        }
+        if foils.isEmpty {
+            options.append(MissionInteractionOption(id: "show-another", label: "Show another"))
+        } else {
+            // The alternatives are named with their prices rather than hidden behind a generic
+            // "Show alternatives": same affordance, one tap shorter, and it says what it costs.
+            // Choosing one promotes it to the recommendation and re-asks, so nothing is bought by
+            // a tap that a person meant as a look.
+            //
+            // "Show another" retires here — the foils *are* the other options, shown rather than
+            // promised. A contextual follow-up displaces the second foil rather than the first,
+            // because a cheaper option is the alternative people reach for most.
+            for foil in foils.prefix(max(0, 4 - options.count)) {
+                options.append(MissionInteractionOption(
+                    id: "foil:\(foil.id)",
+                    label: foil.price < product.price ? "Cheaper" : "Nicer",
+                    detail: foil.defaultVariant.price.formatted(.currency(code: "USD"))
+                ))
             }
         }
         requireInteraction {
@@ -1378,46 +1467,99 @@ final class AppModel {
         }
     }
 
-    /// Maps a whole typed message onto one of the frozen product question's semantic options.
-    /// Only exact matches against this closed vocabulary act — the submission already carries the
-    /// frozen interaction identity, so "add it" is as unambiguous as tapping Add, while any longer
-    /// or unlisted sentence stays a refinement proposal and never a write. Ordinals ("the first
-    /// one") deliberately never resolve.
-    private static let conversationalProductChoices: [String: String] = {
-        var map: [String: String] = [:]
-        for phrase in [
-            "add", "add it", "add this", "add that", "keep", "keep it", "keep this",
-            "shortlist", "shortlist it", "take it", "i'll take it", "ill take it", "buy it",
-            "yes", "yes please", "yep", "yeah", "sure", "perfect", "love it",
-            "looks good", "looks great", "i like it", "like it", "good", "great",
-        ] { map[phrase] = "add" }
-        for phrase in [
-            "skip", "skip it", "pass", "pass on it", "no", "nope", "no thanks", "no thank you",
-            "not this one", "not for me", "don't like it", "dont like it",
-        ] { map[phrase] = "skip" }
-        for phrase in [
-            "show another", "show me another", "another", "another one", "next",
-            "what else", "something else", "show me something else", "more options",
-        ] { map[phrase] = "show-another" }
-        return map
-    }()
-
-    private static func conversationalProductChoice(in text: String) -> String? {
-        let normalized = text.lowercased()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: ".!…"))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return conversationalProductChoices[normalized]
+    /// The two options worth showing beside `product`, drawn from what is still undecided.
+    ///
+    /// The ranking is the curator's — model-produced, and that is where taste belongs.
+    /// ``MissionShortlist`` only enforces the floors a ranking model gets wrong expensively:
+    /// duplicates, foils too close in price to be a real choice, and outliers.
+    /// Only a single-item mission has foils, because only there is the deck an apples-to-apples set.
+    ///
+    /// A kit mission's candidates are the **union of every part's search**, with no record of which
+    /// part found what — the gather is model-driven and its tool hands back bare products. So on
+    /// "Set up my pour-over corner" the products next to the beans are the brew mat and the
+    /// kettle: other *parts*, not alternatives. Offering them as "Costs less" and "A step up"
+    /// would be worse than the price ladder this design replaces, because it would be confidently
+    /// wrong. Restoring foils for kits needs part attribution at gather time.
+    private static func foils(for product: Product, in thread: MissionThread) -> [Product] {
+        guard thread.task?.isSingleItem == true else { return [] }
+        // The winner leads, so the shortlist ranks from the product being asked about.
+        let ordered = [product] + thread.remainingDeck.filter { $0.id != product.id }
+        return MissionShortlist.choose(from: ordered)?.foils ?? []
     }
 
+    /// Bridges a parsed decision to the option id the product question's own chips use, so a typed
+    /// answer and a tapped chip take exactly one code path into the write.
+    ///
+    /// The vocabulary itself lives in ``MissionUtterance`` — pure, in the kit, and directly
+    /// testable. It used to live here as a whole-string dictionary lookup, which is why
+    /// "I like it. Let's create a cart." was read as a request to change the picks.
+    static func optionID(for decision: MissionDecision) -> String {
+        switch decision {
+        case .add: return "add"
+        case .skip: return "skip"
+        case .showAnother: return "show-another"
+        }
+    }
+
+    /// Honors the "…and then take me somewhere" half of a message, after its decision has landed.
+    ///
+    /// A next step outranks a leftover change request in the same message. Applying both would
+    /// re-curate the deck immediately after the person asked to go look at their cart, which is a
+    /// smaller version of the same bug this work exists to fix — so the leftover is named and set
+    /// aside rather than silently run or silently dropped.
+    private func applyNextStep(
+        _ utterance: MissionUtterance,
+        in thread: inout MissionThread,
+        effect: inout MissionReducerEffect?
+    ) {
+        guard let nextStep = utterance.nextStep else { return }
+        if let refinement = utterance.refinement {
+            thread.appendEvent(
+                kind: .notice,
+                text: "I set aside \u{201C}\(refinement)\u{201D} — send it again whenever you want it applied.",
+                createdAt: clock()
+            )
+        }
+        guard !thread.kit.isEmpty else {
+            // Asking for a cart with an empty kit is a reasonable thing to say and an impossible
+            // thing to do. Say so, and leave the person on a question they can act on.
+            thread.appendEvent(
+                kind: .assistantMessage,
+                text: "Nothing's in the cart yet — keep something first and I'll take you there.",
+                createdAt: clock()
+            )
+            installNextProductOrKitQuestion(in: &thread)
+            return
+        }
+        installKitQuestion(in: &thread)
+        effect = nextStep == .checkout ? .startCheckout : .openCart
+    }
+
+    /// The frozen snapshot this question froze for `productID`.
+    ///
+    /// A pick question presents either one product or a recommendation beside its foils, so the
+    /// snapshot may live in a `.product` block or inside a `.comparison`. It is matched **by
+    /// product id** rather than taken as the first one found: in a comparison, "the first snapshot"
+    /// is the recommendation, which is the wrong answer the moment someone chooses a foil.
     private func productSnapshot(
         for interaction: MissionPendingInteraction,
+        productID: Product.ID,
         in thread: MissionThread
     ) -> MissionProductSnapshot? {
-        thread.timeline.first(where: { $0.id == interaction.promptEventID })?.blocks.compactMap { block in
-            if case .product(let snapshot) = block { return snapshot }
-            return nil
-        }.first
+        let blocks = thread.timeline.first { $0.id == interaction.promptEventID }?.blocks ?? []
+        for block in blocks {
+            switch block {
+            case .product(let snapshot) where snapshot.productID == productID:
+                return snapshot
+            case .comparison(let snapshot):
+                if let match = snapshot.products.first(where: { $0.productID == productID }) {
+                    return match
+                }
+            default:
+                continue
+            }
+        }
+        return nil
     }
 
     private func installKitQuestion(in thread: inout MissionThread) {
@@ -1426,13 +1568,21 @@ final class AppModel {
             id: "kit-\(thread.id)-\(thread.revision)", revision: thread.revision,
             items: thread.kit.map(MissionKitSnapshotItem.init)
         )
-        let question = thread.kit.isEmpty ? "Want me to look again?" : "Ready to review what you kept?"
+        let question = thread.kit.isEmpty ? "Want me to look again?" : "Ready to check out?"
         thread.appendEvent(
             kind: .assistantMessage, text: question, createdAt: clock(), blocks: [.kit(snapshot)]
         )
         guard let promptID = thread.timeline.last?.id else { return }
         var options = [MissionInteractionOption(id: "find-more", label: "Find more")]
-        if !thread.kit.isEmpty { options.insert(MissionInteractionOption(id: "review-cart", label: "Review cart"), at: 0) }
+        if !thread.kit.isEmpty {
+            // Checkout leads. A kit with nowhere to go is the whole reported failure: the only
+            // offers here used to be "Find more" and "End mission", so a finished mission had no
+            // button that moved it forward and free text was the only way out.
+            options.insert(MissionInteractionOption(
+                id: "checkout", label: "Check out", detail: kitSubtotalLabel(thread.kit)
+            ), at: 0)
+            options.insert(MissionInteractionOption(id: "review-cart", label: "Review cart"), at: 1)
+        }
         options.append(MissionInteractionOption(id: "end", label: "End mission", isDestructive: true))
         requireInteraction {
             try thread.installInteraction(
@@ -1442,6 +1592,14 @@ final class AppModel {
             resolver: .kit(snapshotID: snapshot.id, revision: snapshot.revision), createdAt: clock()
             )
         }
+    }
+
+    /// "$46.00" for the kit, as the Check out chip's detail line. Nil for an empty kit, which never
+    /// offers the chip anyway.
+    private func kitSubtotalLabel(_ kit: [KitItem]) -> String? {
+        guard !kit.isEmpty else { return nil }
+        let subtotal = kit.reduce(Decimal.zero) { $0 + $1.variant.price }
+        return subtotal.formatted(.currency(code: "USD"))
     }
 
     private func installRefinementQuestion(in thread: inout MissionThread) {
@@ -1948,6 +2106,18 @@ final class AppModel {
         clearRefinement()
         await loadCandidates(for: task)
         route = .missionThread
+    }
+
+    /// Screenshot hook: deal a deck, then answer it in prose the way the reported session did.
+    ///
+    /// `CRUMB_SAY` defaults to the verbatim message that used to be answered with a re-curation:
+    /// *"I like it. Let's create a cart."* — decision and next step in one breath. Captures what
+    /// that message does now, without needing a keyboard.
+    func presentTypedAnswerForScreenshot(missionID: String) async {
+        await presentCurateForScreenshot(missionID: missionID)
+        let said = ProcessInfo.processInfo.environment["CRUMB_SAY"]
+            ?? "I like it. Let\u{2019}s create a cart."
+        submitMissionText(said)
     }
 
     /// Screenshot hook: deal a deck then accept every card, landing on Curate's "that's a
