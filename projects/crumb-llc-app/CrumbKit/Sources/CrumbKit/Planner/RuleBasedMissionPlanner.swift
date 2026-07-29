@@ -23,7 +23,10 @@ public struct RuleBasedMissionPlanner: MissionPlanner {
     /// The deterministic plan, with an explicit fallback `reason` so the AI planner can reuse
     /// this floor and still report *why* it degraded. Pure (no model, no I/O) — the unit-tested
     /// guarantee behind the planning seam.
-    static func plan(goal: String, reason: PlannerTier.Fallback?) -> PlannedMission {
+    /// Public so callers outside CrumbKit can degrade *honestly* rather than silently: the app's
+    /// planning deadline needs the floor plan **and** the reason it had to take it, so
+    /// ``PlannerTier/fallbackNote`` can say so.
+    public static func plan(goal: String, reason: PlannerTier.Fallback?) -> PlannedMission {
         let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isShoppable(trimmed) else {
             return PlannedMission(task: nil, tier: .ruleBased(reason), decline: declineMessage)

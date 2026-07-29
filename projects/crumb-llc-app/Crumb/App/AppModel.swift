@@ -301,6 +301,16 @@ final class AppModel {
     /// user behind a hung on-device model turn (#57). Well above a healthy on-device settle.
     var curationSettleDeadline: Double = 60
 
+    /// How long a planning call may run before the mission stops waiting on the model and shops the
+    /// deterministic shell instead.
+    ///
+    /// Planning had no bound at all, and unlike curation there is nothing to degrade to while it
+    /// runs — the thread sits on "Starting your mission…" with no deck, no counter and no Stop, so a
+    /// slow plan is indistinguishable from a hang. A benchmark of ~170 on-device planning calls put
+    /// the median at 2.7s and p90 at 3.6s, but two of them took 36s and 158s. Set well clear of p90
+    /// and well inside the point where someone assumes the app is broken.
+    var planSettleDeadline: Double = 20
+
     /// Fires ``curationRefiningOvertime`` once the settle window elapses while still refining;
     /// cancelled the moment the deck settles, fails, or a new load starts.
     private var settleWatchdog: Task<Void, Never>?
@@ -632,6 +642,21 @@ final class AppModel {
 
     private func operationIsCurrent(_ kind: MissionOperationKind, id: String, threadID: String) -> Bool {
         activeThread?.id == threadID && activeOperationIDs[kind] == id
+    }
+
+    /// Whether the active thread's own pending operation is one *this process* is still running.
+    ///
+    /// Deliberately the conjunction of both facts. The thread's `pendingOperation` alone can't answer
+    /// it — that receipt outlives its worker on purpose, so a crash-recovered thread still carries
+    /// one — and the task registries can't either, because `launchedOperationTasks` entries are only
+    /// cleared by `cancelOperations()`, so a settled mission keeps a finished handle indefinitely.
+    /// `activeOperationIDs` is the one thing `finishOperation` clears, so matching the receipt's id
+    /// against it means "began, and has not yet finished, in this launch".
+    ///
+    /// Used by ``resumeThread(_:)`` to tell re-entry (leave it alone) from adoption (recover it).
+    var hasLiveOperation: Bool {
+        guard let pending = activeThread?.pendingOperation else { return false }
+        return activeOperationIDs.values.contains(pending.id)
     }
 
     private func finishOperation(_ kind: MissionOperationKind, id: String) {
@@ -1920,6 +1945,17 @@ final class AppModel {
     }
 
     func resumeThread(_ thread: MissionThread) {
+        // Walking back into the mission that is running *right now* must not kill its work.
+        // `cancelOperations()` + `recoverAfterInterruption` exist to adopt a thread that was left
+        // mid-flight — by a crash, or by switching to a different mission — and they are wrong for
+        // re-entry: they cancel a live gather and then narrate the corpse as "That work was
+        // interrupted. You can try it again." A UXR run reproduced it by holding a gather open long
+        // enough to tap back in. Today the race is hard to lose because a gather settles in seconds;
+        // it stops being hard to lose the moment a mission has several parts to shop.
+        if activeThread?.id == thread.id, hasLiveOperation {
+            route = .missionThread
+            return
+        }
         cancelOperations()
         var recovered = thread
         do { try recovered.recoverAfterInterruption(at: clock()) }
@@ -2122,11 +2158,7 @@ final class AppModel {
         }
 
         let profile = activeThread?.tasteSnapshot ?? tasteProfile
-        let planned = await CrumbTrace.measure("plan", summarize: {
-            "goalChars=\(trimmed.count) shoppable=\($0.task != nil) parts=\($0.task?.plan.count ?? 0) tier=\($0.tier.traceLabel)"
-        }) {
-            await planner.plan(goal: trimmed, profile: profile)
-        }
+        let planned = await planBounded(goal: trimmed, profile: profile)
         guard operationIsCurrent(.planning, id: operationID, threadID: threadID) else { return }
         isPlanning = false
         finishOperation(.planning, id: operationID)
@@ -2315,7 +2347,9 @@ final class AppModel {
         }
         planDirty = false
         await loadCandidates(for: task)
-        if loadState == .loaded { route = .missionThread }
+        // No navigation here for the same reason as in `loadCandidates`: every caller that means to
+        // put someone on the mission screen has already done so, and a gather answered from Home
+        // must leave them on Home.
     }
 
     #if DEBUG
@@ -3094,11 +3128,19 @@ final class AppModel {
                     )
                 }
                 if wasEmpty {
-                    // First pick: the deck is now actionable. Navigate to Curate and flip out of the
-                    // blocking "loading" state into "refining" — the gather/curation keep settling,
-                    // but the user can already swipe, so the banner must not read as a blocking
-                    // spinner (#57). Arm the watchdog that downgrades it if the settle runs long.
-                    self.route = .missionThread
+                    // First pick: the deck is now actionable. Flip out of the blocking "loading"
+                    // state into "refining" — the gather/curation keep settling, but the user can
+                    // already swipe, so the banner must not read as a blocking spinner (#57). Arm
+                    // the watchdog that downgrades it if the settle runs long.
+                    //
+                    // There is deliberately no `route = .missionThread` here any more. Every gather
+                    // starts from the mission screen (`performPlan` and `beginCuration` both route
+                    // there first), so on the intended path that assignment was a no-op. The only
+                    // time it *moved* anyone was when they had since walked out to Home — and then
+                    // it dragged them back into a mission they had just put down. A UXR run measured
+                    // exactly that: on Home at t+10s, forced into the thread at t+12s, having chosen
+                    // neither. Home renders a running mission live (state, found-count and Stop), so
+                    // there is nothing the person has to be brought back for.
                     self.loadState = .refining
                     self.startSettleWatchdog(for: task, operationID: operationID, threadID: threadID)
                 }
@@ -3197,9 +3239,13 @@ final class AppModel {
         finishOperation(.gathering, id: operationID)
         loadState = .loaded
         curationRefiningOvertime = false
-        // If nothing streamed (a successful but empty gather), the stream never navigated us — land
-        // on Curate anyway so the empty state shows, matching the pre-streaming behavior.
-        if route != .missionThread { route = .missionThread }
+        // Deliberately no navigation on settle either. This existed so an empty gather — which
+        // streams nothing, so the stream never navigated — would still land on the mission screen to
+        // show its empty state. But whoever started this gather was already on that screen
+        // (`performPlan` and `beginCuration` both route there first), so the empty state shows
+        // regardless; the only person this moved was one who had walked away, and it moved them
+        // against their choice. It also quietly overrode `answerFromHome`, whose whole point is that
+        // answering a mission's question from Home leaves you on Home.
         // Note: the refinement conversation is reset by `enterPlan` (a new mission) and the
         // screenshot hook, NOT here — clearing it on every (re)load would race a refinement that
         // arrived while an earlier load was still settling.
@@ -3244,6 +3290,41 @@ final class AppModel {
     /// unstructured task raced against a deadline; on timeout the task is cancelled and its result
     /// dropped (it never mutates the model — it only yields to the race), so a runaway on-device turn
     /// can't block the settle.
+    /// Runs the planning call bounded by ``planSettleDeadline``, degrading to the deterministic
+    /// shell — *with its reason* — rather than waiting indefinitely.
+    ///
+    /// Deliberately returns a `PlannedMission` rather than `nil`-on-timeout the way
+    /// ``curateBounded(_:for:)`` does: a curation timeout has a streamed deck to settle with, but a
+    /// planning timeout has nothing on screen at all, so the only useful answer is a plan. A timeout
+    /// is not a decline — the goal is still shoppable — so it takes the floor's single-query shell
+    /// and reports `.offlineOrError`, which is what ``PlannerTier/fallbackNote`` reads to say Crumb
+    /// couldn't reach its planner.
+    private func planBounded(goal: String, profile: TasteProfile) async -> PlannedMission {
+        let planner = self.planner
+        enum PlanEnd { case done(PlannedMission); case timedOut }
+        let (signals, continuation) = AsyncStream.makeStream(of: PlanEnd.self)
+        let planTask = Task { @MainActor in
+            let planned = await CrumbTrace.measure("plan", summarize: {
+                "goalChars=\(goal.count) shoppable=\($0.task != nil) parts=\($0.task?.plan.count ?? 0) tier=\($0.tier.traceLabel)"
+            }) {
+                await planner.plan(goal: goal, profile: profile)
+            }
+            continuation.yield(.done(planned))
+        }
+        let deadlineTask = Task { @MainActor in
+            do { try await Task.sleep(for: .seconds(planSettleDeadline)); continuation.yield(.timedOut) }
+            catch { /* cancelled because planning finished first — no deadline signal */ }
+        }
+        var end: PlanEnd = .timedOut
+        for await signal in signals { end = signal; break }
+        deadlineTask.cancel()
+        if case .done(let planned) = end { return planned }
+        planTask.cancel()   // abandon the runaway generation (cooperative); its result is dropped
+        CrumbTrace.emit(stage: "plan", elapsedMillis: Int(planSettleDeadline * 1000),
+                        summary: "plan deadline — fell back to the deterministic shell")
+        return RuleBasedMissionPlanner.plan(goal: goal, reason: .offlineOrError)
+    }
+
     private func curateBounded(_ products: [Product], for task: ShoppingTask) async -> CuratedDeck? {
         let curator = self.curator
         let taste = self.activeTaste
