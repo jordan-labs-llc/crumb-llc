@@ -100,6 +100,7 @@ private extension CuratorTier.Fallback {
         case .modelNotReady: return "not-ready"
         case .quotaExhausted: return "quota"
         case .offlineOrError: return "offline-or-error"
+        case .rankTimedOut: return "rank-timeout"
         }
     }
 }

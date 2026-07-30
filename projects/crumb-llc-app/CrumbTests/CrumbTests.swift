@@ -751,8 +751,11 @@ struct CrumbTests {
         #expect(model.loadState == .loaded)                        // settled, never stuck refining
         #expect(model.route == .missionThread)
         #expect(!model.deck.isEmpty)                               // the streamed deck is usable
-        #expect(model.curatorTier == .ruleBased(.modelNotReady))  // honest fallback note is surfaced
-        #expect(model.curatorFallbackNote != nil)
+        // A timeout is its own reason. The curator was available and ran — it just overran — so the
+        // tier must not be `.modelNotReady`, whose copy claims a download is still in flight.
+        #expect(model.curatorTier == .ruleBased(.rankTimedOut))
+        #expect(model.curatorFallbackNote?.contains("too long") == true)
+        #expect(model.curatorFallbackNote?.contains("downloading") == false)
     }
 
     @Test("kitCompleteness flags a partial kit and stays nil for a single-product mission (#67)")

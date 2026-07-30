@@ -12,6 +12,8 @@ let package = Package(
         .library(name: "CrumbKit", targets: ["CrumbKit"]),
         .executable(name: "crumb-query-harness", targets: ["CrumbQueryHarness"]),
         .executable(name: "crumb-query-collect", targets: ["CrumbQueryCollector"]),
+        .executable(name: "crumb-plan-bench", targets: ["CrumbPlanBench"]),
+        .executable(name: "crumb-plan-bench2", targets: ["CrumbPlanBenchV2"]),
     ],
     targets: [
         .target(
@@ -22,6 +24,20 @@ let package = Package(
         ),
         .executableTarget(
             name: "CrumbQueryHarness",
+            dependencies: ["CrumbKit"],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+        .executableTarget(
+            name: "CrumbPlanBench",
+            dependencies: ["CrumbKit"],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+        .executableTarget(
+            name: "CrumbPlanBenchV2",
             dependencies: ["CrumbKit"],
             swiftSettings: [
                 .swiftLanguageMode(.v6),

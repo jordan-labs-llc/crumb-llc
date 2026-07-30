@@ -67,7 +67,7 @@ struct MissionKitHeader: View {
                 }
             }
 
-            if partCount > 0 {
+            if showsMeter {
                 CrumbProgressMeter(fraction: fraction, tint: meterTint)
             }
 
@@ -114,8 +114,20 @@ struct MissionKitHeader: View {
         .accessibilityIdentifier("missionKitHeader")
     }
 
+    /// Whether the mission has progress worth drawing.
+    ///
+    /// Only a multi-part mission does. At `partCount == 1` the fraction is `kept / 1`, so the bar
+    /// saturates on the first keep and then reads "done" while the dock is still asking about five
+    /// more products — a UXR run captured a solid full-width meter above an open question on an $862
+    /// espresso machine, on a mission with five items already kept. Since every goal today plans to
+    /// exactly one part, this retires the meter until missions are genuinely decomposed, at which
+    /// point it starts meaning something. Internal so the rule is unit-tested rather than left as a
+    /// comparison in a view body that a later tidy-up could "simplify" back.
+    var showsMeter: Bool { partCount > 1 }
+
     /// Kept items against planned parts. Clamped because a person can keep more than one thing per
     /// part (two bags of beans), and a meter that overshoots reads as broken rather than generous.
+    /// Only consulted when ``showsMeter`` — see it for why.
     private var fraction: Double {
         guard partCount > 0 else { return 0 }
         return min(1, Double(kept.count) / Double(partCount))

@@ -238,9 +238,18 @@ private struct MissionConversationFeed: View {
             // table, its settled checkmark is process residue — and the pinned header's own pulse has
             // taken over the job of saying Crumb is busy.
             if event.isWorkingPill { return isLivePrompt(event) }
+            // "Planning this mission…" is the same kind of thing and was being treated as a record:
+            // it renders with a live ellipsis and never resolves, so a UXR capture found it still
+            // claiming to be planning at the end of a finished mission, under the picks it had
+            // already brought back. It reads only while planning is genuinely the operation in
+            // flight; `loadCandidates` replaces the planning receipt with the gathering one, which
+            // retires this line at exactly the moment the search takes over.
+            if event.kind == .planningStarted { return isPlanningNow }
             return true
         }
     }
+
+    private var isPlanningNow: Bool { MissionPlanningTurn.isLive(in: thread) }
 
     /// The turn carrying the question currently awaiting an answer — the one `position(...)` anchors.
     private func isLivePrompt(_ event: MissionThreadEvent) -> Bool {
@@ -447,6 +456,23 @@ private struct MissionHistoryDisclosure: View {
         .accessibilityHint(isExpanded ? "Folds the earlier steps away" : "Shows the earlier steps")
         .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("missionHistoryDisclosure")
+    }
+}
+
+/// Whether the "Planning this mission…" turn is still telling the truth.
+///
+/// It renders with a live ellipsis and no completion state, so treating it as a permanent record
+/// leaves a finished mission claiming to be planning: a UXR capture found it still saying so at the
+/// end of a settled mission, sitting directly above the five picks it had already brought back. It is
+/// a live status like the working pill, not a receipt.
+///
+/// Read off the thread's own pending operation rather than `AppModel.isPlanning`, so scrollback stays
+/// a pure function of the thread. `loadCandidates` swaps the planning receipt for the gathering one,
+/// which retires this line at exactly the moment the search takes over. Internal so the rule is
+/// unit-tested rather than living as a comparison inside a private view body.
+enum MissionPlanningTurn {
+    static func isLive(in thread: MissionThread) -> Bool {
+        thread.pendingOperation?.retry.kind == .planning
     }
 }
 
