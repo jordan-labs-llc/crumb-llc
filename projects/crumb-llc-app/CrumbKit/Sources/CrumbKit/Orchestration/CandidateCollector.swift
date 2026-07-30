@@ -1,5 +1,33 @@
 import Foundation
 
+/// Where a batch of gathered products came from: the part of the mission the search was run for.
+///
+/// The gather is a union of several searches, and until this existed the union was all that survived:
+/// a kit mission's pool held the kettle, the grinder and the beans with no record of which search
+/// found what. That is the whole reason kit missions could not offer alternatives — the products
+/// beside the beans were other *parts*, not other beans.
+///
+/// `rank` is what makes the attribution order-independent. The mission's own queries fan out in
+/// parallel, so when two of them return the same product the winner would otherwise depend on which
+/// search happened to come back first. Lower rank wins: a planned search carries its position in the
+/// plan, and a search the model invented for itself carries ``improvised``, so a plan part always
+/// out-claims an improvised query and the same gather always attributes the same way.
+public struct GatherOrigin: Hashable, Sendable {
+    /// What the finds are attributed to — a plan part's label for a planned search ("Gooseneck
+    /// kettle"), the model's own cleaned query for a search it reached for beyond the plan.
+    public let part: String
+    /// Lower wins when several searches return the same product.
+    public let rank: Int
+
+    /// The rank of a search the model invented rather than one the plan asked for.
+    public static let improvised = Int.max
+
+    public init(part: String, rank: Int) {
+        self.part = part
+        self.rank = rank
+    }
+}
+
 /// Accumulates the products the agentic gather's Tools discover across the tool-calling loop —
 /// deduped by id and capped — so repeated or overlapping searches can't double-count or grow the
 /// pool unbounded. The relevance guard runs *before* anything is handed here — in each agentic
@@ -13,6 +41,9 @@ public actor CandidateCollector {
 
     private var order: [Product] = []
     private var seen: Set<Product.ID> = []
+    /// Which search claimed each pooled product. See ``GatherOrigin`` for why the claim is ranked
+    /// rather than first-come.
+    private var origins: [Product.ID: GatherOrigin] = [:]
     private let cap: Int
     private var continuation: AsyncStream<[Product]>.Continuation?
     /// Set by ``finish()``; makes ``add(_:)`` a full no-op afterward. With the #54 turn deadline a
@@ -39,15 +70,28 @@ public actor CandidateCollector {
 
     /// Adds first-seen products in order until the cap is reached; ignores duplicates and overflow.
     /// Emits the batch of *newly-inserted* products (if any) on ``picks``.
-    public func add(_ products: [Product]) {
+    ///
+    /// `origin` records which part of the mission this search was for. A duplicate is still worth
+    /// hearing about for attribution: the pool already holds the product, but a better-ranked claim
+    /// (a plan part over an improvised query, an earlier part over a later one) replaces a weaker
+    /// one, which is what keeps the answer independent of the order the parallel searches return in.
+    public func add(_ products: [Product], from origin: GatherOrigin? = nil) {
         // A full no-op once finished — a zombie turn's late tool writes must not touch the pool.
         guard !finished else { return }
         var inserted: [Product] = []
-        for product in products where !seen.contains(product.id) {
-            guard order.count < cap else { break }
-            seen.insert(product.id)
-            order.append(product)
-            inserted.append(product)
+        for product in products {
+            if !seen.contains(product.id) {
+                // The pool is full: this one never joins it, so it earns no attribution either.
+                // `continue` rather than `break` so a product already pooled further along the batch
+                // can still have its claim improved.
+                guard order.count < cap else { continue }
+                seen.insert(product.id)
+                order.append(product)
+                inserted.append(product)
+            }
+            if let origin, origins[product.id].map({ origin.rank < $0.rank }) ?? true {
+                origins[product.id] = origin
+            }
         }
         if !inserted.isEmpty { continuation?.yield(inserted) }
     }
@@ -62,6 +106,11 @@ public actor CandidateCollector {
 
     /// The gathered pool, in discovery order.
     public var products: [Product] { order }
+
+    /// Which part of the mission found each pooled product. Products gathered before any search
+    /// named itself (an untagged ``add(_:from:)``) are simply absent — the caller treats an absent
+    /// entry as "no idea", never as "belongs to no part".
+    public var attribution: [Product.ID: String] { origins.mapValues(\.part) }
 
     /// How many products have been gathered so far (read by the tools to summarize progress).
     public var count: Int { order.count }
@@ -105,6 +154,38 @@ public enum GatherToolSupport {
             floor: 0,
             excludePets: !RuleBasedRelevanceGate.missionMentionsPets(mission)
         )
+    }
+
+    /// Which part of the mission a search belongs to, so its finds can be attributed.
+    ///
+    /// The model is *instructed* to call `search_catalog` once per listed part, so a tool query that
+    /// matches one of the mission's own queries is that part's search and is attributed to the part's
+    /// label — the words the person read on the Plan screen. A query the model reached for beyond the
+    /// plan ("the mission clearly needs a desk lamp") has no part to belong to, so it becomes its own,
+    /// improvised part named by the query itself. Pure.
+    public static func origin(for query: String, in mission: ShoppingTask) -> GatherOrigin {
+        // Case-folded on both sides: nothing constrains how the model capitalizes its arguments, and
+        // "Gooseneck Kettle" is the plan's own search however it was typed. The improvised label is
+        // folded too, so one invented search doesn't become two parts over a capital letter.
+        let cleaned = cleanedQuery(query).lowercased()
+        guard let index = mission.searchQueries.firstIndex(where: { cleanedQuery($0).lowercased() == cleaned })
+        else { return GatherOrigin(part: cleaned, rank: GatherOrigin.improvised) }
+        return GatherOrigin(part: partLabel(at: index, in: mission), rank: index)
+    }
+
+    /// The label the `index`-th planned search's finds are attributed to. The plan and the queries are
+    /// built as parallel arrays, so the part at the same position is the answer — but only while they
+    /// line up: a part whose query cleans away to nothing is dropped from the queries alone, and
+    /// pairing by position through that gap would file every later part's finds under its neighbour.
+    /// The query is the honest fallback. Pure.
+    static func partLabel(at index: Int, in mission: ShoppingTask) -> String {
+        guard mission.plan.count == mission.searchQueries.count,
+              mission.plan.indices.contains(index) else {
+            return mission.searchQueries.indices.contains(index)
+                ? mission.searchQueries[index]
+                : mission.title
+        }
+        return mission.plan[index]
     }
 
     /// A compact, model-readable summary of what a tool call found — the tool's return value. Kept

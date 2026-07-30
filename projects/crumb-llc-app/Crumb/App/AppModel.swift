@@ -1124,7 +1124,10 @@ final class AppModel {
                 thread.remainingDeckIDs.removeAll { $0 == productID }
                 thread.remainingDeckIDs.append(productID)
                 thread.appendEvent(kind: .notice, text: "Showing another option.", createdAt: clock(), productID: productID)
-                installNextProductOrKitQuestion(in: &thread)
+                // Explicitly passed over, or sequencing hands back the very card just rotated away:
+                // it is still the best answer to the part being shopped, so the offer would do
+                // nothing. It comes back only if it is the last card standing.
+                installNextProductOrKitQuestion(in: &thread, passingOver: productID)
             case let choice? where choice.hasPrefix("foil:"):
                 // Promote the chosen alternative to the recommendation and ask again, so it gets
                 // its own card and its own reason. A tap on a price is a look, not a purchase.
@@ -1544,18 +1547,15 @@ final class AppModel {
     /// The ranking is the curator's — model-produced, and that is where taste belongs.
     /// ``MissionShortlist`` only enforces the floors a ranking model gets wrong expensively:
     /// duplicates, foils too close in price to be a real choice, and outliers.
-    /// Only a single-item mission has foils, because only there is the deck an apples-to-apples set.
     ///
-    /// A kit mission's candidates are the **union of every part's search**, with no record of which
-    /// part found what — the gather is model-driven and its tool hands back bare products. So on
-    /// "Set up my pour-over corner" the products next to the beans are the brew mat and the
-    /// kettle: other *parts*, not alternatives. Offering them as "Costs less" and "A step up"
-    /// would be worse than the price ladder this design replaces, because it would be confidently
-    /// wrong. Restoring foils for kits needs part attribution at gather time.
+    /// The candidates a kit mission draws from are **the same part's**, never the whole deck. A kit
+    /// deck is the union of every part's search, so read flat it offers the brew mat and the kettle
+    /// as the cheaper and pricier options next to the beans — other *parts*, not alternatives, and
+    /// confidently wrong in a way the price ladder this design replaced never was. A candidate
+    /// nothing can place has no alternatives at all; see ``MissionPartAttribution``.
     private static func foils(for product: Product, in thread: MissionThread) -> [Product] {
-        guard thread.task?.isSingleItem == true else { return [] }
         // The winner leads, so the shortlist ranks from the product being asked about.
-        let ordered = [product] + thread.remainingDeck.filter { $0.id != product.id }
+        let ordered = [product] + thread.alternatives(to: product)
         return MissionShortlist.choose(from: ordered)?.foils ?? []
     }
 
@@ -1869,11 +1869,17 @@ final class AppModel {
     private func installNextProductOrKitQuestion(
         in thread: inout MissionThread,
         includeRefinementFollowUps: Bool = false,
-        runsAutoKeep: Bool = true
+        runsAutoKeep: Bool = true,
+        passingOver: Product.ID? = nil
     ) {
         if runsAutoKeep { runAutoKeep(in: &thread) }
-        let byID = Dictionary(uniqueKeysWithValues: thread.candidates.map { ($0.id, $0) })
-        if let product = thread.remainingDeckIDs.compactMap({ byID[$0] }).first {
+        // A multi-part kit is walked one part at a time — the first part the kit doesn't cover yet,
+        // then the next — instead of straight down the ranked union, which asks about two kettles,
+        // then a mat, then a third kettle. Single-item missions and unattributable decks fall back
+        // to deck order, so nothing about the shortlist flow moves. See ``MissionThread/nextCard``.
+        if let product = thread.nextCard(passingOver: passingOver) {
+            // The deck follows the question, not the other way round — see `bringToFrontOfDeck`.
+            thread.bringToFrontOfDeck(product.id)
             thread.phase = .deckReady
             installProductQuestion(
                 in: &thread, product: product,
@@ -2384,7 +2390,15 @@ final class AppModel {
     /// kit" empty state so its art can be captured headlessly.
     func presentFullKitForScreenshot(missionID: String) async {
         await presentCurateForScreenshot(missionID: missionID)
-        for product in deck { accept(product) }
+        // Follows the question rather than a snapshot of the deck taken before any of it was
+        // answered: a kit is asked about a part at a time, so answering one card changes which card
+        // comes next. Iterating the stale list silently answered nothing after the first.
+        var guardrail = 0
+        while let asked = activeThread?.pendingProductID,
+              let product = candidates.first(where: { $0.id == asked }), guardrail < 100 {
+            accept(product)
+            guardrail += 1
+        }
     }
 
     /// Screenshot hook: land on the pre-gather mission thread for a seed mission (which carries a
@@ -2832,10 +2846,16 @@ final class AppModel {
         // Pull in new candidates only when the refinement asked for something not in the deck
         // (e.g. "add rain pants"); otherwise re-curate the existing deck in place.
         var working = candidates
-        if !interpreted.directive.addQueries.isEmpty, let found = await search(interpreted.directive.addQueries) {
+        // What the refinement's own searches found, named by the search that found it. Without this
+        // a candidate added mid-conversation is one nothing can place, so it would sit in the deck
+        // for the rest of the mission with no alternatives beside it.
+        var addedParts: [Product.ID: String] = [:]
+        if !interpreted.directive.addQueries.isEmpty,
+           let found = await ucp.searchUnionByQuery(interpreted.directive.addQueries) {
             guard operationIsCurrent(.refinement, id: operationID, threadID: threadID) else { return }
             var seen = Set(working.map(\.id))
-            working += found.filter { seen.insert($0.id).inserted }
+            working += found.products.filter { seen.insert($0.id).inserted }
+            addedParts = found.parts
         }
 
         let context = RefinementContext(directive: interpreted.directive, conversation: conversation)
@@ -2852,6 +2872,9 @@ final class AppModel {
         mutateActiveThread {
             $0.refinementDirectives.append(interpreted.directive)
             $0.candidates = priced
+            // The gather's attribution stands: a plan part's search is a stronger claim on a product
+            // than a refinement query that happened to return it again.
+            $0.candidateParts = addedParts.merging($0.candidateParts ?? [:]) { _, gathered in gathered }
             $0.remainingDeckIDs = priced.map(\.id).filter { !excludedIDs.contains($0) }
             $0.phase = .deckReady
             $0.pendingOperation = nil
@@ -2884,6 +2907,9 @@ final class AppModel {
             $0.refinementDirectives = []
             $0.candidates = restored
             $0.remainingDeckIDs = restored.map(\.id).filter { !excludedIDs.contains($0) }
+            // Reset is an instant undo, not a re-ask: the standing question survives it, so its
+            // subject has to keep leading the deck the question is answered against.
+            if let asked = $0.pendingProductID { $0.bringToFrontOfDeck(asked) }
             $0.appendEvent(kind: .refinementsReset, text: "Reset the conversation changes.", createdAt: clock())
         }
         refinementTier = nil
@@ -3227,6 +3253,10 @@ final class AppModel {
         mutateActiveThread {
             $0.candidates = priced
             $0.baseCandidates = priced
+            // Which search found what, kept beside the deck: it is what lets a kit mission tell an
+            // alternative from another part of the same errand, and it survives the curator's
+            // reordering because it is keyed by product id rather than by position.
+            $0.candidateParts = gathered.parts
             $0.remainingDeckIDs = settled.map(\.id)
             $0.phase = .deckReady
             $0.pendingOperation = nil
@@ -3367,17 +3397,6 @@ final class AppModel {
         guard !current.isEmpty else { return settled }
         let undecided = Set(current.map(\.id))
         return settled.filter { undecided.contains($0.id) }
-    }
-
-    /// Fans `queries` out to the catalog **in parallel** and dedupes the union by product id.
-    /// Returns `nil` only when *every* query errored (a real outage), so the caller can tell an
-    /// outage from a successful-but-empty result. Shared by the initial ``loadCandidates(for:)``
-    /// and by an `addQueries` refinement, so both fan out and dedupe identically.
-    private func search(_ queries: [String]) async -> [Product]? {
-        // The parallel fan-out + dedupe now lives in CrumbKit as `UCPClient.searchUnion`, shared
-        // with the deterministic orchestrator so a refinement's `addQueries` search behaves
-        // identically to the initial gather.
-        await ucp.searchUnion(queries)
     }
 
     // MARK: Swipe deck

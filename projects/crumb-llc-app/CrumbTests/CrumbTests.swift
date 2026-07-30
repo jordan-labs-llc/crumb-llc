@@ -301,7 +301,9 @@ struct CrumbTests {
         #expect(model.loadState == .loaded)
         #expect(model.isReworking == false)
         #expect(model.activeThread?.pendingInteraction != nil)
-        let prices = model.deck.map(\.price)
+        // The curator's ranking is `candidates`; the deck is that ranking as a *question order*, led
+        // by whichever part is being answered (see `MissionThread.nextCard`).
+        let prices = model.candidates.map(\.price)
         #expect(prices == prices.sorted(by: <))   // the cheaper directive visibly applied
     }
 
@@ -713,9 +715,12 @@ struct CrumbTests {
         #expect(model.route == .missionThread)          // the workspace stays mounted across phases
         #expect(model.loadState == .loaded)             // then settled
         #expect(!model.deck.isEmpty)
-        // No swipes happened, so the settled deck is the full ranked deck — same set and order as
-        // the curated candidates.
-        #expect(model.deck.map(\.id) == model.candidates.map(\.id))
+        // No swipes happened, so the settled deck is the full curated set. Its *order* is the
+        // question order — a multi-part kit leads with the part being answered — so the ranking is
+        // asserted where it lives, on the candidates.
+        #expect(Set(model.deck.map(\.id)) == Set(model.candidates.map(\.id)))
+        #expect(model.deck.first?.id == model.activeThread?.pendingProductID,
+                "the head of the deck is always the card being asked about")
         #expect(Set(model.deck.map(\.id)) == Set(SeedData.coffeeProducts.map(\.id)))
     }
 
@@ -1054,7 +1059,7 @@ struct CrumbTests {
 
         await model.applyRefinement(text: "make it cheaper")
 
-        let prices = model.deck.map(\.price)
+        let prices = model.candidates.map(\.price)
         #expect(prices == prices.sorted(by: <))             // re-sorted ascending
         #expect(model.isInKit(kept))                        // kit preserved
         #expect(!model.deck.contains { $0.id == kept.id })  // kit item not re-dealt
@@ -1240,8 +1245,8 @@ struct CrumbTests {
         )
         model.enterPlan(with: SeedData.hike)
         await model.loadCandidates(for: SeedData.hike)
-        // Thrifty profile → ProfileSortCurator deals the deck id-ascending.
-        let before = model.deck.map(\.id)
+        // Thrifty profile → ProfileSortCurator ranks id-ascending.
+        let before = model.candidates.map(\.id)
         #expect(before == before.sorted())
 
         // Flip to splurge and re-curate the deck in place.
@@ -1249,7 +1254,7 @@ struct CrumbTests {
         await Task.yield()
         while model.isRecurating { await Task.yield() }
 
-        let after = model.deck.map(\.id)
+        let after = model.candidates.map(\.id)
         #expect(after == before.sorted(by: >))       // visibly re-ranked (now descending)
         #expect(Set(after) == Set(before))           // same set, nothing lost
         #expect(model.tasteProfile == Self.splurge)
@@ -1638,7 +1643,7 @@ struct CrumbTests {
         #expect(model.activeTaste == Self.splurge)                 // the switch resolves to her taste
 
         await model.loadCandidates(for: SeedData.hike)
-        let ids = model.deck.map(\.id)
+        let ids = model.candidates.map(\.id)
         #expect(ids == ids.sorted(by: >))                          // ranked by *her* (splurge) taste
         #expect(model.tasteProfile == Self.thrifty)                // owner profile untouched
     }
@@ -1655,7 +1660,7 @@ struct CrumbTests {
         #expect(model.activeTaste == Self.thrifty)
         #expect(model.activeRecipientRef == nil)
         await model.loadCandidates(for: SeedData.hike)
-        let ids = model.deck.map(\.id)
+        let ids = model.candidates.map(\.id)
         #expect(ids == ids.sorted())                               // owner (thrifty) order
     }
 

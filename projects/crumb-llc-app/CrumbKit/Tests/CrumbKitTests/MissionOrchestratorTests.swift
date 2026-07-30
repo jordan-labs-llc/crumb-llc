@@ -62,6 +62,19 @@ struct MissionOrchestratorTests {
         #expect(await partial.searchUnion(["a", "b"])?.map(\.id) == ["1"])
     }
 
+    @Test("searchUnionByQuery names the earliest query that returned each product")
+    func searchUnionKeepsProvenance() async {
+        let ucp = StubUCP(results: [
+            "a": [product("1", "One"), product("2", "Two")],
+            "b": [product("2", "Two"), product("3", "Three")],
+        ])
+        let union = await ucp.searchUnionByQuery(["a", "b"])
+        #expect(union?.products.map(\.id) == ["1", "2", "3"])
+        #expect(union?.parts == ["1": "a", "2": "a", "3": "b"])
+        // Same outage contract as the plain union.
+        #expect(await StubUCP(results: [:], failing: ["a"]).searchUnionByQuery(["a"]) == nil)
+    }
+
     // MARK: DeterministicMissionOrchestrator
 
     @Test("Deterministic gather searches the mission's queries and gates off-topic items")
@@ -96,6 +109,31 @@ struct MissionOrchestratorTests {
         await collector.add([product("2", "Two"), product("3", "Three")])
         #expect(await collector.products.map(\.id) == ["1", "2", "3"])
         #expect(await collector.count == 3)
+    }
+
+    @Test("Collector records which search found each product")
+    func collectorAttributes() async {
+        let collector = CandidateCollector()
+        await collector.add([product("1", "Kettle")], from: GatherOrigin(part: "Kettle", rank: 0))
+        await collector.add([product("2", "Mat")], from: GatherOrigin(part: "Mat", rank: 1))
+        await collector.add([product("3", "Lamp")])   // an unnamed search claims nothing
+        #expect(await collector.attribution == ["1": "Kettle", "2": "Mat"])
+    }
+
+    /// The mission's queries fan out in parallel, so a product two of them return would otherwise be
+    /// attributed to whichever search happened to come back first. The lower rank always wins.
+    @Test("A better-ranked search takes over a product an improvised one already claimed")
+    func collectorPrefersTheBetterRankedClaim() async {
+        let collector = CandidateCollector()
+        await collector.add(
+            [product("1", "Kettle")], from: GatherOrigin(part: "gooseneck", rank: GatherOrigin.improvised)
+        )
+        await collector.add([product("1", "Kettle")], from: GatherOrigin(part: "Kettle", rank: 0))
+        #expect(await collector.attribution == ["1": "Kettle"])
+        // …and a worse-ranked latecomer cannot take it back.
+        await collector.add([product("1", "Kettle")], from: GatherOrigin(part: "Mat", rank: 3))
+        #expect(await collector.attribution == ["1": "Kettle"])
+        #expect(await collector.products.map(\.id) == ["1"], "attribution never re-pools a duplicate")
     }
 
     @Test("Collector caps the pool")
@@ -216,7 +254,57 @@ struct MissionOrchestratorTests {
         #expect(result?.usedAgent == false)
     }
 
+    @Test("Deterministic gather attributes each find to the plan part its query was for")
+    func deterministicGatherAttributes() async {
+        let ucp = StubUCP(results: [
+            "gooseneck kettle": [product("k1", "Heron Kettle")],
+            "linen brew mat": [product("m1", "Linen Mat")],
+        ])
+        let m = mission(
+            queries: ["gooseneck kettle", "linen brew mat"], plan: ["Gooseneck kettle", "A tidy mat"]
+        )
+        let gathered = await DeterministicMissionOrchestrator().gather(
+            for: m, floor: 1, using: ucp, gate: RuleBasedRelevanceGate()
+        )
+        // The plan's label, not the raw query — it is the phrase the person read and could edit.
+        #expect(gathered?.parts == ["k1": "Gooseneck kettle", "m1": "A tidy mat"])
+    }
+
+    @Test("A floor top-up is attributed to the search that actually returned it")
+    func topUpKeepsItsAttribution() async {
+        // Nothing matches the mission keywords, so both survive only as the gate's floor top-up —
+        // dropped at the batch gate and added at return, where they must still name their search.
+        let ucp = StubUCP(results: [
+            "gooseneck kettle": [product("x1", "Rowing shirt")],
+            "linen brew mat": [product("x2", "Canoe paddle")],
+        ])
+        let m = mission(
+            queries: ["gooseneck kettle", "linen brew mat"], plan: ["Gooseneck kettle", "A tidy mat"]
+        )
+        let gathered = await DeterministicMissionOrchestrator().gather(
+            for: m, floor: 2, using: ucp, gate: RuleBasedRelevanceGate()
+        )
+        #expect(gathered?.parts == ["x1": "Gooseneck kettle", "x2": "A tidy mat"])
+    }
+
     // MARK: GatherToolSupport
+
+    @Test("A tool's query is attributed to the plan part it was asked to search")
+    func toolOriginNamesThePlanPart() {
+        let m = mission(queries: ["gooseneck kettle", "burr grinder"], plan: ["Kettle", "Grinder"])
+        #expect(GatherToolSupport.origin(for: "Gooseneck Kettle", in: m) == GatherOrigin(part: "Kettle", rank: 0))
+        // A search the model reached for beyond the plan becomes its own, improvised part.
+        let improvised = GatherToolSupport.origin(for: "desk lamp", in: m)
+        #expect(improvised == GatherOrigin(part: "desk lamp", rank: GatherOrigin.improvised))
+    }
+
+    @Test("A plan and queries that don't line up fall back to naming the query")
+    func partLabelFallsBackWhenPlanAndQueriesDesync() {
+        // A part whose query cleans away to nothing is dropped from the queries alone; pairing by
+        // position through that gap would file every later part's finds under its neighbour.
+        let m = mission(queries: ["gooseneck kettle"], plan: ["Kettle", "Grinder"])
+        #expect(GatherToolSupport.partLabel(at: 0, in: m) == "gooseneck kettle")
+    }
 
     @Test("onTopic keeps mission-matching products and drops the off-topic")
     func onTopicGuard() {

@@ -694,6 +694,14 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
     /// or wedges an empty deck. Optional so threads persisted before this field decode
     /// unchanged (`nil` == none queued).
     public var queuedRefinements: [String]?
+    /// Which search found each candidate, as the gather reported it — a plan part's label for a
+    /// planned search, the model's own query for one it reached for beyond the plan.
+    ///
+    /// Held as a map beside the candidates rather than as a field on ``Product`` so the product
+    /// shape — and every mission snapshot already persisted through it in History — stays untouched.
+    /// Optional so threads written before the gather recorded provenance decode unchanged; `nil` and
+    /// an empty map both mean "nothing was attributed", which ``part(of:)`` reads as not knowing.
+    public var candidateParts: [Product.ID: String]?
     /// How much this mission asks before keeping something. Optional so every thread persisted before
     /// delegation existed decodes unchanged; `nil` reads as ``MissionApprovalMode/askEach``, which is
     /// exactly what those threads did.
@@ -769,6 +777,7 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
         refinementTurns: [String],
         refinementDirectives: [RefinementDirective],
         queuedRefinements: [String]? = nil,
+        candidateParts: [Product.ID: String]? = nil,
         approvalMode: MissionApprovalMode? = nil,
         pendingAutoKeepUndo: MissionAutoKeepUndo? = nil,
         recipient: Recipient?,
@@ -798,6 +807,7 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
         self.refinementTurns = refinementTurns
         self.refinementDirectives = refinementDirectives
         self.queuedRefinements = queuedRefinements
+        self.candidateParts = candidateParts
         self.approvalMode = approvalMode
         self.pendingAutoKeepUndo = pendingAutoKeepUndo
         self.recipient = recipient
@@ -818,6 +828,91 @@ public struct MissionThread: Identifiable, Hashable, Sendable, Codable {
     public var remainingDeck: [Product] {
         let byID = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
         return remainingDeckIDs.compactMap { byID[$0] }
+    }
+
+    /// Which part of this mission `product` belongs to, or `nil` when nothing can place it.
+    /// See ``MissionPartAttribution`` for how the plan's words and the gather's provenance combine.
+    public func part(of product: Product) -> String? {
+        MissionPartAttribution.part(
+            of: product, plan: plan.map(\.label), provenance: candidateParts?[product.id]
+        )
+    }
+
+    /// The remaining candidates that are genuine alternatives to `product` — same part, still
+    /// undecided, in the deck's ranked order.
+    ///
+    /// A **single-item** mission skips the question: its whole deck is one apples-to-apples set by
+    /// definition, and a catalog that names things nothing like the goal does ("Dragon Pearl" for a
+    /// jasmine mission) would otherwise strand a perfectly comparable deck with no alternatives.
+    ///
+    /// A kit mission also needs its attribution to actually divide the pool before any of it can be
+    /// read as a comparison — see ``MissionPartAttribution/isPartitioned(_:plan:provenance:)``.
+    public func alternatives(to product: Product) -> [Product] {
+        let deck = remainingDeck
+        guard task?.isSingleItem != true else { return deck.filter { $0.id != product.id } }
+        let labels = plan.map(\.label)
+        let provenance = candidateParts ?? [:]
+        guard MissionPartAttribution.isPartitioned(candidates, plan: labels, provenance: provenance)
+        else { return [] }
+        return MissionPartAttribution.peers(
+            of: product, among: deck, plan: labels, provenance: provenance
+        )
+    }
+
+    /// The next candidate to ask about: the best remaining one for the **first plan part the kit
+    /// doesn't cover yet**, so a multi-part errand is walked a part at a time with the kit filling in
+    /// behind, rather than down a globally fit-ranked union that hops between parts.
+    ///
+    /// Within a part the deck's own order is kept — the ranking is the curator's, and this only
+    /// chooses which part is being answered. It falls back to plain deck order whenever sequencing
+    /// has nothing to say: a single-item mission, a mission with too few parts to divide up, or an
+    /// open part with nothing left on the deck to offer for it (so a part nobody can shop for cannot
+    /// stall the mission).
+    ///
+    /// `readsRationale: false` for the same reason ``MissionAutoKeep`` uses it: the deterministic
+    /// curator's sentence names every part of the mission on every card, so reading it would report
+    /// the checklist complete after one keep.
+    public var nextCard: Product? { nextCard(passingOver: nil) }
+
+    /// ``nextCard`` with one card set aside — what "Show another" needs. Without it, sequencing and
+    /// rotation fight: the rotated card is still the best answer to the open part, so it would be
+    /// pulled straight back to the front and the offer would do nothing.
+    ///
+    /// The set-aside card is still returned when it is all that is left, so a lone candidate is
+    /// re-offered rather than the mission jumping to its kit with cards undecided.
+    public func nextCard(passingOver skipped: Product.ID?) -> Product? {
+        let deck = remainingDeck.filter { $0.id != skipped }
+        guard !deck.isEmpty else { return remainingDeck.first }
+        let labels = plan.map(\.label)
+        guard task?.isSingleItem != true, labels.count >= MissionAutoKeep.minimumParts else {
+            return deck.first
+        }
+        let open = KitCompleteness.assess(
+            plan: labels, items: kit.map(\.product), readsRationale: false
+        ).missing
+        for part in open {
+            if let next = deck.first(where: { self.part(of: $0) == part }) { return next }
+        }
+        return deck.first
+    }
+
+    /// The product the standing question is about, when it is a question about a product.
+    public var pendingProductID: Product.ID? {
+        guard case .product(let id, _) = pendingInteraction?.resolver else { return nil }
+        return id
+    }
+
+    /// Puts `productID` at the head of the deck.
+    ///
+    /// The head of the deck and the card the person is being asked about are the same thing
+    /// throughout the app — the swipe, ``MissionThread/nextCard``, and the App Intents' "the product
+    /// I'm looking at" all resolve against it. Sequencing a kit by part is what makes them able to
+    /// disagree, so every path that chooses a card or rebuilds the deck brings them back in step.
+    /// Only the named card moves; everything behind it keeps the curator's order.
+    public mutating func bringToFrontOfDeck(_ productID: Product.ID) {
+        guard remainingDeckIDs.first != productID, remainingDeckIDs.contains(productID) else { return }
+        remainingDeckIDs.removeAll { $0 == productID }
+        remainingDeckIDs.insert(productID, at: 0)
     }
 
     /// Appends a semantic line. The surrounding AppModel transaction owns revision advancement.
