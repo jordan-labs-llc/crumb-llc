@@ -391,9 +391,13 @@ struct MissionResponseDock: View {
 
     // MARK: New mission
 
-    /// True once Home has any mission to show. The dock then collapses to a single line: with work on
-    /// screen the greeting, the recipient control and the starter chips are all competing with content
-    /// that earned the space, and the field alone still says what it wants.
+    /// True once Home has any mission to show. The dock then collapses: with work on screen the
+    /// greeting and the starter chips are competing with content that earned the space.
+    ///
+    /// The **recipient control survives the collapse** — see `newMissionContents`. It used to go with
+    /// everything else, which meant the second mission was silently *for You* even when the first was
+    /// a gift, and a person with forty saved recents never saw the control again after their first
+    /// mission. Who a mission is for is not decoration; it changes what Crumb shops for.
     private var isCollapsed: Bool {
         guard case .newMission = mode else { return false }
         return !model.incompleteThreads.isEmpty
@@ -408,18 +412,20 @@ struct MissionResponseDock: View {
 
     private var newMissionContents: some View {
         VStack(alignment: .leading, spacing: CrumbMetrics.Space.s) {
-            if !isCollapsed {
-                HStack(spacing: CrumbMetrics.Space.s) {
-                    newMissionRecipientAccessory
-                    Spacer(minLength: 0)
-                }
+            // One line, always. Collapsed it is the whole of the dock's furniture; expanded it sits
+            // above the starter chips exactly as before.
+            HStack(spacing: CrumbMetrics.Space.s) {
+                newMissionRecipientAccessory
+                Spacer(minLength: 0)
+            }
 
+            if !isCollapsed {
                 newMissionSuggestionChoices
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("newMissionSuggestions")
-
-                Divider().foregroundStyle(CrumbColor.line)
             }
+
+            Divider().foregroundStyle(CrumbColor.line)
 
             MissionTextInputRow(
                 text: draft,

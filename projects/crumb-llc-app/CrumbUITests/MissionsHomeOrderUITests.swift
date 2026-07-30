@@ -169,6 +169,10 @@ final class MissionsHomeOrderUITests: XCTestCase {
             element(cold, "composerRecipientAccessory").exists,
             "An empty Home must expose who the mission is for"
         )
+        XCTAssertTrue(
+            element(cold, "homeFollowUpAsk").exists == false,
+            "An empty Home carries the full greeting, not the short-form follow-up ask"
+        )
         XCTAssertFalse(
             element(cold, "homeHero").exists,
             "An empty Home must not render a hero"
@@ -189,6 +193,13 @@ final class MissionsHomeOrderUITests: XCTestCase {
         XCTAssertFalse(
             element(busy, "newMissionSuggestions").exists,
             "The starter chips must retire once there is work on screen"
+        )
+        // The recipient control deliberately does NOT retire with the rest of the furniture. It used
+        // to, which meant the second mission was silently for You even when the first was a gift —
+        // and who a mission is for changes what Crumb shops for, so it is not decoration.
+        XCTAssertTrue(
+            element(busy, "composerRecipientAccessory").exists,
+            "A collapsed dock must still say who the next mission is for"
         )
         XCTAssertTrue(
             element(busy, "missionResponseDock").exists,
@@ -372,6 +383,86 @@ final class MissionsHomeOrderUITests: XCTestCase {
             "Starting work from Home must not navigate away from Home to do it"
         )
         XCTAssertTrue(element(app, "homeHero").exists, "The hero must survive answering its own question")
+    }
+
+    /// A product decision on Home shows the product it is about.
+    ///
+    /// This is the finding the card was rebuilt around: Home rendered thumbnails of what you had
+    /// already kept and *nothing* of the item it was asking you to decide, so the one decision on the
+    /// screen had no subject. In a visual commerce app that is the largest gap there is.
+    @MainActor
+    func testProductDecisionShowsTheProductItIsAbout() {
+        let app = launchSeededHome("missions-decision")
+
+        let subject = element(app, "homeHeroSubject.ceramic-heart-tray")
+        XCTAssertTrue(subject.exists, "A product decision on Home must show its product")
+
+        // Price and merchant are the two facts that decide a keep, and neither was on screen before.
+        let label = subject.label
+        XCTAssertTrue(label.contains("$18"), "The decision must carry its price: '\(label)'")
+        XCTAssertTrue(label.contains("Mill"), "The decision must name its shop: '\(label)'")
+        // VoiceOver keeps the merchant's raw title even though the visible name is shortened.
+        XCTAssertTrue(
+            label.contains("I Love That You Are My Sister"),
+            "The raw catalog title must survive for assistive tech: '\(label)'"
+        )
+    }
+
+    /// The merchant's merchandising clause does not reach the screen, and the resolver's internal
+    /// phrasing is no longer quoted at the reader.
+    @MainActor
+    func testProductDecisionUsesTheCuratedNameAndThePostedQuestion() {
+        let app = launchSeededHome("missions-decision")
+
+        XCTAssertTrue(
+            app.staticTexts["“How does this one look?”"].exists,
+            "Home must quote the sentence Crumb actually posted"
+        )
+        // "What should I do with Ceramic Heart Trinket Tray | I Love That You Are My Sister?" was the
+        // old rendering: a question nobody was asked, about the reader's family.
+        XCTAssertEqual(
+            app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS[c] %@", "What should I do with")
+            ).count,
+            0,
+            "The resolver's internal phrasing must not be shown to a reader"
+        )
+        XCTAssertTrue(
+            app.staticTexts["Ceramic Heart Trinket Tray"].exists,
+            "The merchandising clause must be gone from the visible name"
+        )
+    }
+
+    /// A keep/discard pair is weighted; the alternatives are demoted — and the way into the mission
+    /// stays visible even though the answer buttons replaced the CTA.
+    @MainActor
+    func testProductDecisionWeightsItsPairAndKeepsAVisibleRouteIn() {
+        let app = launchSeededHome("missions-decision")
+
+        let add = app.buttons["homeHeroOption.add"]
+        let skip = app.buttons["homeHeroOption.skip"]
+        let another = app.buttons["homeHeroOption.show-another"]
+        XCTAssertTrue(add.exists)
+        XCTAssertTrue(skip.exists)
+        XCTAssertTrue(another.exists)
+
+        // Add and Skip share a row; "Show another" is demoted out of it. Three equal full-width
+        // capsules took ~35% of the card, two of them meaning "not now".
+        XCTAssertEqual(
+            add.frame.minY, skip.frame.minY, accuracy: 2,
+            "The keep/discard pair must sit on one row"
+        )
+        XCTAssertGreaterThan(
+            another.frame.minY, add.frame.maxY - 2,
+            "The alternatives must be demoted below the weighted pair"
+        )
+
+        // With the CTA replaced by answer buttons, this is the only *labelled* way into the mission.
+        // The card body is still tappable, but an unlabelled tap target is not an affordance.
+        XCTAssertTrue(
+            element(app, "homeHeroSecondaryRoute").exists,
+            "Answering from Home must not hide the route into the mission"
+        )
     }
 
     /// A hero with no options — or none at all — must not pretend to be answerable.

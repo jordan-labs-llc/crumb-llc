@@ -67,6 +67,96 @@ public enum TitleHygiene {
         return cleaned.isEmpty ? trimmedRaw : cleaned
     }
 
+    // MARK: - Merchandising clauses
+
+    /// Separators that reliably introduce a *clause* rather than part of a name. Matched spaced (or
+    /// pipe-adjacent) so hyphenated words survive: `"1-Cup Pour-Over"` must not lose its hyphens.
+    private static let clauseSeparators = [" | ", " – ", " — ", " · ", " -- ", " - ", "| ", " |"]
+
+    /// Symbols that add nothing to a written or spoken name.
+    private static let noiseCharacters: Set<Character> = ["™", "®", "©", "℠"]
+
+    /// The **name** to show a person, for surfaces that have room for one line and no more.
+    ///
+    /// `display(for:)` answers "which script do we render"; this answers "where does the name end and
+    /// the merchandising begin". Live titles routinely arrive as
+    /// `"Ceramic Heart Trinket Tray | I Love That You Are My Sister"` or
+    /// `"1-Cup Pour-Over™ Coffee Brew Cone - Black"`. Rendered whole they read badly anywhere, and on
+    /// Home they used to be interpolated into `"What should I do with \(name)?"` — which turned a
+    /// merchant's marketing clause into a question about the reader's family.
+    ///
+    /// Deliberately **additive**: `display(for:)` is unchanged, so the card, cart line and history
+    /// title keep their exact current output. Only callers that ask for a name get the shorter form.
+    ///
+    /// - Parameters:
+    ///   - rawTitle: the merchant's title, verbatim.
+    ///   - merchant: the shop's name, when known. A segment that *is* the shop name is skipped, so
+    ///     `"Sisters & Co | Ceramic Heart Trinket Tray"` keeps the tray rather than the brand — the
+    ///     one case where taking the first segment would be exactly wrong.
+    public static func displayName(for rawTitle: String, merchant: String? = nil) -> String {
+        // Script hygiene first: a clause separator can sit inside a run this step removes.
+        let cleaned = display(for: rawTitle)
+        guard !cleaned.isEmpty else { return cleaned }
+
+        let denoised = collapseWhitespace(String(cleaned.filter { !noiseCharacters.contains($0) }))
+
+        let segments = split(denoised)
+            .map { collapseWhitespace($0).trimmingCharacters(in: edgeSeparators) }
+            .filter { !$0.isEmpty }
+
+        // The first segment that isn't just the shop's own name. Falling through to `denoised`
+        // (rather than to nothing) means a title made entirely of the merchant name still renders.
+        let named = segments.first { !isMerchantName($0, merchant: merchant) } ?? segments.first ?? denoised
+
+        let result = stripTrailingBracketed(named).trimmingCharacters(in: edgeSeparators)
+
+        // A separator can appear before the object is named at all ("Sale | Mug"). Two characters is
+        // not a name, so keep the whole string rather than confidently showing a fragment.
+        guard result.count > 2 else { return denoised }
+
+        return isShouting(result) ? titleCased(result) : result
+    }
+
+    private static func split(_ value: String) -> [String] {
+        clauseSeparators.reduce([value]) { parts, separator in
+            parts.flatMap { $0.components(separatedBy: separator) }
+        }
+    }
+
+    private static func isMerchantName(_ segment: String, merchant: String?) -> Bool {
+        guard let merchant, merchant.count > 2 else { return false }
+        return segment.compare(merchant, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+    }
+
+    /// Drops one *trailing* `(…)` or `[…]` group — "(100-Pack)", "[Sand]". Only trailing, and only
+    /// one: a bracketed run mid-title is usually load-bearing.
+    private static func stripTrailingBracketed(_ value: String) -> String {
+        for (open, close) in [("(", ")"), ("[", "]")] {
+            guard value.hasSuffix(close), let start = value.range(of: open, options: .backwards) else { continue }
+            let head = String(value[value.startIndex..<start.lowerBound]).trimmingCharacters(in: .whitespaces)
+            if head.count > 2 { return head }
+        }
+        return value
+    }
+
+    /// True when the string carries no lowercase letter at all. Mixed case is left exactly as the
+    /// merchant wrote it, because recasing it would eat brand names — "Hario V60" must never become
+    /// "Hario v60".
+    private static func isShouting(_ value: String) -> Bool {
+        let letters = value.filter(\.isLetter)
+        guard letters.count >= 3 else { return false }
+        return !letters.contains { $0.isLowercase }
+    }
+
+    private static func titleCased(_ value: String) -> String {
+        value.split(separator: " ").map { word in
+            // Short all-caps runs inside a shouting title are usually initialisms or sizes
+            // ("XL", "USB"), so they keep their case.
+            if word.count <= 3, word.allSatisfy({ $0.isLetter || $0.isNumber }) { return String(word) }
+            return word.prefix(1).uppercased() + word.dropFirst().lowercased()
+        }.joined(separator: " ")
+    }
+
     // MARK: - Script classification
 
     /// Whether a scalar is a Latin-script letter we keep: ASCII `A–Z`/`a–z`, the Latin-1 Supplement
