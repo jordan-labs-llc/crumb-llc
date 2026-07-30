@@ -266,6 +266,12 @@ struct CrumbKitTests {
         #expect(CuratorTier.onDevice.fallbackNote == nil)
         #expect(CuratorTier.ruleBased(.quotaExhausted).fallbackNote != nil)
         #expect(CuratorTier.ruleBased(.deviceNotEligible).fallbackNote != nil)
+        // A settle timeout gets its own note. The model is present and it ran, so the copy must not
+        // borrow `.modelNotReady`'s "still downloading" claim.
+        let timedOut = CuratorTier.ruleBased(.rankTimedOut).fallbackNote
+        #expect(timedOut != nil)
+        #expect(timedOut?.contains("downloading") == false)
+        #expect(timedOut != CuratorTier.ruleBased(.modelNotReady).fallbackNote)
     }
 
     @Test("Default taste profile matches the brief")

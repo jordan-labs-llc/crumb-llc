@@ -35,5 +35,6 @@ struct CrumbTraceTests {
         #expect(CuratorTier.onDevice.traceLabel == "on-device")
         #expect(CuratorTier.ruleBased(nil).traceLabel == "rule")
         #expect(CuratorTier.ruleBased(.modelNotReady).traceLabel == "rule:not-ready")
+        #expect(CuratorTier.ruleBased(.rankTimedOut).traceLabel == "rule:rank-timeout")
     }
 }

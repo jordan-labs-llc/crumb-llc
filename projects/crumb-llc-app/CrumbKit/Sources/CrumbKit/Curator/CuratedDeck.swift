@@ -22,6 +22,11 @@ public enum CuratorTier: Sendable, Equatable {
         case modelNotReady
         case quotaExhausted
         case offlineOrError
+        /// The curator *was* available and *did* run — it just didn't finish ranking inside the
+        /// settle deadline, so the deck settled in its streamed, deterministically-voiced order.
+        /// Deliberately distinct from ``modelNotReady``: nothing is downloading, so saying so
+        /// would be a lie about a device that is working fine.
+        case rankTimedOut
     }
 }
 
@@ -45,6 +50,9 @@ public extension CuratorTier {
                 + "standard picks for now."
         case .offlineOrError:
             return "Couldn't reach the curator just now — showing Crumb's standard picks."
+        case .rankTimedOut:
+            return "Crumb's curator took too long to rank these — showing them in the standard "
+                + "order for now."
         }
     }
 }

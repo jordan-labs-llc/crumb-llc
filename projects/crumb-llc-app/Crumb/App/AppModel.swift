@@ -3210,13 +3210,16 @@ final class AppModel {
         // lead or reach the top-3 — in every curator tier, offline included. A deck with too few
         // priced items to judge a band passes through untouched. On a settle timeout we price-sane
         // the streamed deck (already deterministically voiced) and mark the honest fallback tier.
+        // `nil` here means exactly one thing — `curateBounded` hit `curationSettleDeadline` — so the
+        // tier is `.rankTimedOut`, not `.modelNotReady`: the model is present and it ran, it just
+        // overran, and claiming a download is still in flight would be false on a healthy device.
         let priced: [Product]
         if let curated {
             priced = PriceBand.priceSane(curated.products)
             curatorTier = curated.tier
         } else {
             priced = PriceBand.priceSane(deck)
-            curatorTier = .ruleBased(.modelNotReady)
+            curatorTier = .ruleBased(.rankTimedOut)
         }
         // Settle: swap the streamed raw deck for the curated (ranked, voiced, price-saned) order,
         // keeping only cards the user hasn't already swiped past.
@@ -3284,7 +3287,8 @@ final class AppModel {
 
     /// Runs the curation settle bounded by ``curationSettleDeadline``. Returns the curated deck, or
     /// `nil` if the curator's ranking/voice didn't finish in time — so the caller settles with the
-    /// streamed deterministic deck instead of holding the user behind a hung model turn (#57).
+    /// streamed deterministic deck instead of holding the user behind a hung model turn (#57), and
+    /// reports `.rankTimedOut` (a ran-but-overran curator, *not* an absent one).
     ///
     /// Mirrors the gather safety net's abandon-on-deadline shape (#54): the curate runs in an
     /// unstructured task raced against a deadline; on timeout the task is cancelled and its result
