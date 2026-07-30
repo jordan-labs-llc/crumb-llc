@@ -188,7 +188,7 @@ public struct AppleFoundationMissionPlanner: MissionPlanner {
         // two parts — reconcile to the deterministic player-kit expansion (with its stated, editable
         // assumption) so a high-school lacrosse kit reaches the deck as a real kit, not a lone stick.
         // Only fires for a recognized sport, so every other goal keeps the model's own decomposition.
-        if let kit = RuleBasedMissionPlanner.sportsKit(for: trimmedGoal),
+        if let kit = RuleBasedMissionPlanner.kitExpansion(for: trimmedGoal),
            draft.isSingleItem || parts.count < 2 {
             let task = RuleBasedMissionPlanner.makeTask(
                 goal: trimmedGoal,
