@@ -43,11 +43,16 @@ struct GatherSafetyNet {
     /// floor is wanted, and converges on the pool. Returns the gathered pool, or `nil` only when the
     /// agent contributed nothing AND the floor itself reported a total outage (the seam's `nil`
     /// contract). `floor` is the minimum pool size below which the floor tops the agent pool up.
+    ///
+    /// `partsSnapshot` reads the same shared collector's part attribution. It is a separate closure
+    /// rather than a field on the pool so this type stays collector-free and closure-testable;
+    /// defaulted to empty for callers that gather without attribution.
     func run(
         floor: Int,
         turn: @escaping @Sendable () async throws -> Void,
         poolSnapshot: @escaping @Sendable () async -> [Product],
-        floorGather: @escaping @Sendable () async -> GatheredCandidates?
+        floorGather: @escaping @Sendable () async -> GatheredCandidates?,
+        partsSnapshot: @escaping @Sendable () async -> [Product.ID: String] = { [:] }
     ) async -> GatheredCandidates? {
         let latch = FloorLatch()
 
@@ -102,7 +107,9 @@ struct GatherSafetyNet {
         // The agent earns `usedAgent` only if it genuinely drove the gather: a clean turn with no
         // watchdog rescue. A throw, a deadline abandon, or a watchdog launch all read as floor-led.
         let usedAgent = end == .completed && !watchdogFired
-        return GatheredCandidates(products: pool, usedAgent: usedAgent)
+        // Read after every top-up: the floor writes its own attribution into the same collector, so
+        // a pool the floor rescued or extended arrives with its parts already named.
+        return GatheredCandidates(products: pool, usedAgent: usedAgent, parts: await partsSnapshot())
     }
 
     /// Merges two pools, `primary` order first then any new-by-id from `secondary`. Pure. (Mirrors

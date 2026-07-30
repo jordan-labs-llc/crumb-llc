@@ -61,6 +61,7 @@ struct MissionThreadTests {
         thread.refinementDirectives = [RefinementDirective(
             emphasis: "lighter", priceDirection: .cheaper
         )]
+        thread.candidateParts = [added.id: "Rain jacket"]
         thread.historyEntryID = "history-1"
         thread.appendEvent(
             kind: .userMessage, text: "make it cheaper", createdAt: Self.now,
@@ -611,6 +612,92 @@ struct MissionThreadTests {
         let data = try JSONEncoder().encode(option)
 
         #expect(try JSONDecoder().decode(MissionInteractionOption.self, from: data) == option)
+    }
+
+    // MARK: Parts — which decision a candidate belongs to
+
+    /// A pour-over kit whose deck is deliberately in the *opposite* order to the plan, so deck order
+    /// and part order can't be mistaken for each other.
+    private func coffeeThread(reversed: Bool = true) -> MissionThread {
+        var thread = planningThread(id: "coffee")
+        thread.task = SeedData.coffee
+        thread.plan = zip(SeedData.coffee.plan, SeedData.coffee.searchQueries).enumerated().map {
+            MissionPlanPart(id: "part-\($0.offset)", label: $0.element.0, query: $0.element.1)
+        }
+        thread.candidates = reversed ? SeedData.coffeeProducts.reversed() : SeedData.coffeeProducts
+        thread.baseCandidates = thread.candidates
+        thread.remainingDeckIDs = thread.candidates.map(\.id)
+        thread.phase = .deckReady
+        thread.advanceRevision(at: Self.now.addingTimeInterval(1))
+        return thread
+    }
+
+    @Test("A multi-part kit asks about the first plan part the kit doesn't cover yet")
+    func nextCardWalksThePlan() {
+        var thread = coffeeThread()
+        // Deck order would offer the mat; the plan's first open part is the kettle.
+        #expect(thread.remainingDeck.first?.id == "coffee.mat")
+        #expect(thread.nextCard?.id == "coffee.kettle")
+
+        // Keep it, and the mission moves on to the next open part rather than back to deck order.
+        let kettle = SeedData.coffeeProducts.first { $0.id == "coffee.kettle" }!
+        thread.kit = [KitItem(product: kettle)]
+        thread.remainingDeckIDs.removeAll { $0 == kettle.id }
+        #expect(thread.nextCard?.id == "coffee.grinder")
+    }
+
+    @Test("A part with nothing left on the deck cannot stall the mission")
+    func nextCardFallsThroughAnUnshoppablePart() {
+        var thread = coffeeThread()
+        // Nothing here answers "Gooseneck kettle" or "Burr grinder" any more.
+        thread.remainingDeckIDs = ["coffee.mat", "coffee.dripper"]
+        #expect(thread.nextCard?.id == "coffee.dripper", "the first open part the deck can still answer")
+    }
+
+    @Test("A single-item mission keeps plain deck order")
+    func nextCardLeavesShortlistsAlone() {
+        var thread = coffeeThread()
+        thread.task = SeedData.coffee.settingSingleItem(true)
+        #expect(thread.nextCard?.id == thread.remainingDeck.first?.id)
+    }
+
+    @Test("Alternatives are the same part's other candidates, never other parts")
+    func alternativesAreSamePart() {
+        var thread = coffeeThread(reversed: false)
+        let kettle = thread.candidates.first { $0.id == "coffee.kettle" }!
+        #expect(thread.alternatives(to: kettle).isEmpty, "one kettle in the deck is one option")
+
+        // A second kettle from the same search *is* an alternative; the mat still isn't.
+        let second = Product(
+            id: "coffee.kettle2", name: "Stagg Pour-Over Kettle", shop: kettle.shop, price: 79,
+            rating: 4.6, reviews: 90, rationale: "", symbol: "cup.and.saucer",
+            gradient: SeedData.Gradient.ochre,
+            variants: [Variant(id: "coffee.kettle2.v", title: "Standard", price: 79, checkoutURL: nil)]
+        )
+        thread.candidates.append(second)
+        thread.remainingDeckIDs.append(second.id)
+        #expect(thread.alternatives(to: kettle).map(\.id) == ["coffee.kettle2"])
+    }
+
+    /// The deterministic planner's one-part framing, which is what most typed goals actually get.
+    @Test("A kit mission whose plan never divided anything offers nothing to compare")
+    func alternativesNeedAPartitionedPool() {
+        var thread = coffeeThread(reversed: false)
+        thread.plan = [MissionPlanPart(id: "only", label: "Set up my pour-over corner", query: "pour over corner")]
+        thread.candidateParts = Dictionary(
+            uniqueKeysWithValues: thread.candidates.map { ($0.id, "pour over corner") }
+        )
+        let kettle = thread.candidates.first { $0.id == "coffee.kettle" }!
+        #expect(thread.alternatives(to: kettle).isEmpty,
+                "one search that returned everything is not evidence the mat is a cheaper kettle")
+    }
+
+    @Test("A single-item mission compares its whole deck, attributed or not")
+    func alternativesOnAShortlist() {
+        var thread = coffeeThread(reversed: false)
+        thread.task = SeedData.coffee.settingSingleItem(true)
+        let kettle = thread.candidates.first { $0.id == "coffee.kettle" }!
+        #expect(thread.alternatives(to: kettle).count == thread.remainingDeck.count - 1)
     }
 
     @Test("Continuation store is bounded newest-first")

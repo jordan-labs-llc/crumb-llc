@@ -86,7 +86,8 @@ public struct AppleFoundationMissionOrchestrator: MissionOrchestrator {
             floor: floor,
             turn: turn,
             poolSnapshot: { await collector.products },
-            floorGather: floorGather
+            floorGather: floorGather,
+            partsSnapshot: { await collector.attribution }
         )
     }
 
@@ -160,7 +161,7 @@ struct CatalogSearchTool: Tool {
         // the safety net from recognizing a total broker outage and produces a misleading empty deck.
         let raw = try await ucp.searchCatalog(query, placements: [.organic])
         let kept = GatherToolSupport.onTopic(raw, for: mission, query: query)
-        await collector.add(kept)
+        await collector.add(kept, from: GatherToolSupport.origin(for: query, in: mission))
         let total = await collector.count
         return GatherToolSupport.summary(kept: kept, dropped: raw.count - kept.count) + " Pool now holds \(total)."
     }
@@ -187,7 +188,7 @@ struct FindSimilarTool: Tool {
         guard !query.isEmpty else { return "Empty descriptor — describe the kind of product." }
         let raw = try await ucp.searchCatalog(query, placements: [.organic])
         let kept = GatherToolSupport.onTopic(raw, for: mission, query: query)
-        await collector.add(kept)
+        await collector.add(kept, from: GatherToolSupport.origin(for: query, in: mission))
         let total = await collector.count
         return GatherToolSupport.summary(kept: kept, dropped: raw.count - kept.count) + " Pool now holds \(total)."
     }

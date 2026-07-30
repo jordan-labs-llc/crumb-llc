@@ -140,26 +140,108 @@ struct MissionCartIntentTests {
         #expect(interaction.options.count <= 4, "the interaction contract caps a question at four")
     }
 
-    // MARK: Foils are only offered where they are apples to apples
+    // MARK: Foils are apples to apples, on a kit as much as on a shortlist
 
-    /// A kit mission's candidates are the union of every part's search with no record of which
-    /// part found what, so the products beside the beans are the brew mat and the kettle. Offering
-    /// those as "Costs less" and "A step up" would be confidently wrong.
-    @Test("A multi-part kit mission offers no foils")
-    func kitMissionHasNoFoils() async throws {
-        let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
-        model.enterPlan(with: SeedData.coffee)          // 5 parts, not single-item
-        await model.loadCandidates(for: SeedData.coffee)
-
-        let interaction = try #require(model.activeThread?.pendingInteraction)
-        #expect(model.isSingleProductMission == false)
-        #expect(!interaction.options.contains { $0.id.hasPrefix("foil:") },
-                "kit parts are not alternatives to each other")
-        #expect(interaction.options.contains { $0.id == "show-another" },
-                "with no foils, the generic offer comes back")
+    /// A catalog that answers each part of a kit with several real options — the shape the live
+    /// broker returns and the mock deliberately doesn't (it hands every query the same curated set).
+    private struct PartedUCP: UCPClient {
+        let byQuery: [String: [Product]]
+        func searchCatalog(_ query: String, placements: [Placement]) async throws -> [Product] {
+            byQuery[query] ?? []
+        }
+        func product(id: Product.ID) async throws -> Product { throw UCPError.productNotFound(id) }
+        func assembleCart(_ items: [KitItem]) async throws -> Cart { Cart(items: items) }
+        func checkoutHandoff(for shop: Shop, in cart: Cart) async throws -> URL {
+            throw UCPError.emptyShopHandoff(shop.id)
+        }
     }
 
-    @Test("A single-item mission does offer foils")
+    private static func kettleShaped(_ id: String, _ name: String, _ price: Decimal) -> Product {
+        Product(
+            id: id, name: name, shop: Shop(id: "shop", name: "Shop"), price: price,
+            rating: 4.5, reviews: 100, rationale: "", symbol: "cup.and.saucer",
+            gradient: SeedData.Gradient.ochre,
+            variants: [Variant(id: "\(id).v", title: "Standard", price: price, checkoutURL: nil)]
+        )
+    }
+
+    /// Two parts, three real kettles and one mat — so the deck holds both alternatives *and*
+    /// unrelated parts, and the two must not be confused.
+    private static func pourOverKit() -> (AppModel, ShoppingTask) {
+        let task = ShoppingTask(
+            id: "pour-over", title: "Set up my pour-over corner", subtitle: "Slower mornings",
+            plan: ["Gooseneck kettle", "A tidy mat"], curatorNote: "", accentHex: 0,
+            candidateIDs: [], searchQueries: ["gooseneck kettle", "brew mat"]
+        )
+        let ucp = PartedUCP(byQuery: [
+            "gooseneck kettle": [
+                kettleShaped("k1", "Heron Gooseneck Kettle", 79),
+                kettleShaped("k2", "Fieldnote Gooseneck Kettle", 45),
+                kettleShaped("k3", "Stagg Pour-Over Kettle", 129),
+            ],
+            "brew mat": [kettleShaped("m1", "Linen Brew Mat", 24)],
+        ])
+        return (AppModel(ucp: ucp, curator: RuleBasedCurator()), task)
+    }
+
+    /// The deferral this closes. A kit deck used to be one union with no record of which search
+    /// found what, so foils were switched off wholesale rather than offer the brew mat as the
+    /// cheaper version of a kettle. With the gather naming its searches, the alternatives are real.
+    @Test("A multi-part kit mission offers foils from the same part")
+    func kitMissionOffersSamePartFoils() async throws {
+        let (model, task) = Self.pourOverKit()
+        model.enterPlan(with: task)
+        await model.loadCandidates(for: task)
+
+        let thread = try #require(model.activeThread)
+        let interaction = try #require(thread.pendingInteraction)
+        #expect(model.isSingleProductMission == false)
+        guard case .product(let subjectID, _) = interaction.resolver else {
+            Issue.record("expected a product question, got \(interaction.resolver)")
+            return
+        }
+        let subject = try #require(thread.candidates.first { $0.id == subjectID })
+        #expect(thread.part(of: subject) == "Gooseneck kettle",
+                "a multi-part kit is walked a part at a time, starting at the first open one")
+
+        let foilIDs = interaction.options.compactMap {
+            $0.id.hasPrefix("foil:") ? String($0.id.dropFirst("foil:".count)) : nil
+        }
+        #expect(!foilIDs.isEmpty, "a part with three real options has alternatives worth showing")
+        for id in foilIDs {
+            let foil = try #require(thread.candidates.first { $0.id == id })
+            #expect(thread.part(of: foil) == "Gooseneck kettle",
+                    "\(foil.name) is a different part of the kit, not an alternative")
+        }
+        #expect(!foilIDs.contains("m1"), "the brew mat is not a cheaper kettle")
+    }
+
+    /// The other half of the same rule: a part the deck answers only once has nothing to compare,
+    /// so the generic offer comes back rather than a foil drawn from a neighbouring part.
+    @Test("A part with one candidate offers no foils")
+    func lonePartFallsBackToShowAnother() async throws {
+        let (model, task) = Self.pourOverKit()
+        model.enterPlan(with: task)
+        await model.loadCandidates(for: task)
+
+        // Answer down to the mat — the part the catalog returned exactly one option for.
+        var guardrail = 0
+        while let interaction = model.activeThread?.pendingInteraction,
+              interaction.kind == .productDecision, guardrail < 20 {
+            if case .product(let id, _) = interaction.resolver, id == "m1" { break }
+            try Self.type("skip", into: model)
+            guardrail += 1
+        }
+        let interaction = try #require(model.activeThread?.pendingInteraction)
+        guard case .product("m1", _) = interaction.resolver else {
+            Issue.record("expected the mat's question, got \(interaction.resolver)")
+            return
+        }
+        #expect(!interaction.options.contains { $0.id.hasPrefix("foil:") })
+        #expect(interaction.options.contains { $0.id == "show-another" })
+    }
+
+    @Test("A single-item mission compares its whole deck")
     func singleItemMissionHasFoils() async throws {
         let model = AppModel(ucp: MockUCPClient(), curator: RuleBasedCurator())
         model.enterPlan(with: SeedData.coffee.settingSingleItem(true))
@@ -167,5 +249,24 @@ struct MissionCartIntentTests {
 
         let interaction = try #require(model.activeThread?.pendingInteraction)
         #expect(interaction.options.contains { $0.id.hasPrefix("foil:") })
+    }
+
+    // MARK: One part at a time
+
+    @Test("A kit mission asks about each part in plan order, not deck order")
+    func kitMissionWalksThePlan() async throws {
+        let (model, task) = Self.pourOverKit()
+        model.enterPlan(with: task)
+        await model.loadCandidates(for: task)
+
+        // Keep the kettle it recommends; the next question must move on to the mat rather than
+        // walking the two remaining kettles first.
+        try Self.type("add it", into: model)
+        let interaction = try #require(model.activeThread?.pendingInteraction)
+        guard case .product(let nextID, _) = interaction.resolver else {
+            Issue.record("expected a product question, got \(interaction.resolver)")
+            return
+        }
+        #expect(nextID == "m1", "the kettle part is covered — the open part is the mat")
     }
 }

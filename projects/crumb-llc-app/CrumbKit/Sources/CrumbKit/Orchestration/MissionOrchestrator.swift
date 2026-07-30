@@ -49,10 +49,20 @@ public extension MissionOrchestrator {
 public struct GatheredCandidates: Sendable, Equatable {
     public let products: [Product]
     public let usedAgent: Bool
+    /// Which part of the mission found each product — a plan part's label for a planned search, the
+    /// model's own query for one it reached for beyond the plan. Empty for a gather that ran before
+    /// anything named its searches; a product missing from the map was found by an unnamed search,
+    /// which the caller reads as "no idea", never as "belongs to no part".
+    ///
+    /// This is what makes a kit mission's pool more than a union: without it the kettle, the grinder
+    /// and the beans are indistinguishable neighbours, so nothing downstream can tell an alternative
+    /// from a different part of the same errand.
+    public let parts: [Product.ID: String]
 
-    public init(products: [Product], usedAgent: Bool) {
+    public init(products: [Product], usedAgent: Bool, parts: [Product.ID: String] = [:]) {
         self.products = products
         self.usedAgent = usedAgent
+        self.parts = parts
     }
 }
 
@@ -62,6 +72,17 @@ public extension UCPClient {
     /// outage from a successful-but-empty result. The shared fan-out behind both the deterministic
     /// gather and `AppModel`'s refinement search, so they behave identically.
     func searchUnion(_ queries: [String]) async -> [Product]? {
+        await searchUnionByQuery(queries)?.products
+    }
+
+    /// ``searchUnion(_:)`` with the provenance kept: which query found each product, so a search
+    /// outside the initial gather (a refinement's `addQueries`) can name its own finds instead of
+    /// adding candidates nothing can place. The earliest query that returned a product owns it,
+    /// which is the same rank rule ``GatherOrigin`` states — and for the same reason: the queries
+    /// race, and the answer must not.
+    func searchUnionByQuery(
+        _ queries: [String]
+    ) async -> (products: [Product], parts: [Product.ID: String])? {
         // `try?` keeps a failed query from cancelling its siblings; a failure surfaces as `nil`.
         // Batches are slotted back by query index (not task-completion order) so the union — and thus
         // the deck built from it — is deterministic regardless of which search returns first. Mirrors
@@ -74,10 +95,18 @@ public extension UCPClient {
             for await (index, batch) in group { collected[index] = batch }
             return collected
         }
-        let succeeded = batches.compactMap { $0 }
-        guard !succeeded.isEmpty else { return nil }
+        guard batches.contains(where: { $0 != nil }) else { return nil }
         var seen = Set<Product.ID>()
-        return succeeded.flatMap { $0 }.filter { seen.insert($0.id).inserted }
+        var products: [Product] = []
+        var parts: [Product.ID: String] = [:]
+        for (index, batch) in batches.enumerated() {
+            guard let batch else { continue }
+            for product in batch where seen.insert(product.id).inserted {
+                products.append(product)
+                parts[product.id] = queries[index]
+            }
+        }
+        return (products, parts)
     }
 }
 
@@ -107,11 +136,16 @@ public struct DeterministicMissionOrchestrator: MissionOrchestrator {
         // contributes nothing.
         let rawBatches: [[Product]?] = await withTaskGroup(of: (Int, [Product]?).self) { group in
             for (index, query) in queries.enumerated() {
+                // Each query carries its plan position as the origin rank, so a product two parts
+                // both return is attributed to the earlier part however the searches race.
+                let origin = GatherOrigin(
+                    part: GatherToolSupport.partLabel(at: index, in: mission), rank: index
+                )
                 group.addTask {
                     guard let batch = try? await ucp.searchCatalog(query, placements: [.organic]) else {
                         return (index, nil)
                     }
-                    await collector.add(gate.filter(batch, for: mission, floor: 0))
+                    await collector.add(gate.filter(batch, for: mission, floor: 0), from: origin)
                     return (index, batch)
                 }
             }
@@ -130,11 +164,25 @@ public struct DeterministicMissionOrchestrator: MissionOrchestrator {
         let gated = await gate.filter(rawUnion, for: mission, floor: floor)
         // A top-up item was (rightly) dropped by the batch gate above and so never streamed; add it
         // now, because the settle keeps only cards that streamed and would silently drop it. The
-        // collector dedupes, so re-adding the on-topic items is a no-op.
-        await collector.add(gated)
+        // collector dedupes, so re-adding the on-topic items is a no-op. Added one query at a time,
+        // in query order, so a top-up is attributed to the search that actually returned it rather
+        // than arriving as one anonymous batch.
+        for (index, batch) in rawBatches.enumerated() {
+            guard let batch else { continue }
+            let found = Set(batch.map(\.id))
+            let mine = gated.filter { found.contains($0.id) }
+            guard !mine.isEmpty else { continue }
+            await collector.add(
+                mine, from: GatherOrigin(part: GatherToolSupport.partLabel(at: index, in: mission), rank: index)
+            )
+        }
         // The collector caps the pool; return only what it actually holds so the terminal pool
         // never contains a product that couldn't stream.
         let pooled = Set(await collector.products.map(\.id))
-        return GatheredCandidates(products: gated.filter { pooled.contains($0.id) }, usedAgent: false)
+        return GatheredCandidates(
+            products: gated.filter { pooled.contains($0.id) },
+            usedAgent: false,
+            parts: await collector.attribution
+        )
     }
 }
