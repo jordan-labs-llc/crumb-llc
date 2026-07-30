@@ -177,3 +177,38 @@ struct KitRecipesTests {
         #expect(task.plan.count == 1)
     }
 }
+
+/// The compound-word gap in `KitCompleteness.partCovered`, which decided how a decomposed mission
+/// walks its own checklist.
+@Suite("Kit completeness compounds")
+struct KitCompletenessCompoundTests {
+
+    private func tokens(_ names: [String]) -> [Set<String>] {
+        names.map { RuleBasedRelevanceGate.tokens($0) }
+    }
+
+    @Test("A closed compound covers the two-word part")
+    func closedCompoundCoversPart() {
+        // Measured: with part-aware ordering in place, a live "home coffee bar" run offered five
+        // pour-over coffeemakers in a row, because keeping "1-Cup Porcelain Pour-Over Coffeemaker"
+        // never marked the "Coffee maker" part covered.
+        #expect(KitCompleteness.partCovered("Coffee maker", by: tokens(["1-Cup Porcelain Pour-Over Coffeemaker"])))
+        #expect(KitCompleteness.partCovered("Coffee maker", by: tokens(["Original 8-Cup Pour-Over Coffee Maker"])))
+        #expect(KitCompleteness.partCovered("Tea pot", by: tokens(["Glass Teapot with Infuser"])))
+    }
+
+    @Test("The compound match doesn't cover an unrelated part")
+    func compoundDoesNotOvermatch() {
+        #expect(KitCompleteness.partCovered("Coffee maker", by: tokens(["Baratza Encore Coffee Grinder"])) == false)
+        #expect(KitCompleteness.partCovered("Grinder", by: tokens(["Melitta Cone Filter Paper"])) == false)
+        #expect(KitCompleteness.partCovered("Kettle", by: tokens(["Ceramic Coffee Mug"])) == false)
+    }
+
+    @Test("A decomposed kit walks to the next uncovered part once its anchor is kept")
+    func deckAdvancesPastACoveredPart() {
+        let plan = ["Coffee maker", "Grinder", "Kettle"]
+        let kept = tokens(["1-Cup Porcelain Pour-Over Coffeemaker"])
+        let missing = plan.filter { !KitCompleteness.partCovered($0, by: kept) }
+        #expect(missing == ["Grinder", "Kettle"])
+    }
+}

@@ -72,8 +72,22 @@ public struct KitCompleteness: Sendable, Equatable {
     /// requires "stick": a lacrosse stick covers it, a "Lacrosse Dog Collar" (only "lacrosse") does
     /// not. A part with no significant tokens is treated as covered (nothing concrete to require).
     static func partCovered(_ part: String, by itemTokens: [Set<String>]) -> Bool {
-        guard let head = RuleBasedRelevanceGate.orderedTokens(part).last else { return true }
-        return itemTokens.contains { $0.contains(head) }
+        let ordered = RuleBasedRelevanceGate.orderedTokens(part)
+        guard let head = ordered.last else { return true }
+        if itemTokens.contains(where: { $0.contains(head) }) { return true }
+        // Closed compounds. A part written "Coffee maker" and a product named "Coffeemaker" are the
+        // same category, but the head token "maker" is in neither the other's token set, so the part
+        // stayed uncovered forever. A live run made the cost obvious: with part-aware deck ordering
+        // in place, "set up a home coffee bar" offered *five pour-over coffeemakers in a row* — each
+        // one kept, each one leaving "Coffee maker" still reading as the first uncovered part — and
+        // only moved on to the grinder when a product happened to be named "Coffee Maker" as two
+        // words. Same trap for "Tea pot"/"Teapot", "Head lamp"/"Headlamp", "Kick board"/"Kickboard".
+        //
+        // Only the last two tokens are joined: that is where English closes a compound, and joining
+        // more would invent words no catalog uses.
+        guard ordered.count >= 2 else { return false }
+        let compound = ordered.suffix(2).joined()
+        return itemTokens.contains { $0.contains(compound) }
     }
 
     /// Whether a product reads as a **whole-kit** package/bundle — a strong multi-item signal
