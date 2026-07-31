@@ -146,13 +146,13 @@ struct MissionPlannerTests {
 
     @Test("sportsKit fires on a gear/kit intent but not on a single-piece goal")
     func sportsKitGating() {
-        #expect(RuleBasedMissionPlanner.sportsKit(for: "premium lacrosse gear") != nil)
-        #expect(RuleBasedMissionPlanner.sportsKit(for: "high school lacrosse equipment") != nil)
+        #expect(RuleBasedMissionPlanner.kitExpansion(for: "premium lacrosse gear") != nil)
+        #expect(RuleBasedMissionPlanner.kitExpansion(for: "high school lacrosse equipment") != nil)
         // A single piece — no kit intent — is left to the normal single-query path.
-        #expect(RuleBasedMissionPlanner.sportsKit(for: "lacrosse stick") == nil)
-        #expect(RuleBasedMissionPlanner.sportsKit(for: "lacrosse ball") == nil)
+        #expect(RuleBasedMissionPlanner.kitExpansion(for: "lacrosse stick") == nil)
+        #expect(RuleBasedMissionPlanner.kitExpansion(for: "lacrosse ball") == nil)
         // A non-sports goal is untouched.
-        #expect(RuleBasedMissionPlanner.sportsKit(for: "premium jasmine tea") == nil)
+        #expect(RuleBasedMissionPlanner.kitExpansion(for: "premium jasmine tea") == nil)
     }
 
     @Test("The model planner reconciles an under-decomposed lacrosse draft to the player-kit floor (#68)")

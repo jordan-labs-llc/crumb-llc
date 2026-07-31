@@ -159,11 +159,18 @@ func jaccard(_ a: Set<String>, _ b: Set<String>) -> Double {
 // MARK: - Run
 
 let trialCount = Int(ProcessInfo.processInfo.environment["TRIALS"] ?? "5") ?? 5
-let planner = AppleFoundationMissionPlanner()
+
+/// Which seam to score. `foundation` is the pure-model planner (the original baseline);
+/// `direct` is the shipping composition — triage for altitude, `KitRecipes` for coverage on
+/// recognized intents, the model for the tail.
+let plannerName = ProcessInfo.processInfo.environment["PLANNER"] ?? "direct"
+let planner: any MissionPlanner = plannerName == "foundation"
+    ? AppleFoundationMissionPlanner()
+    : DirectMissionPlanner(triage: AppleFoundationGoalTriage())
 let taste = SeedData.defaultTasteProfile
 var results: [Trial] = []
 
-FileHandle.standardError.write("Running \(suite.count) goals x \(trialCount) trials against SystemLanguageModel.default\n".data(using: .utf8)!)
+FileHandle.standardError.write("Running \(suite.count) goals x \(trialCount) trials — planner=\(plannerName)\n".data(using: .utf8)!)
 
 for c in suite {
     for t in 1...trialCount {

@@ -34,18 +34,31 @@ struct GoldenMissionTests {
         .init(goal: "what should I buy?", shoppable: false),          // a bare question
     ]
 
-    @Test("Deterministic planner: shoppable goals yield a single-part plan; non-shoppable decline")
+    /// **This assertion changed on purpose.** It used to require *every* shoppable goal to produce a
+    /// single-part plan whose one query was the goal string, which was an accurate description of the
+    /// floor and a bad description of what a mission should be: a live study found "set up a home
+    /// coffee bar" reaching the catalog as the literal phrase and coming back with $698 of coffee-bar
+    /// furniture and no coffee. A recognized kit intent now decomposes deterministically
+    /// (``KitRecipes``), so the contract is per-shape rather than universal — a goal that names one
+    /// thing still gets one part and its own words as the query.
+    @Test("Deterministic planner: kit intents decompose, single items stay single, junk declines")
     func plannerShapes() async {
         let planner = RuleBasedMissionPlanner()
         for c in Self.planCases {
             let planned = await planner.plan(goal: c.goal, profile: SeedData.defaultTasteProfile)
             #expect((planned.task != nil) == c.shoppable, "shoppable mismatch for \(c.goal)")
-            if let task = planned.task {
-                #expect(task.plan.count == 1, "offline plan should be single-part for \(c.goal)")
-                #expect(task.searchQueries == [RuleBasedMissionPlanner.clean(query: c.goal)])
-                #expect(planned.tier == .ruleBased(nil))
-            } else {
+            guard let task = planned.task else {
                 #expect(planned.decline != nil, "a decline needs a message for \(c.goal)")
+                continue
+            }
+            #expect(planned.tier == .ruleBased(nil))
+            if let recipe = KitRecipes.recipe(for: c.goal) {
+                #expect(task.plan.count == recipe.parts.count, "\(c.goal) should expand to its recipe")
+                #expect(task.searchQueries.count == task.plan.count, "every part needs its own query")
+                #expect(task.isSingleItem == false)
+            } else {
+                #expect(task.plan.count == 1, "an unrecognized goal stays single-part: \(c.goal)")
+                #expect(task.searchQueries == [RuleBasedMissionPlanner.clean(query: c.goal)])
             }
         }
     }

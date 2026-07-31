@@ -8,7 +8,7 @@ import Foundation
 /// agentic ``AppleFoundationMissionOrchestrator``, which decides the catalog calls.
 ///
 /// Kit-cue goals are the one place a plan survives: a recognized sports-gear goal expands to the
-/// deterministic player kit (``RuleBasedMissionPlanner/sportsKit(for:)``) so safety/fit
+/// deterministic player kit (``RuleBasedMissionPlanner/kitExpansion(for:)``) so safety/fit
 /// completeness never depends on a model — surfaced in-thread as an editable notice, not an
 /// approval turn.
 public struct DirectMissionPlanner: MissionPlanner {
@@ -41,13 +41,18 @@ public struct DirectMissionPlanner: MissionPlanner {
                 task: nil, tier: judgment.tier, decline: RuleBasedMissionPlanner.declineMessage
             )
         }
-        if let kit = RuleBasedMissionPlanner.sportsKit(for: goal) {
+        // A recognized kit intent decomposes deterministically, regardless of the single-item
+        // judgment — completeness must never hinge on the model. See ``KitRecipes`` for the
+        // measurements that put coverage here rather than in a prompt: the model named 44% of the
+        // parts a kit needs and agreed with itself 27% of the time, and neither a better prompt nor
+        // sampling three times moved that past 61%.
+        if let recipe = KitRecipes.recipe(for: goal) {
             let task = RuleBasedMissionPlanner.makeTask(
                 goal: goal,
                 title: RuleBasedMissionPlanner.title(from: goal),
                 subtitle: RuleBasedMissionPlanner.defaultSubtitle,
-                note: kit.note,
-                parts: kit.parts,
+                note: recipe.assumption,
+                parts: recipe.parts,
                 isSingleItem: false
             )
             return PlannedMission(task: task, tier: judgment.tier, decline: nil)
