@@ -71,8 +71,27 @@ public struct KitCompleteness: Sendable, Equatable {
     /// significant word (the specific category), not the shared mission word. So "Lacrosse stick"
     /// requires "stick": a lacrosse stick covers it, a "Lacrosse Dog Collar" (only "lacrosse") does
     /// not. A part with no significant tokens is treated as covered (nothing concrete to require).
+    /// A crude, deliberate singularizer: enough to make "beans" and "bean" the same category word,
+    /// and nothing more.
+    ///
+    /// A checklist is written in whichever number reads naturally ("Coffee beans", "Mugs",
+    /// "Filters") and a catalog names the product in whichever number *it* prefers ("Whole Bean
+    /// Coffee"), so the two miss each other on a plain token match. Measured: the beans part was
+    /// offered twice in a live run because keeping "Lavazza … Whole Bean Coffee" never covered
+    /// "Coffee beans".
+    ///
+    /// Only a trailing "s" is dropped, and only on a token long enough that the "s" is plausibly a
+    /// plural — never on a double "s", so "glass" and "press" survive intact. No attempt at English
+    /// morphology beyond that: this decides whether two nouns name the same shelf, and an
+    /// over-eager stemmer would start merging shelves that are genuinely different.
+    static func singularized(_ token: String) -> String {
+        guard token.count > 3, token.hasSuffix("s"), !token.hasSuffix("ss") else { return token }
+        return String(token.dropLast())
+    }
+
     static func partCovered(_ part: String, by itemTokens: [Set<String>]) -> Bool {
-        let ordered = RuleBasedRelevanceGate.orderedTokens(part)
+        let ordered = RuleBasedRelevanceGate.orderedTokens(part).map(singularized)
+        let itemTokens = itemTokens.map { Set($0.map(singularized)) }
         guard let head = ordered.last else { return true }
         if itemTokens.contains(where: { $0.contains(head) }) { return true }
         // Closed compounds. A part written "Coffee maker" and a product named "Coffeemaker" are the

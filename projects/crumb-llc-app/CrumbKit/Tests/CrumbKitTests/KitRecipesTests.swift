@@ -212,3 +212,48 @@ struct KitCompletenessCompoundTests {
         #expect(missing == ["Grinder", "Kettle"])
     }
 }
+
+/// The singular/plural half of the same gap: a checklist and a catalog rarely agree on number.
+@Suite("Kit completeness number agreement")
+struct KitCompletenessNumberTests {
+
+    private func tokens(_ names: [String]) -> [Set<String>] {
+        names.map { RuleBasedRelevanceGate.tokens($0) }
+    }
+
+    @Test("A plural part is covered by a singular product name, and the reverse")
+    func numberDisagreementStillCovers() {
+        // Measured: the "Coffee beans" part was offered twice in a live run, because keeping
+        // "Lavazza Expert Plus Aroma Top Espresso Whole Bean Coffee" never covered it.
+        #expect(KitCompleteness.partCovered("Coffee beans", by: tokens(["Lavazza Whole Bean Coffee"])))
+        #expect(KitCompleteness.partCovered("Mugs", by: tokens(["Ceramic Coffee Mug"])))
+        #expect(KitCompleteness.partCovered("Filters", by: tokens(["V60 Paper Filter for 02 Dripper"])))
+        #expect(KitCompleteness.partCovered("Glove", by: tokens(["Lacrosse Gloves"])))
+    }
+
+    @Test("Singularizing never merges genuinely different shelves")
+    func stemmingDoesNotOvermatch() {
+        #expect(KitCompleteness.partCovered("Coffee beans", by: tokens(["Baratza Encore Grinder"])) == false)
+        #expect(KitCompleteness.partCovered("Mugs", by: tokens(["Gooseneck Kettle"])) == false)
+        // A double "s" is not a plural: these words must survive intact.
+        #expect(KitCompleteness.singularized("glass") == "glass")
+        #expect(KitCompleteness.singularized("press") == "press")
+        #expect(KitCompleteness.singularized("gas") == "gas")       // too short to strip
+        #expect(KitCompleteness.singularized("beans") == "bean")
+    }
+
+    @Test("A six-part coffee bar closes out in six keeps")
+    func fullKitCloses() {
+        let plan = ["Coffee maker", "Grinder", "Kettle", "Coffee beans", "Filters", "Mugs"]
+        let kept = [
+            "1-Cup Porcelain Pour-Over Coffeemaker",
+            "Baratza Encore Coffee Grinder",
+            "Stovetop Gooseneck Kettle",
+            "Lavazza Whole Bean Coffee",
+            "V60 Paper Filter for 02 Dripper",
+            "Ceramic Coffee Mug",
+        ]
+        let missing = plan.filter { !KitCompleteness.partCovered($0, by: tokens(kept)) }
+        #expect(missing.isEmpty, "still uncovered: \(missing)")
+    }
+}
